@@ -1,0 +1,10 @@
+# build output
+build/
+*.exe
+*.o
+
+# game data: never commit the ROM
+*.bin
+*.rom
+*.u7
+rom/
