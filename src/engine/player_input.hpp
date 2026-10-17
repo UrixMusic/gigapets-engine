@@ -26,6 +26,9 @@ namespace gp {
 enum Dir : uint8_t { DirUp = 1, DirDown = 2, DirLeft = 4, DirRight = 8 };
 enum Button : int { BtnLeft = 0, BtnRight = 1, BtnUp = 2, BtnDown = 3, BtnAction = 4, BtnSecondary = 5, BtnBusy = 6, BtnPower = 11 };
 
+// shared constant (e.g. in player.hpp)
+constexpr int kActorYOffset = 26;
+
 inline uint8_t onPress(uint8_t held, int button, int promptState) {
     switch (button) {
         case BtnLeft:  return held | DirLeft;

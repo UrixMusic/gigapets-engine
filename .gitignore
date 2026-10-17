@@ -1,10 +1,13 @@
 # build output
 build/
+.vscode/
 *.exe
 *.o
+*.log
 
 # game data: never commit the ROM
-*.bin
 *.rom
 *.u7
+*.txt
+*.md
 rom/

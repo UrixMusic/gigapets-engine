@@ -1,4 +1,5 @@
 // Area rendering for the Gigapets Explorer engine (C++17, header-only).
+// LEGACY ROM path: kept for the tests and tools. The game itself now renders through render_content.hpp.
 // Ported from the ROM editor's drawMap / tileCanvas / buildSprite, which are verified for every area.
 //
 //   background: room-table tile frame (word 2) -> frame table entry -> sheet at seg*0x40 words,
@@ -10,17 +11,11 @@
 //   world scale: one tile cell is always 32x32 world pixels.
 //   objects:    type record sprite + palette, drawn at (x - originX - anchorX, y - originY - anchorY + kSpriteYNudge).
 #pragma once
+#include "image.hpp"
 #include "objects.hpp"
 #include <unordered_map>
 
 namespace gp {
-
-struct Image {
-    int w = 0, h = 0;
-    std::vector<uint8_t> rgba;
-    Image() = default;
-    Image(int w_, int h_) : w(w_), h(h_), rgba(size_t(w_) * h_ * 4, 0) {}
-};
 
 // The editor found sprites sat 1 px too high without it. Probably a real draw rule, not yet located in the game code.
 constexpr int kSpriteYNudge = 1;
@@ -61,19 +56,6 @@ struct TileSheet {
         return true;
     }
 };
-
-inline void blit(Image& dst, const uint8_t* src, int sw, int sh, int x0, int y0) {   // alpha 0/255, no blending
-    for (int y = 0; y < sh; ++y) {
-        const int dy = y0 + y; if (dy < 0 || dy >= dst.h) continue;
-        for (int x = 0; x < sw; ++x) {
-            const int dx = x0 + x; if (dx < 0 || dx >= dst.w) continue;
-            const uint8_t* s = &src[(size_t(y) * sw + x) * 4];
-            if (!s[3]) continue;
-            uint8_t* d = &dst.rgba[(size_t(dy) * dst.w + dx) * 4];
-            d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = 255;
-        }
-    }
-}
 
 // Whole-area background. Tiles that cannot be decoded (id past the sheet / ROM) are magenta.
 inline Image renderBackground(const Rom& rom, const Area& area, const TileSheet& sheet, const Palette* pal, bool swapRB = false) {
