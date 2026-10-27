@@ -7,12 +7,6 @@
 
 namespace gp
 {
-    struct QuestRomTables
-    {
-        std::vector<std::pair<int, int>> itemWeights; // (item, weight) x 0x43, word 0xc4c5, stride 2
-        int distance[10][10] = {};                    // word 0xe339, [from][to]
-    };
-
     struct QuestWorld
     {
         std::function<int(int)> areaTier; // pool id -> g_npcInfoTable.areaId. Leave EMPTY to disable generic quests.
@@ -24,7 +18,34 @@ namespace gp
         int playerSpecies = 0;
         int poolCount = 0x4e; // RandRange(0, 0x4e) -> ids 0..0x4d
         QuestRomTables rom;
+        std::vector<QuestTypeDef> types; // from the db; see baseQuestTypes()
+
+        // The type for a typeMode. Unknown modes behave like mode 0, as they always did.
+        const QuestTypeDef &base() const { return type(0); }
+        const QuestTypeDef &type(int mode) const
+        {
+            for (const auto &t : types)
+                if (t.mode == mode)
+                    return t;
+            for (const auto &t : types)
+                if (t.mode == 0)
+                    return t;
+            static const QuestTypeDef none;
+            return none;
+        }
     };
+
+    inline int pickRange(int lo, int hi, const RandFn &rnd) { return hi > lo ? rnd(lo, hi + 1) : lo; }
+
+    // The range with the largest fromTotal <= total.
+    inline QuestCountRange rangeFor(const std::vector<QuestCountRange> &v, int total)
+    {
+        const QuestCountRange *best = nullptr;
+        for (const auto &r : v)
+            if (r.fromTotal <= total && (!best || r.fromTotal >= best->fromTotal))
+                best = &r;
+        return best ? *best : QuestCountRange{};
+    }
 
     // PickRandomUnlockedAreaTier's gate (counter starts at 1, so "3 quests done" is counter > 3).
     inline bool tierUnlocked(int tier, int total)
@@ -84,7 +105,7 @@ namespace gp
         return t.distance[norm(c1)][norm(c2)] + (c1 == 0x1b) + (c2 == 0x1b);
     }
 
-    inline int pickWeighted(const QuestRomTables &t, const RandFn &rnd) // PickWeightedRandomItem
+    inline Id pickWeighted(const QuestRomTables &t, const RandFn &rnd) // PickWeightedRandomItem
     {
         int total = 0;
         for (const auto &e : t.itemWeights)
@@ -94,7 +115,7 @@ namespace gp
         for (const auto &e : t.itemWeights)
             if (r < (acc += e.second))
                 return e.first;
-        return r;
+        return Id(); // unreachable: r < total
     }
 
     inline QuestEntry pickBonus(const QuestWorld &w, const RandFn &rnd) // PickRandomRewardItem
@@ -102,103 +123,76 @@ namespace gp
         return {1, pickWeighted(w.rom, rnd), 0};
     }
 
-    // PickMode2/3/6/7RewardItem. rnd(lo, hi) is hi-exclusive, like RandRange.
-    inline int pickModeItem(int mode, int species, const RandFn &rnd)
+    // Weighted draw from a type's pool: one rnd(1, totalWeight + 1), plus a coin flip when a variant has an alt item.
+    inline QuestEntry pickFromPool(const std::vector<QuestPoolEntry> &pool, int species, const RandFn &rnd)
     {
-        switch (mode)
+        QuestEntry e;
+        int total = 0;
+        for (const auto &p : pool)
+            total += p.weight;
+        if (total <= 0)
+            return e;
+        const int r = rnd(1, total + 1);
+        int acc = 0;
+        const QuestPoolEntry *hit = &pool.back();
+        for (const auto &p : pool)
+            if (r <= (acc += p.weight))
+            {
+                hit = &p;
+                break;
+            }
+        if (hit->bySpecies.empty())
         {
-        case 2:
+            e.item = hit->item;
+            e.w2 = hit->buried;
+            return e;
+        }
+        const QuestPoolEntry::Variant *v = nullptr;
+        for (const auto &c : hit->bySpecies)
+            if (c.species == species)
+            {
+                v = &c;
+                break;
+            }
+        if (!v)
+            for (const auto &c : hit->bySpecies)
+                if (c.species < 0)
+                {
+                    v = &c;
+                    break;
+                }
+        if (!v)
+            v = &hit->bySpecies.back();
+        if (!v->altItem.empty() && rnd(1, 3) != 1)
         {
-            static constexpr int items[6] = {0x59, 0x4f, 0x54, 0x4c, 0x56, 0x50};
-            const int r = rnd(1, 0xb); // 1..10
-            if (r <= 6)
-                return items[r - 1];
-            if (r <= 8)
-                return 0x4e;
-            return species == 0 ? 0x57 : species == 1 ? 0x58
-                                                      : 0x51;
+            e.item = v->altItem;
+            e.w2 = v->altBuried;
         }
-        case 3:
+        else
         {
-            static constexpr int items[5] = {0xc9, 0xcb, 0xca, 0xdc, 0xde};
-            return items[rnd(1, 6) - 1];
+            e.item = v->item;
+            e.w2 = v->buried;
         }
-        case 6:
-        {
-            static constexpr int items[14] = {0x29, 0x29, 0x29, 0x2a, 0x2a, 0x2a, 0x1e,
-                                              0x1f, 0x2b, 0x20, 0x2e, 0x2f, 0x1a, 0x28};
-            return items[rnd(1, 0xf) - 1];
-        }
-        case 7:
-        {
-            static constexpr int items[4] = {0x101, 0x102, 0x103, 0x104};
-            return items[rnd(1, 5) - 1];
-        }
-        default:
-            return 0xcd;
-        }
+        return e;
     }
 
     // PickQuestRewardItem. w2: 1 = usually buried, 0 = visible.
     inline QuestEntry pickObjective(const QuestDef &d, const QuestWorld &w, const RandFn &rnd)
     {
+        const QuestTypeDef &t = w.type(d.typeMode);
+        const bool own = !t.pool.empty();
+        const QuestTypeDef &src = own ? t : w.base();
+        const int sp = src.speciesFromReceiver ? w.speciesOf(d.receiver) : w.playerSpecies;
         QuestEntry e;
-        auto mi = [&](int mode, int sp)
-        { return w.modeItem ? w.modeItem(mode, sp) : pickModeItem(mode, sp, rnd); };
-        switch (d.typeMode)
-        {
-        case 6:
-            e.item = mi(6, 0);
-            e.count = rnd(1, 3);
-            return e;
-        case 2:
-            e.item = mi(2, w.speciesOf(d.receiver));
-            e.count = 1;
-            return e;
-        case 3:
-            e.item = mi(3, 0);
-            e.count = rnd(2, 6);
-            return e;
-        case 7:
-            e.item = mi(7, 0);
-            e.count = rnd(3, 7);
-            return e;
-        default:
-            break;
-        }
-        static constexpr int items[16] = {0xcd, 0xce, 0xcc, 0xc9, 0xcb, 0xca, 0xcf, 0xd0,
-                                          0xd5, 0xd7, 0xd8, 0xd9, 0xda, 0xdc, 0xde, 0xd1};
-        static constexpr int buried[16] = {1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1};
-        const int r = rnd(1, 0x15);
-        if (r <= 16)
-        {
-            e.item = items[r - 1];
-            e.w2 = buried[r - 1];
-        }
+        if (own && w.modeItem) // test override
+            e.item = legacyItemId(w.modeItem(d.typeMode, src.speciesFromReceiver ? sp : 0));
         else
-        {
-            const bool one = rnd(1, 3) == 1;
-            if (w.playerSpecies == 0)
-            {
-                e.item = one ? 0xd4 : 0xdd;
-                e.w2 = one ? 1 : 0;
-            }
-            else if (w.playerSpecies == 1)
-            {
-                e.item = one ? 0xd3 : 0xd6;
-                e.w2 = 0;
-            }
-            else
-            {
-                e.item = one ? 0xd2 : 0xdb;
-                e.w2 = one ? 0 : 1;
-            }
-        }
-        e.count = rnd(2, 6);
+            e = pickFromPool(src.pool, sp, rnd);
+        e.count = pickRange(src.countLo, src.countHi, rnd);
         return e;
     }
 
-    inline bool itemUsed(const std::vector<QuestEntry> &v, int item)
+    inline bool itemUsed(const std::vector<QuestEntry> &v, const Id &item)
     {
         for (const auto &e : v)
             if (e.item == item)
@@ -224,72 +218,75 @@ namespace gp
             d.giver = pickNpc(total, w, rnd);
         while (d.giver == prevTarget);
         d.typeMode = prevMode;
+
+        int domain = 10; // rnd(1, domain): rolls 1..9 in the base game; a mod type can widen it
+        for (const auto &t : w.types)
+            if (t.rollHi >= t.rollLo && t.rollHi + 1 > domain)
+                domain = t.rollHi + 1;
         do
         {
-            const int r = rnd(1, 10);
-            if ((r == 1 && total > 3) || r == 2)
-            {
-                do
+            const int r = rnd(1, domain);
+            const QuestTypeDef *rt = nullptr;
+            for (const auto &t : w.types)
+                if (t.rollHi >= t.rollLo && r >= t.rollLo && r <= t.rollHi && total >= t.rollMinTotal)
                 {
-                    do
-                        d.receiver = pickNpc(total, w, rnd);
-                    while (d.receiver == d.giver);
-                } while (w.stationary(d.receiver));
-                d.typeMode = r == 1 ? 2 : 3;
-            }
-            else if (r == 3)
-            {
-                d.receiver = d.giver;
-                d.typeMode = 1;
-            }
-            else if (r == 4 && total > 3)
-            {
-                d.receiver = d.giver;
-                d.typeMode = 6;
-            }
-            else if (r == 5)
-            {
-                d.typeMode = prevMode;
-                if (prevTarget != 0x48 && nextGiver != 0x48)
-                {
-                    d.giver = d.receiver = 0x48;
-                    d.typeMode = 7;
+                    rt = &t;
+                    break;
                 }
-            }
-            else
+            if (!rt) // no type claims this roll: the base type with a random receiver
             {
                 d.receiver = rnd(1, 3) == 1 ? d.giver : pickNpc(total, w, rnd);
-                d.typeMode = 0;
+                d.typeMode = w.base().mode;
             }
+            else
+                switch (rt->receiver)
+                {
+                case QuestReceiver::Other:
+                    do
+                    {
+                        do
+                            d.receiver = pickNpc(total, w, rnd);
+                        while (d.receiver == d.giver);
+                    } while (w.stationary(d.receiver));
+                    d.typeMode = rt->mode;
+                    break;
+                case QuestReceiver::Self:
+                    d.receiver = d.giver;
+                    d.typeMode = rt->mode;
+                    break;
+                case QuestReceiver::Fixed:
+                    d.typeMode = prevMode;
+                    if (prevTarget != rt->fixedNpc && nextGiver != rt->fixedNpc)
+                    {
+                        d.giver = d.receiver = rt->fixedNpc;
+                        d.typeMode = rt->mode;
+                    }
+                    break;
+                case QuestReceiver::Random:
+                    d.receiver = rnd(1, 3) == 1 ? d.giver : pickNpc(total, w, rnd);
+                    d.typeMode = rt->mode;
+                    break;
+                }
             if (nextGiver == d.receiver)
                 d.typeMode = prevMode;
         } while (d.typeMode == prevMode);
 
-        if (d.typeMode == 2)
-            d.spawn = {{1, 0x109, 0}};
-        else if (d.typeMode == 6)
-            d.spawn = {{1, 0x10a, 0}};
+        const QuestTypeDef &t = w.type(d.typeMode);
+        const QuestTypeDef &base = w.base();
+        d.spawn = t.spawn;
 
-        int n;
-        if (d.typeMode == 2)
-            n = 1;
-        else if (d.typeMode == 6)
-            n = rnd(2, 4);
-        else if (total < 0x23)
-            n = rnd(1, 3);
-        else if (total <= 0x45)
-            n = rnd(1, 4);
+        const QuestCountRange oc = rangeFor(t.objectiveCount.empty() ? base.objectiveCount : t.objectiveCount, total);
+        const int n = pickRange(oc.lo, oc.hi, rnd);
+
+        if (t.fixedAreaTier >= 0)
+            d.areaTier = t.fixedAreaTier;
         else
-            n = rnd(2, 4);
-
-        if (d.typeMode == 2 || d.typeMode == 6)
-            d.areaTier = 1;
-        else if (d.typeMode == 1)
-            do
+            for (;;)
+            {
                 d.areaTier = progressTier(total, rnd);
-            while (unsigned(d.areaTier - 5) < 2u); // unsigned compare assumed
-        else
-            d.areaTier = progressTier(total, rnd);
+                if (std::find(t.excludedTiers.begin(), t.excludedTiers.end(), d.areaTier) == t.excludedTiers.end())
+                    break;
+            }
 
         for (int k = 0; k < n; ++k)
         {
@@ -303,20 +300,20 @@ namespace gp
             d.objectives.push_back(e);
         }
 
-        if (d.typeMode == 1)
+        if (t.timed)
         {
             int sum = 0;
             for (const auto &o : d.objectives)
                 sum += o.count;
-            int t = sum < 4 ? sum * 30 + 75 : sum * 30 + 30;
-            t += 30 * distanceScore(w.rom, w.areaTier(d.giver), d.areaTier);
-            t += 30 * distanceScore(w.rom, d.areaTier, w.areaTier(d.receiver));
-            t += rnd(-20, 21);
-            d.timeLimit = t;
+            int tl = sum < 4 ? sum * 30 + 75 : sum * 30 + 30;
+            tl += 30 * distanceScore(w.rom, w.areaTier(d.giver), d.areaTier);
+            tl += 30 * distanceScore(w.rom, d.areaTier, w.areaTier(d.receiver));
+            tl += rnd(-20, 21);
+            d.timeLimit = tl;
         }
 
-        const int m = total < 0x23 ? 1 : total <= 0x45 ? rnd(1, 3)
-                                                       : rnd(2, 4);
+        const QuestCountRange bc = rangeFor(t.bonusCount.empty() ? base.bonusCount : t.bonusCount, total);
+        const int m = pickRange(bc.lo, bc.hi, rnd);
         for (int k = 0; k < m; ++k)
         {
             QuestEntry e;
@@ -333,7 +330,8 @@ namespace gp
 
     struct ScatterItem
     {
-        int item, x, y;
+        Id item;
+        int x, y;
         bool flagged;
     };
 

@@ -9,36 +9,54 @@
 // Confirmed against MAME for a pet at -39: sign cases, zero cases, and the ~0.9 line.
 // NOT confirmed: the 0.75 line, positive (halo-heavy) pets, and the exact comparison
 // direction at the thresholds (> vs >=).
+//
+// The cut-offs and reaction codes live in EncounterRules (BefriendRules::encounter); the overloads without a
+// rules argument use the base game's values.
+#include <algorithm>
+#include "befriend_rules.hpp"
 namespace gp
 {
-    inline int classifyReaction(int pet, int npc) // player side: 1, 2, 5 or 6
+    namespace detail
     {
-        if (pet == 0)
-            return 1;
-        if (npc == 0)
-            return 6;
-        if ((pet < 0) != (npc < 0))
-            return 5;
-        const double r = double(npc) / double(pet);
-        return r > 0.9 ? 2 : r > 0.75 ? 1 : 6;
+        inline int ratioBand(double r, const EncounterRules &e)
+        {
+            for (const auto &b : e.bands)
+                if (r > b.first)
+                    return b.second;
+            return e.belowBands;
+        }
     }
 
-    inline int classifyCompat(int pet, int npc) // animal side: 1, 2, 4, 5 or 6
+    inline int classifyReaction(int pet, int npc, const EncounterRules &e) // player side: 1, 2, 5 or 6
+    {
+        if (pet == 0)
+            return e.playerPetZero;
+        if (npc == 0)
+            return e.playerNpcZero;
+        if ((pet < 0) != (npc < 0))
+            return e.oppositeSigns;
+        return detail::ratioBand(double(npc) / double(pet), e);
+    }
+    inline int classifyReaction(int pet, int npc) { return classifyReaction(pet, npc, defaultBefriendRules().encounter); }
+
+    inline int classifyCompat(int pet, int npc, const EncounterRules &e) // animal side: 1, 2, 4, 5 or 6
     {
         if (npc == 0)
-            return 1;
+            return e.animalNpcZero;
         if (pet == 0)
-            return npc < 0 ? 4 : 6;
+            return npc < 0 ? e.animalPetZeroNpcNeg : e.animalPetZeroNpcPos;
         if ((pet < 0) != (npc < 0))
-            return 5;
-        const double r = double(pet) / double(npc);
-        return r > 0.9 ? 2 : r > 0.75 ? 1 : 6;
+            return e.oppositeSigns;
+        return detail::ratioBand(double(pet) / double(npc), e);
     }
+    inline int classifyCompat(int pet, int npc) { return classifyCompat(pet, npc, defaultBefriendRules().encounter); }
 
-    // Friendship needs the animal side to be 1 or 2 and the player side not 4 or 5.
-    inline bool encounterBefriends(int pet, int npc)
+    // Friendship needs the animal side to be a friendly code and the player side not a blocking one.
+    inline bool encounterBefriends(int pet, int npc, const EncounterRules &e)
     {
-        const int a = classifyCompat(pet, npc), p = classifyReaction(pet, npc);
-        return (a == 1 || a == 2) && p != 4 && p != 5;
+        const int a = classifyCompat(pet, npc, e), p = classifyReaction(pet, npc, e);
+        return std::find(e.friendlyAnimal.begin(), e.friendlyAnimal.end(), a) != e.friendlyAnimal.end() &&
+               std::find(e.blockingPlayer.begin(), e.blockingPlayer.end(), p) == e.blockingPlayer.end();
     }
+    inline bool encounterBefriends(int pet, int npc) { return encounterBefriends(pet, npc, defaultBefriendRules().encounter); }
 }

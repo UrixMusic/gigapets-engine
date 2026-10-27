@@ -1,54 +1,30 @@
 // game/offerings.hpp
 #pragma once
-#include <cstdint>
+#include "../content/db.hpp"
+#include "player.hpp"
+#include "fixed_spawn.hpp"   // offeredKey
 #include <functional>
-#include <vector>
 
 namespace gp
 {
-    struct OfferSet
+    // Returns the item handed over, or an empty Id when nothing in the set can be offered.
+    // Items are tried in the set's order, one per conversation, like the old firstItem..lastItem scan.
+    inline Id tryOffer(const OfferSetDef &s, Player &p, const std::function<int(const Id &)> &held)
     {
-        int npc, firstItem, lastItem;
-    };
-    constexpr OfferSet kKingOffers{0x49, 0xaa, 0xb5}, kGardeniaOffers{0x40, 0xdf, 0xea};
-
-    inline int popcount16(unsigned v)
-    {
-        int n = 0;
-        for (; v; v &= v - 1)
-            ++n;
-        return n;
-    }
-
-    struct OfferResult
-    {
-        int item = -1;
-        int reward = -1;
-    }; // item -1 = nothing to offer
-
-    // flags: g_itemOfferedFlags_A (king) / DAT_001e18 (Gardenia), saved with the pet.
-    // rewards: the 12 words at 0x1e36 / 0x1e2a (RAM, runtime-filled: dump them live before trusting).
-    inline OfferResult tryOffer(const OfferSet &s, uint16_t &flags, const std::function<int(int)> &held,
-                                const std::vector<int> &rewards)
-    {
-        for (int it = s.firstItem; it <= s.lastItem; ++it)
+        for (const Id &it : s.items)
         {
-            if (held(it) < 1 || (flags >> (it - s.firstItem) & 1))
+            if (held(it) < 1 || p.hasFlag(offeredKey(it)))
                 continue;
-            OfferResult r;
-            r.item = it;
-            const int idx = popcount16(flags);
-            r.reward = idx < int(rewards.size()) ? rewards[size_t(idx)] : -1;
-            flags = uint16_t(flags | 1u << (it - s.firstItem));
-            return r;
+            p.setFlag(offeredKey(it));
+            return it;
         }
         return {};
     }
 
-    // Game_ProcessTick: after 0x10 quests the king's first item (0xaa) counts as offered.
-    inline void autoMarkKing(int questCounter, uint16_t &kingFlags)
+    // Game_ProcessTick: after 0x10 quests the king's first item counts as offered (data on the record).
+    inline void autoMarkOffers(const OfferSetDef &s, int questCounter, Player &p)
     {
-        if (questCounter > 0x10)
-            kingFlags |= 1;
+        if (s.autoMarkAfterQuests > 0 && !s.autoMarkItem.empty() && questCounter >= s.autoMarkAfterQuests)
+            p.setFlag(offeredKey(s.autoMarkItem));
     }
 }

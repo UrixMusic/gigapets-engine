@@ -5,6 +5,10 @@ build/
 *.o
 *.log
 
+# other
+mods/
+*.json
+
 # game data: never commit the ROM
 *.rom
 *.u7

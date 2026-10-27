@@ -40,7 +40,8 @@ namespace gp
         StatsLow = 4,
         Stats = 5,
         Picture = 6,
-        Quest = 7
+        Quest = 7,
+        Sign = 8
     };
 
     struct DialogueBox

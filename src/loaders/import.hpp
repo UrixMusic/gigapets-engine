@@ -8,7 +8,15 @@
 #include "../content/db.hpp"
 #include "../game/npc_anim_ids.hpp" // pure constants; add at the top of import.hpp
 #include "../game/fixed_spawn.hpp"
+#include "../game/quest_strings.hpp"
+#include "../game/quest_types.hpp"
+#include "../game/befriend_rules.hpp"
+#include "../game/minigame_defs.hpp"
+#include "quest_import.hpp"
+#include "../game/item.hpp"
+#include "../game/item_effects.hpp"
 #include "../loaders/fixed_spots.hpp"
+#include <array>
 #include <cstdio>
 #include "text.hpp"
 #include "font.hpp"
@@ -85,6 +93,47 @@ namespace gp
             importAnim(rom, db, rid, -1, fallbackPal);
     }
 
+    // The three starter species (CreateNewPet). Values are from the decompilation; none of it is read from the ROM.
+    // Not ported: SetInventorySlot(slot, item) per species, because there is nowhere to store it yet.
+    //   species 0: (0x1b,0x6b) (0x1c,0x6f) (3,0x73) (9,0x83)   (1,0x9e) (0,0x93)
+    //   species 1: (0x1b,0x6e) (0x1c,0x6f) (3,0x75) (0xc,0x89) (1,0xa0) (0,0x96)
+    //   species 2: (0x1b,0x6d) (0x1c,0x6f) (3,0x74) (6,0x86)   (1,0x9f) (0,0x9c)
+    inline void importSpecies(ContentDB &db)
+    {
+        struct Starter
+        {
+            int item, count;
+        };
+        struct Row
+        {
+            int pal, illness;
+            std::vector<Starter> items;
+        };
+        static const Row kRows[3] = {
+            {0x1df, 0, {{1, 1}, {0x6b, 1}, {0x6f, 1}, {0x73, 1}, {0x83, 1}, {0x1c, 2}, {0x9e, 1}, {0x93, 1}}},
+            {0x29e, 1, {{1, 1}, {0x6e, 1}, {0x6f, 1}, {0x75, 1}, {0x89, 1}, {0x21, 2}, {0xa0, 1}, {0x96, 1}}},
+            {0x31e, 2, {{1, 1}, {0x6d, 1}, {0x6f, 1}, {0x74, 1}, {0x86, 1}, {0x23, 2}, {0x9f, 1}, {0x9c, 1}}},
+        };
+        for (int i = 0; i < 3; ++i)
+        {
+            SpeciesDef s;
+            s.id = "base:species/" + std::to_string(i);
+            s.legacyIndex = i;
+            s.defaultPalette = kRows[i].pal;
+            s.ownIllness = kRows[i].illness;
+            s.startHealth = 0x41;
+            s.startHunger = 0x34;
+            s.startHappiness = 0x50;
+            s.startCleanliness = 0x4b;
+            s.startTiredness = 0x4b;
+            s.startMoneyMin = 0x28;
+            s.startMoneyMax = 0x3d;
+            for (const auto &it : kRows[i].items)
+                s.starterItems.push_back({legacyItemId(it.item), it.count});
+            db.put(std::move(s));
+        }
+    }
+
     inline void importNpcs(const Rom &rom, ContentDB &db, int playerSpecies = 0)
     {
         TextTable tt{};
@@ -159,6 +208,19 @@ namespace gp
                 //  std::printf("npc %d stationary=%d lines=%zu words@%x: %x %x %x\n", i, int(r.stationary), d.lines.size(), a,
                 // rom.u16(a), rom.u16(a + 1), rom.u16(a + 2));
             }
+            db.put(std::move(d));
+        }
+    }
+
+    inline void importItems(const Rom &rom, ContentDB &db)
+    {
+        for (const ItemDef &raw : readItems(rom))
+        {
+            ItemDef d = raw;
+            d.id = "base:item/" + std::to_string(raw.index);
+            d.name = "base:text/" + std::to_string(raw.nameText);
+            d.plural = raw.pluralText == 0xffff ? Id() : "base:text/" + std::to_string(raw.pluralText);
+            d.use = legacyItemUse(d);
             db.put(std::move(d));
         }
     }
@@ -321,6 +383,19 @@ namespace gp
         return id;
     }
 
+    // TryShowContextualStoryText table at word address 0xf83d: 29 entries of {object slot, area, text id}
+    inline int contextTextId(const Rom &rom, int area, int slot)
+    {
+        for (int i = 0; i < 29; ++i)
+        {
+            const uint32_t a = 0xf83d + uint32_t(i) * 3;
+            if (a + 3 > rom.sizeWords())
+                break;
+            if (int(rom.u16(a)) == slot && int(rom.u16(a + 1)) == area)
+                return rom.u16(a + 2);
+        }
+        return -1;
+    }
     inline void importAreas(const Rom &rom, ContentDB &db)
     {
         const int n = areaCount(rom);
@@ -332,6 +407,7 @@ namespace gp
             AreaDef a;
             a.id = "base:area/" + std::to_string(id);
             a.legacyId = id;
+            a.name = "base:text/" + std::to_string(rom.u16(0xe303 + id));
             a.tilesW = ar.tilesW;
             a.tilesH = ar.tilesH;
             a.tiles = ar.tiles;
@@ -363,6 +439,8 @@ namespace gp
                 d.boxLeft = o.xLeft;
                 d.boxRight = o.xRight;
                 d.legacySlot = int(k);
+                if (const int t = contextTextId(rom, id, int(k)); t >= 0)
+                    d.contextText = "base:text/" + std::to_string(t);
                 a.objects.push_back(std::move(d));
             }
             const uint32_t rec = kAreaRecords + uint32_t(id) * 8; // [5] = point count, [7] = point list
@@ -461,24 +539,276 @@ namespace gp
         }
     }
 
+    // Object id for a legacy (area, slot) pair, or empty if the area/slot doesn't exist.
+    inline Id objectIdAt(const ContentDB &db, int legacyArea, int slot)
+    {
+        if (const AreaDef *a = db.areaByLegacy(legacyArea))
+            for (const ObjectDef &o : a->objects)
+                if (o.legacySlot == slot)
+                    return o.id;
+        return {};
+    }
+
+    inline void putInteraction(ContentDB &db, int legacyArea, int slot, const char *action,
+                               std::map<std::string, int> num = {}, std::map<std::string, std::string> str = {})
+    {
+        const AreaDef *a = db.areaByLegacy(legacyArea);
+        const Id obj = objectIdAt(db, legacyArea, slot);
+        if (!a || obj.empty())
+        {
+            std::printf("import: interaction at area %d slot %d has no object\n", legacyArea, slot);
+            return;
+        }
+        InteractionDef d;
+        d.id = obj + "/interact";
+        d.area = a->id;
+        d.object = obj;
+        d.action = action;
+        d.num = std::move(num);
+        d.str = std::move(str);
+        db.put(std::move(d));
+    }
+
+    // A ROM string by Ghidra word address (one char per word), stored as "base:str/rom_<hex>".
+    // Same read as the old readRomString in walk.cpp, so output is identical.
+    inline Id importRomString(const Rom &rom, ContentDB &db, uint32_t addr)
+    {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "base:str/rom_%x", addr);
+        const Id id = buf;
+        if (!db.text(id))
+        {
+            std::string s;
+            for (int c; (c = rom.u16(addr++) & 0xff) != 0 && s.size() < 100;)
+                s += char(c);
+            db.put(TextDef{id, std::move(s)});
+        }
+        return id;
+    }
+
+    // The (area, slot) tables from ProcessStoryModeObjectInteraction, now as records.
+    inline void importInteractions(const Rom &rom, ContentDB &db)
+    {
+        auto str = [&](uint32_t addr)
+        { return importRomString(rom, db, addr); };
+
+        // Wishing wells (Three in a Row): cost, prize landing point, and the two prompts
+        auto well = [&](int area, int slot, int cost, int x, int y)
+        {
+            const bool big = cost >= 100;
+            putInteraction(db, area, slot, "well", {{"cost", cost}, {"x", x}, {"y", y}},
+                           {{"needText", str(big ? 0xd552 : 0xd4ff)}, {"askText", str(big ? 0xd575 : 0xd520)}});
+        };
+        well(0, 17, 5, 0x1ea, 0x159);
+        well(0, 78, 5, 0x79a, 0x3fc);
+        well(1, 2, 5, 0x50c, 0x9a);
+        well(6, 15, 100, 0x10f, 0x17c);
+
+        // Game tents (Memory Match)
+        for (const auto &t : {std::array<int, 4>{3, 8, 0x8ea, 0x69}, {7, 50, 0x4f5, 0x550}})
+            putInteraction(db, t[0], t[1], "tent", {{"x", t[2]}, {"y", t[3]}},
+                           {{"needText", str(0xd5a6)}, {"askText", str(0xd5e4)}});
+
+        // Swift Pick
+        putInteraction(db, 0, 98, "minigame", {}, {{"game", "swift_pick"}});
+
+        // Minigames not built yet; resultCode is the value the original passes to SwitchGameState
+        struct Starter
+        {
+            int area, slot, code;
+        };
+        for (const Starter &s : {Starter{0, 63, 0}, {0, 96, 1}, {0, 81, 2}, {2, 17, 4}, {3, 47, 5}, {6, 48, 6}, {1, 81, 7}})
+            putInteraction(db, s.area, s.slot, "minigame", {{"resultCode", s.code}}, {{"game", "unimplemented"}});
+
+        // House signs in area 0: object slot -> save slot
+        for (const auto &h : {std::array<int, 2>{62, 0}, {94, 1}, {75, 2}})
+            putInteraction(db, 0, h[0], "house_sign", {{"saveSlot", h[1]}},
+                           {{"emptyText", str(0xd2b7)}, {"fullText", str(0xd2c0)}}); // "FOR RENT" / "Welcome to the home of %s."
+
+        // Quest-count gates: unlocked text once questsCompleted >= needed
+        struct Gate
+        {
+            int area, slot, needed;
+            uint32_t locked, open;
+        };
+        for (const Gate &g : {Gate{3, 57, 17, 0xd4b0, 0xd4dd},  // Vacation Island
+                              Gate{7, 56, 61, 0xd328, 0xd350},  // Bridge
+                              Gate{1, 12, 90, 0xd413, 0xd449},  // Magma Mountain
+                              Gate{0, 8, 91, 0xd4b0, 0xd4dd},   // GUESS: Vacation Island, strings not yet seen
+                              Gate{0, 46, 4, 0xd2db, 0xd316},   // Gigatown
+                              Gate{0, 33, 42, 0xd368, 0xd39a},  // Gigalympia tunnel
+                              Gate{1, 29, 16, 0xd3b0, 0xd3d9},  // Giga Castle
+                              Gate{1, 91, 14, 0xd463, 0xd48d}}) // Beach
+            putInteraction(db, g.area, g.slot, "gate_sign", {{"needed", g.needed}},
+                           {{"lockedText", str(g.locked)}, {"openText", str(g.open)}});
+    }
+
+    // Scripted quests and the generator tables, read once from the ROM.
+    inline void importQuests(const Rom &rom, ContentDB &db)
+    {
+        auto rw = [&](uint32_t a)
+        { return int(rom.u16(int(a))); };
+        for (QuestDef &q : importQuestTable(rw))
+            db.put(std::move(q));
+        db.put(importQuestTables(rw));
+    }
+
+    inline void importQuestTypes(ContentDB &db)
+    {
+        for (QuestTypeDef &t : baseQuestTypes())
+            db.put(std::move(t));
+    }
+
+    inline void importMinigames(ContentDB &db)
+    {
+        for (MinigameDef &m : baseMinigames())
+            db.put(std::move(m));
+    }
+
+    inline void importBefriendRules(ContentDB &db) { db.put(baseBefriendRules()); }
+
+    inline void importQuestStrings(ContentDB &db)
+    {
+        for (const auto &kv : kQuestStrings)
+            db.put(TextDef{std::string("base:str/quest/") + kv.first, kv.second});
+    }
+
+    // Objects that exist only while questMin <= quests completed < questMax (was applyQuestGates).
+    inline void importQuestGates(ContentDB &db)
+    {
+        constexpr int kAny = 0x7fffffff;
+        struct Gate
+        {
+            int area, slot, minQ, maxQ;
+        };
+        static const Gate kGates[] = {
+            {0, 0x32, 4, kAny},
+            {0, 0x17, 0x2a, kAny},
+            {0, 6, 0x5b, kAny},
+            {0, 0x19, 0x2a, kAny},
+            {0, 0x1a, 0, 0x2a},
+            {0, 4, 0x5b, kAny},
+            {0, 5, 0, 0x5b},
+            {1, 5, 0, 0x5a},
+            {1, 4, 0x5a, kAny},
+            {1, 0x17, 0x10, kAny},
+            {1, 0x5d, 0xe, kAny},
+            {1, 3, 0x5a, kAny},
+            {3, 0x3a, 0x11, kAny},
+            {7, 0x3b, 0, 0x3d},
+            {9, 0xb8, 0x43, kAny},
+            {9, 0xb9, 0, 0x43},
+        };
+        for (const Gate &g : kGates)
+        {
+            const AreaDef *a = db.areaByLegacy(g.area);
+            AreaDef *m = a ? db.areaMutable(a->id) : nullptr;
+            bool found = false;
+            if (m)
+                for (ObjectDef &o : m->objects)
+                    if (o.legacySlot == g.slot)
+                    {
+                        o.questMin = g.minQ;
+                        o.questMax = g.maxQ;
+                        found = true;
+                    }
+            if (!found)
+                std::printf("import: quest gate at area %d slot %d has no object\n", g.area, g.slot);
+        }
+    }
+
+    inline void importBaseOfferSets(ContentDB &db)
+    {
+        auto text = [&](const char *id, const char *s)
+        { TextDef t; t.id = id; t.text = s; db.put(std::move(t)); };
+        text("base:str/offer/king_thanks", "Oh, thank you returning this. It will be placed in my royal vault.");
+        text("base:str/offer/gardenia_thanks", "Oh, thank you for this beautiful flower. It will go right in my garden.");
+
+        auto range = [](int a, int b)
+        { std::vector<Id> v; for (int i = a; i <= b; ++i) v.push_back(legacyItemId(i)); return v; };
+
+        OfferSetDef k;
+        k.id = "base:offers/king";
+        k.npc = "base:npc/73"; // 0x49, check the id format
+        k.items = range(0xaa, 0xb5);
+        k.thanksText = "base:str/offer/king_thanks";
+        k.autoMarkAfterQuests = 0x11;
+        k.autoMarkItem = legacyItemId(0xaa);
+        db.put(std::move(k));
+
+        OfferSetDef g;
+        g.id = "base:offers/gardenia";
+        g.npc = "base:npc/64"; // 0x40
+        g.items = range(0xdf, 0xea);
+        g.thanksText = "base:str/offer/gardenia_thanks";
+        db.put(std::move(g));
+    }
+
+    inline void importOfferGates(ContentDB &db)
+    {
+        // object row (legacySlot) hidden when item i of the set has been handed over
+        static constexpr int kGardenia[12] = {0x18, 0x16, 0xa, 0xe, 0x17, 0xf, 0x12, 0xd, 0x19, 0x1a, 0x13, 9};
+        static constexpr int kKing[12] = {8, 0xb, 0xa, 0xc, 9, 5, 3, 4, 1, 2, 7, 6};
+        struct G
+        {
+            int area;
+            const char *set;
+            const int *rows;
+        };
+        for (const G &g : {G{0x1c, "base:offers/king", kKing}, G{0x22, "base:offers/gardenia", kGardenia}})
+        {
+            const AreaDef *a0 = db.areaByLegacy(g.area);
+            const OfferSetDef *s = db.offerSet(g.set);
+            if (!a0 || !s)
+                continue;
+            AreaDef *a = db.areaMutable(a0->id);
+            for (int i = 0; i < 12 && i < int(s->items.size()); ++i)
+                for (ObjectDef &o : a->objects)
+                    if (o.legacySlot == g.rows[i])
+                        o.requiresOffered = s->items[size_t(i)];
+        }
+
+        int n = 0;
+        for (const AreaDef *a : {db.areaByLegacy(0x1c), db.areaByLegacy(0x22)})
+            if (a)
+                for (const ObjectDef &o : a->objects)
+                    if (!o.requiresOffered.empty())
+                        ++n;
+        std::fprintf(stderr, "offer gates set: %d (expect 24)\n", n);
+    }
+
     inline void importRom(const Rom &rom, ContentDB &db, int playerSpecies = 0)
     {
         importAreas(rom, db);
+        importQuestGates(db);
+        importQuests(rom, db);
+        importQuestTypes(db);
+        importBefriendRules(db);
+        importMinigames(db);
+        importQuestStrings(db);
         importTransitions(rom, db);
         importExits(rom, db);
+        importInteractions(rom, db);
         importAnimRange(rom, db, 0, 0x120, 0x1e1, playerSpecies);
         if (auto t = findTextPool(rom))
             importText(db, rom, *t);
         else
             std::printf("warning: name table not found, no text imported\n");
         importWideStrings(db, rom);
-        importFont(db, rom, 0);     // dialogue text
-        importFont(db, rom, 2);     // stat numbers
-        for (int f = 0; f < 8; ++f) // import all fonts in-case
+        importFont(db, rom, 0);        // dialogue text
+        importFont(db, rom, 1, 0x11f); // sign text: font 1, palette 0x11f
+        importFont(db, rom, 2);        // stat numbers
+        importFont(db, rom, 3, 0x104); // Swift Pick title: font 3, palette 0x104
+        for (int f = 0; f < 8; ++f)    // import all fonts in-case
             importFont(db, rom, f);
-        for (int s : {0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4e, 0x4f, 0x27, 0xac2, 0xace, 0xad6, 0xac6})
+        for (int s : {0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4e, 0x4f, 0x27, 0xac2, 0xace, 0xad6, 0xac6, 0x400})
             importUiSprite(db, rom, s);
+        importUiSprite(db, rom, 0x17, 0x11f); // sign frame
+        importSpecies(db);
         importNpcs(rom, db, playerSpecies);
+        importBaseOfferSets(db);
+        importOfferGates(db);
+        importItems(rom, db);
         for (const FixedSpotDef &s : baseFixedSpots())
             db.put(s);
     }

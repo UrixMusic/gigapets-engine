@@ -1,9 +1,10 @@
 // tools/frontend_demo.cpp
 // Standalone viewer for the front-end screens. Needs only rom.hpp, sprite.hpp, menu_draw.hpp, name_entry.hpp.
-//   frontend_demo rom.u7 [--frames N]
+//   frontend_demo rom.u7 [--frames N] [--smooth]
 //
 // Keys (all screens):  F1 main menu   F2 name entry   F3 background browser
 //                      F5 cycle sprite placement mode   F6 toggle red/blue swap   F7 species 0/1/2/3 (name screen)
+//                      F4 toggle the optional smooth (sub-pixel) mode - the same switch as walk's F5; --smooth starts with it on
 //                      Esc  back to the main menu
 // Main menu:  Up/Down move, Z (release) activates. Q/W, E/R, T/Y change slide offsets a, b, c.
 //             New -> name entry. Load/Options print their target state.
@@ -35,10 +36,25 @@
 #include "../game/dialogue.hpp"
 #include "app_context.hpp"
 #include "../loaders/import.hpp" // ContentDB + importRom: that is where the fonts live
-#include "text_draw.hpp"
+#include "../game/text_draw.hpp"
 #include <memory>
 
 using namespace gp;
+
+// Optional sub-pixel mode (F4 / --smooth). One switch shared with walk.cpp: in the unity build (GP_NO_MAIN) walk.cpp is
+// included first and defines it; standalone, this file defines its own.
+#ifndef GP_NO_MAIN
+bool smoothCam = false;
+#endif
+
+// A value that moves in whole-pixel steps once per 30 Hz tick, shown part-way (alpha, 0..1) between its previous and its
+// current value. Falls back to the plain value when smooth mode is off, or when the change was a jump rather than a step.
+inline float feSmooth(int prev, int now, float alpha, int maxStep)
+{
+    if (!smoothCam || std::abs(now - prev) > maxStep)
+        return float(now);
+    return float(prev) + float(now - prev) * alpha;
+}
 
 // ---- ROM helpers ------------------------------------------------------------------------------
 
@@ -60,11 +76,16 @@ struct FrontGfx : Gfx
 {
     struct Cmd
     {
-        int layer, seq, sprite, pal, x, y;
+        int layer, seq, sprite, pal;
+        float x, y;
     };
     std::vector<Cmd> q;
     std::string lastText;
     void drawTile(int s, int p, int x, int y, int layer, int) override
+    {
+        drawTileF(s, p, float(x), float(y), layer);
+    }
+    void drawTileF(int s, int p, float x, float y, int layer) // same, at a fractional position (smooth mode)
     {
         q.push_back({layer, int(q.size()), s, p, x, y});
     }
@@ -86,21 +107,23 @@ struct FrontGfx : Gfx
 struct MenuView
 {
     int a = 0, b = 0, c = 8; // final slide offsets (read from the game)
+    int pa = 0, pb = 0, pc = 8;     // the same before the latest slide tick
+    float fa = 0, fb = 0, fc = 8;   // what is drawn: a, b, c, or part-way between pa..a while sliding in smooth mode
     int colour[3] = {0, 0, 0};
     int cursor = 1;
     bool pressed = false;
     bool ready = true; // false while sprites are still sliding in
 };
 
-inline void drawMainMenu(Gfx &g, const MenuView &v)
+inline void drawMainMenu(FrontGfx &g, const MenuView &v)
 {
     constexpr int P = 0x4d5, L = 0x3000, BP = 0x4c7;
-    g.drawTile(0x9f4, P, v.b + 0xb8, -1, L);
-    g.drawTile(0x9f1, P, v.a, -1, L);
-    g.drawTile(0x9f3, v.colour[2], v.a + 0x1b, 0x28, L);
-    g.drawTile(0x9f0, v.colour[0], v.a, 0x7b, L);
-    g.drawTile(0x9f2, v.colour[1], v.b + 0xcf, 0x44, L);
-    g.drawTile(0x9e6, BP, 0x5f, v.c, L);
+    g.drawTileF(0x9f4, P, v.fb + 0xb8, -1, L);
+    g.drawTileF(0x9f1, P, v.fa, -1, L);
+    g.drawTileF(0x9f3, v.colour[2], v.fa + 0x1b, 0x28, L);
+    g.drawTileF(0x9f0, v.colour[0], v.fa, 0x7b, L);
+    g.drawTileF(0x9f2, v.colour[1], v.fb + 0xcf, 0x44, L);
+    g.drawTileF(0x9e6, BP, 0x5f, v.fc, L);
     if (!v.ready)
         return;
     struct Btn
@@ -115,7 +138,7 @@ inline void drawMainMenu(Gfx &g, const MenuView &v)
     for (int i = 0; i < 3; ++i)
     {
         const int st = (i == v.cursor) ? (v.pressed ? 2 : 1) : 0;
-        g.drawTile(btns[i].t[st], BP, btns[i].x, btns[i].y, L);
+        g.drawTileF(btns[i].t[st], BP, btns[i].x, btns[i].y, L);
     }
 }
 
@@ -289,15 +312,15 @@ struct App
         return anims.emplace(key, std::move(a)).first->second;
     }
 
-    void drawAnim(int id, int palId, int x, int y, Uint32 ms, int fps = 18)
+    void drawAnim(int id, int palId, float x, float y, Uint32 ms, int fps = 18)
     {
         AnimTex &a = anim(id, palId);
         if (a.frames.empty())
             return;
         const int f = int(uint64_t(ms) * fps / 1000) % int(a.frames.size());
         const Tex &t = a.frames[f];
-        SDL_Rect r{x - t.ax + a.dx[f], y - t.ay + a.dy[f], t.w, t.h}; // same placement as your prompt arrow
-        SDL_RenderCopy(ren, t.t, nullptr, &r);
+        SDL_FRect r{x - t.ax + a.dx[f], y - t.ay + a.dy[f], float(t.w), float(t.h)}; // same placement as your prompt arrow
+        SDL_RenderCopyF(ren, t.t, nullptr, &r);
     }
 
     // Screen background from the frame table: record a at 0x91ab + 4a = {cols, rows, attr, base};
@@ -430,21 +453,21 @@ struct App
         return layers.emplace(key, t).first->second;
     }
 
-    void drawLayer(const Tex &t, int scroll)
+    void drawLayer(const Tex &t, float scroll)
     {
         if (!t.t)
             return;
-        SDL_Rect dst{-scroll, 0, t.w, t.h};
-        SDL_RenderCopy(ren, t.t, nullptr, &dst);
+        SDL_FRect dst{-scroll, 0.f, float(t.w), float(t.h)};
+        SDL_RenderCopyF(ren, t.t, nullptr, &dst);
     }
 
     // Immediate sprite draw (no queue / layer sort), same placement modes as flush().
-    void blit(int s, int p, int x, int y)
+    void blit(int s, int p, float x, float y)
     {
         Tex &t = sprite(s, p);
         if (!t.t)
             return;
-        int dx = x, dy = y;
+        float dx = x, dy = y;
         if (placeMode == 0)
         {
             dx = x - t.ax - t.ox;
@@ -455,16 +478,16 @@ struct App
             dx = x - t.ox;
             dy = y - t.oy;
         }
-        SDL_Rect dst{dx, dy, t.w, t.h};
-        SDL_RenderCopy(ren, t.t, nullptr, &dst);
+        SDL_FRect dst{dx, dy, float(t.w), float(t.h)};
+        SDL_RenderCopyF(ren, t.t, nullptr, &dst);
     }
 
     // One animation frame at a fixed frame index; flip mirrors around the anchor (assumption, check by eye).
-    void drawFrame(const AnimTex &a, int f, int x, int y, bool flip)
+    void drawFrame(const AnimTex &a, int f, float x, float y, bool flip)
     {
         const Tex &t = a.frames[f];
-        SDL_Rect r{flip ? x - (t.w - t.ax) - a.dx[f] : x - t.ax + a.dx[f], y - t.ay + a.dy[f], t.w, t.h};
-        SDL_RenderCopyEx(ren, t.t, nullptr, &r, 0.0, nullptr, flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+        SDL_FRect r{flip ? x - float(t.w - t.ax) - a.dx[f] : x - t.ax + a.dx[f], y - t.ay + a.dy[f], float(t.w), float(t.h)};
+        SDL_RenderCopyExF(ren, t.t, nullptr, &r, 0.0, nullptr, flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
     }
 
     void flush(FrontGfx &g)
@@ -476,7 +499,7 @@ struct App
             Tex &t = sprite(c.sprite, c.pal);
             if (!t.t)
                 continue;
-            int dx = c.x, dy = c.y;
+            float dx = c.x, dy = c.y;
             if (placeMode == 0)
             {
                 dx = c.x - t.ax - t.ox;
@@ -487,8 +510,8 @@ struct App
                 dx = c.x - t.ox;
                 dy = c.y - t.oy;
             }
-            SDL_Rect dst{dx, dy, t.w, t.h};
-            SDL_RenderCopy(ren, t.t, nullptr, &dst);
+            SDL_FRect dst{dx, dy, float(t.w), float(t.h)};
+            SDL_RenderCopyF(ren, t.t, nullptr, &dst);
         }
         g.q.clear();
     }
@@ -522,7 +545,7 @@ struct StarterScene
     };
     struct P
     {
-        int x = 0, y = 0, slot = 0, slotX = 0, facing = 3, species = 0, colour = 0, stat[4] = {0, 0, 0, 0};
+        int x = 0, px = 0, y = 0, slot = 0, slotX = 0, facing = 3, species = 0, colour = 0, stat[4] = {0, 0, 0, 0}; // px: x before the latest tick
         bool settled = false, react = false, legs = false, sad = false;
         Act act = A_NONE;
         int sub = 0, counter = 0, tx = 0, reps = 0;
@@ -554,6 +577,9 @@ struct StarterScene
     std::vector<P> pets;
     std::vector<Decor> decor;
     int cursor = 0, confirmed = -1, scroll = 0x50, camT = 0xa0, arrowX = 0, arrowY = 0x73;
+    int pScroll = 0x50, pArrowX = 0, pArrowY = 0x73; // scroll / arrow before the latest tick (smooth mode)
+    float alpha = 1.f;                               // 0..1 through the current 30 Hz tick; the caller sets it every frame
+    float sm(int prev, int now) const { return feSmooth(prev, now, alpha, 12); }
     bool changed = false, finished = false;
     int bgCols = 0x48, maxScroll = 0x7c0;
     uint32_t mapA = 0, mapB = 0;
@@ -651,6 +677,11 @@ struct StarterScene
         camT = 0xa0;
         arrowX = pets[0].x;
         arrowY = 0x73;
+        pScroll = scroll; // nothing glides in from a previous scene
+        pArrowX = arrowX;
+        pArrowY = arrowY;
+        for (P &q : pets)
+            q.px = q.x;
     }
 
     // ---- actions ---------------------------------------------------------------------------
@@ -1010,7 +1041,7 @@ struct StarterScene
         const int f = p.a.loop ? k % n : std::min(k, n - 1);
         return p.a.rev ? n - 1 - f : f;
     }
-    bool visible(App &app, P &p)
+    bool visible(App &app, P &p, int margin = 0) // margin: extra pixels of slack, for drawing at fractional positions
     {
         if (p.a.id < 0)
             return true;
@@ -1019,7 +1050,7 @@ struct StarterScene
             return true;
         const Tex &t = A.frames[frameIndex(A, p)];
         const int left = p.x - scroll - t.ax;
-        return left + t.w > 0 && left <= 0x13f;
+        return left + t.w > -margin && left <= 0x13f + margin;
     }
 
     void confirm()
@@ -1039,6 +1070,11 @@ struct StarterScene
 
     void tick(App &app, const RB &rb) // one 30 Hz game tick
     {
+        pScroll = scroll; // remember where everything was before this tick, for the smooth renderer
+        pArrowX = arrowX;
+        pArrowY = arrowY;
+        for (P &q : pets)
+            q.px = q.x;
         for (P &p : pets)
         {
             if (!visible(app, p))
@@ -1077,14 +1113,15 @@ struct StarterScene
             changed = false;
     }
 
-    void drawPet(App &app, P &p)
+    void drawPet(App &app, P &p, float fScroll)
     {
         if (p.a.id < 0)
             return;
         App::AnimTex &A = app.anim(p.a.id, p.colour);
         if (A.frames.empty())
             return;
-        const int f = frameIndex(A, p), vx = p.x - scroll, h = A.frames[f].h;
+        const int f = frameIndex(A, p), h = A.frames[f].w;
+        const float vx = sm(p.px, p.x) - fScroll;
         int idx = (h - 16 >= 0) ? (h - 16) >> 3 : (h - 9) >> 3; // DrawShadow
         idx = std::clamp(idx, 0, 11);
         const bool s2 = p.species == 2;
@@ -1094,13 +1131,15 @@ struct StarterScene
 
     void draw(App &app, FrontGfx &gfx, Uint32 now)
     {
-        app.drawLayer(app.tileLayer(mapA, bgCols, 8, frameA, palA), scroll);
-        app.drawLayer(app.tileLayer(mapB, bgCols, 8, frameB, palB), scroll);
+        const float fScroll = sm(pScroll, scroll); // == scroll unless smooth mode is on
+        const int margin = smoothCam ? 2 : 0;
+        app.drawLayer(app.tileLayer(mapA, bgCols, 8, frameA, palA), fScroll);
+        app.drawLayer(app.tileLayer(mapB, bgCols, 8, frameB, palB), fScroll);
         auto band = [&](int lo, int hi)
         {
             for (const Decor &d : decor)
                 if (d.y >= lo && d.y <= hi)
-                    app.blit(d.spr, d.pal, d.x - scroll, d.y);
+                    app.blit(d.spr, d.pal, d.x - fScroll, d.y);
         };
         int first = -1, last = -1;
         auto row = [&](int y)
@@ -1108,12 +1147,12 @@ struct StarterScene
             for (int i = 0; i < int(pets.size()); ++i)
             {
                 P &p = pets[i];
-                if (p.y != y || !visible(app, p))
+                if (p.y != y || !visible(app, p, margin))
                     continue;
                 if (first < 0)
                     first = i;
                 last = i;
-                drawPet(app, p);
+                drawPet(app, p, fScroll);
             }
         };
         band(0, 0x73);
@@ -1132,7 +1171,7 @@ struct StarterScene
                 if (!A.frames.empty())
                     h = A.frames[frameIndex(A, c)].h;
             }
-            app.drawAnim(0x11, 0x28c, arrowX - scroll, arrowY - h, now);
+            app.drawAnim(0x11, 0x28c, sm(pArrowX, arrowX) - fScroll, sm(pArrowY, arrowY) - h, now);
             if (first > 0)
             {
                 gfx.drawTextBox(2, 0x28c, 0x14, 0x14, "More Pets", 100, 0, 0x3000);
@@ -1165,12 +1204,21 @@ enum class Screen
 int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFrames)
 {
     int chosenSlot = -1;
+    // Smooth mode switches SDL's integer scaling on; hand the renderer back as we found it when we leave.
+    struct IntScaleGuard
+    {
+        SDL_Renderer *r;
+        SDL_bool old;
+        ~IntScaleGuard() { SDL_RenderSetIntegerScale(r, old); }
+    } scaleGuard{ctx.ren, SDL_RenderGetIntegerScale(ctx.ren)};
     try
     {
         const Rom &rom = *ctx.rom; // owned by the AppHost
         SDL_Window *win = ctx.win;
         SDL_Renderer *ren = ctx.ren;
+        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0"); // nearest (SDL's default): crisp pixels at fractional positions
         SDL_RenderSetLogicalSize(ren, 320, 240);
+        SDL_RenderSetIntegerScale(ren, smoothCam ? SDL_TRUE : SDL_FALSE); // uniform pixel widths while scrolling smoothly
 
         // Fonts come from the ContentDB. Built once (static) and reused when we come back from gameplay.
         // Species 0 is arbitrary: nothing the front end needs depends on it.
@@ -1279,6 +1327,9 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         int outTick = 0;
         auto stepSlide = [&] // one 30 Hz tick, same order as the game
         {
+            menu.pa = menu.a; // before this tick, for the smooth renderer
+            menu.pb = menu.b;
+            menu.pc = menu.c;
             if (menu.a < 0)
                 menu.a += 2;
             if (menu.b > 0 && menu.a > -0x87)
@@ -1387,6 +1438,15 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             gfx.drawTile(b.yesSelected ? 0x4b : 0x4c, P, l.x + l.btnX, l.y + l.btnY, L, 999);        // No
         };
 
+        auto smoothMenu = [&] // slide-in positions: part-way between the last two 30 Hz ticks while sliding, exact otherwise
+        {
+            const float al = fadeSkip > 0 ? 1.f : float(tickAcc);
+            const bool sliding = !menu.ready;
+            menu.fa = sliding ? feSmooth(menu.pa, menu.a, al, 4) : float(menu.a);
+            menu.fb = sliding ? feSmooth(menu.pb, menu.b, al, 4) : float(menu.b);
+            menu.fc = sliding ? feSmooth(menu.pc, menu.c, al, 4) : float(menu.c);
+        };
+
         if (skipBoot)
             screen = Screen::Menu; // menu fields default to the final slide position
         bootT0 = lastMs = SDL_GetTicks();
@@ -1422,6 +1482,12 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                         else if (screen == Screen::Name || screen == Screen::Browse)
                             goMenu();
                         // the other screens handle Escape themselves below
+                    }
+                    else if (k == SDLK_F4)
+                    {
+                        smoothCam = !smoothCam;
+                        SDL_RenderSetIntegerScale(ren, smoothCam ? SDL_TRUE : SDL_FALSE);
+                        std::printf("smooth mode %s\n", smoothCam ? "on" : "off");
                     }
                     else if (k == SDLK_F5)
                     {
@@ -1745,6 +1811,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                 for (int i = 0; i < gt; ++i) // phase 2: slide in
                     stepSlide();
                 app.drawBackground(2, 0x5c5);
+                smoothMenu();
                 drawMainMenu(gfx, menu);
                 if (menu.ready)
                     screen = Screen::Menu; // plain assignment: no new fade
@@ -1754,6 +1821,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                 for (int i = 0; i < gt && !menu.ready; ++i) // replayed slide-in after the pet flow
                     stepSlide();
                 app.drawBackground(2, 0x5c5);
+                smoothMenu();
                 drawMainMenu(gfx, menu);
                 break;
             case Screen::Intro:
@@ -1764,6 +1832,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             {
                 for (int i = 0; i < ticks; ++i)
                     starter.tick(app, randBelow);
+                starter.alpha = smoothCam ? float(tickAcc) : 1.f; // how far through the current tick we are
                 starter.draw(app, gfx, now);
                 if (starter.finished)
                 {
@@ -1835,13 +1904,17 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                     SDL_RenderDrawRect(ren, &r);
                 }
             }
-            int alpha = 0;
+            // Fades are counted in 30 Hz ticks. In smooth mode the part-way-through-a-tick fraction is added, so the
+            // black overlay ramps every frame instead of in 16 steps. (Off: frac is 0 and this is the old integer maths.)
+            const float frac = (smoothCam && fadeSkip == 0) ? float(tickAcc) : 0.f;
+            float alphaF = 0.f;
             if (hasPending || leaving)
-                alpha = 255 * std::min(fadeOutTick, kFade) / kFade;
+                alphaF = 255.f * std::min(float(kFade), float(fadeOutTick) + frac) / float(kFade);
             else if (fadeTick < kFade)
-                alpha = 255 * (kFade - fadeTick) / kFade;
+                alphaF = 255.f * std::max(0.f, float(kFade) - (float(fadeTick) + frac)) / float(kFade);
             if (screen == Screen::Boot && bootPhase == 1)
-                alpha = 255 * std::min(outTick, 16) / 16;
+                alphaF = 255.f * std::min(16.f, float(outTick) + frac) / 16.f;
+            const int alpha = int(alphaF);
             if (alpha > 0)
             {
                 SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
@@ -1875,13 +1948,17 @@ int main(int argc, char **argv)
 {
     if (argc < 2)
     {
-        std::fprintf(stderr, "usage: frontend_demo rom.u7 [--frames N]\n");
+        std::fprintf(stderr, "usage: frontend_demo rom.u7 [--frames N] [--smooth]\n");
         return 1;
     }
     int maxFrames = -1;
-    for (int i = 2; i + 1 < argc; ++i)
-        if (!std::strcmp(argv[i], "--frames"))
-            maxFrames = std::atoi(argv[i + 1]);
+    for (int i = 2; i < argc; ++i)
+    {
+        if (!std::strcmp(argv[i], "--smooth"))
+            smoothCam = true;
+        else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc)
+            maxFrames = std::atoi(argv[++i]);
+    }
     try
     {
         gp::AppHost host(argv[1], "front-end demo");

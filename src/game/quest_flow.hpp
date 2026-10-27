@@ -11,13 +11,13 @@ namespace gp
 {
     struct QuestHooks
     {
-        std::function<std::string(int)> text; // text id -> final string (pet name applied)
-        std::function<int(int)> held;
-        std::function<void(int, int)> remove;
-        std::function<void(int, int, int, bool)> spawn; // areaTier, item, state (2 visible / 0 buried), flagged: random free slot
-        std::function<void(int, int, int, bool)> place; // item, x, y, flagged: pending event at a position
-        std::function<void()> randomEvent;              // the extra random event after a -2 reward
-        std::function<void()> clearFlagged;             // ConsumeAllFlaggedPendingEvents
+        std::function<std::string(int)> text;                  // text id -> final string (pet name applied)
+        std::function<int(const Id &)> held;                   // quest.hpp:117, 145, 185
+        std::function<void(const Id &, int)> remove;           // quest.hpp:152
+        std::function<void(int, const Id &, int, bool)> spawn; // quest.hpp:115 (areaTier, item, st, flag)
+        std::function<void(const Id &, int, int, bool)> place; // already done
+        std::function<void()> randomEvent;                     // the extra random event after a -2 reward
+        std::function<void()> clearFlagged;                    // ConsumeAllFlaggedWorldItems
         std::function<void(int)> sfx;
         std::function<int()> camX, camY;
         std::function<int()> receiverY; // y of the live receiver NPC (return camY if it isn't in the area)
@@ -42,6 +42,7 @@ namespace gp
 
         int statusText(std::string &out) const
         {
+            fprintf(stderr, "id=%d ready=%d\n", q.def.id, int(textReady()));
             out.clear();
             if (q.def.id < 0 || !textReady())
                 return -1;
@@ -146,14 +147,14 @@ namespace gp
 
         bool textReady() const { return txt.npcName && txt.areaName && txt.itemName && txt.rnd; }
 
-        std::string textFor(int id) { return id >= 0 ? h.text(id) : "(generated quest text)"; }
+        std::string textFor(int id) { return id >= 0 ? h.text(id) : txt.s("placeholder_generated"); }
 
         std::string failText()
         {
             if (!textReady())
-                return "Quest failed!";
+                return txt.s("quest_failed_short");
             const int a = txt.npcTier ? txt.npcTier(q.def.giver) : 0;
-            return "Quest failed! Go see " + txt.npcName(q.def.giver) + areaPrep(a) + txt.areaName(a) + " to try again.";
+            return fillTemplate(txt.s("quest_failed"), {{"npc", txt.npcName(q.def.giver)}, {"prep", txt.prep(a)}, {"area", txt.areaName(a)}});
         }
 
         void show(DialogueBox b)
@@ -174,7 +175,7 @@ namespace gp
         void ask(int textId)
         {
             // generic quests: the confirm prompt text is not known yet (placeholder)
-            auto b = messageBox(textId >= 0 ? textFor(textId) : std::string("(accept prompt text)"));
+            auto b = messageBox(textId >= 0 ? textFor(textId) : txt.s("placeholder_accept"));
             b.kind = BoxKind::Confirm;
             b.onYes = [this]
             { accept(); };
@@ -222,7 +223,7 @@ namespace gp
         }
         void accept()
         {
-            acceptQuest(q, counter, h.rnd, h.held, h.spawn);
+            acceptQuest(q, counter, h.rnd, h.held, h.spawn, world.type(q.def.typeMode).spawnsOnAccept);
             startQuest(q, h.nowTick());
         }
 
@@ -235,7 +236,7 @@ namespace gp
             case TurnIn::Missing:
             {
                 const int roll = h.rnd ? h.rnd(1, 4) : 1;
-                show(messageBox(reminderText(q.def.typeMode, roll)));
+                show(messageBox(txt.s(reminderKey(world.type(q.def.typeMode), roll))));
                 break;
             }
             case TurnIn::Done:
@@ -245,7 +246,7 @@ namespace gp
                 { advance(advanceStep(q)); };
                 const auto &C = q.def.completionText;
                 if (q.def.generic)
-                    sayStr(h.rnd ? completeText(q.def.typeMode, h.rnd) : std::string("(generated quest text)"), next);
+                    sayStr(txt.rnd ? completeText(q.def.typeMode, txt) : txt.s("placeholder_generated"), next);
                 else if (C.empty())
                     advance({});
                 else if (C[0] >= 0)

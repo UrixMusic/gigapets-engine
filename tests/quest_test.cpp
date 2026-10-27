@@ -3,6 +3,7 @@
 #include <random>
 #include <set>
 #include "../game/quest_flow.hpp"
+#include "../game/quest_types.hpp"
 #include "quest_import.hpp"
 using namespace gp;
 #define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); return 1; } } while (0)
@@ -14,12 +15,13 @@ int main()
 
     // ---- generator invariants
     QuestWorld w;
+    w.types = baseQuestTypes();
     w.areaTier = [](int id) { return id % 10 == 4 || id % 10 == 8 ? 0 : id % 4; }; // tiers 0..3
     w.stationary = [](int id) { return id % 7 == 0; };
     w.speciesOf = [](int id) { return id; };
     w.modeItem = [&](int m, int s) { return 0x300 + m * 16 + int(g() % 8) + (s & 0); };
     for (auto &r : w.rom.distance) for (int &v : r) v = 2;
-    for (int i = 0; i < 0x43; ++i) w.rom.itemWeights.push_back({0x40 + i, 1 + i % 3});
+    for (int i = 0; i < 0x43; ++i) w.rom.itemWeights.push_back({legacyItemId(0x40 + i), 1 + i % 3});
     for (int total : {1, 5, 20, 0x30, 0x50, 0x5a})
     {
         int prevT = 0x4e, prevM = 8;
@@ -34,7 +36,7 @@ int main()
             if (d.typeMode == 2 || d.typeMode == 6) CHECK(!d.spawn.empty() && d.areaTier == 1);
             if (d.typeMode == 2 || d.typeMode == 3) CHECK(total > 3 || d.typeMode == 3);
             CHECK(!d.objectives.empty() && d.objectives.size() <= 3);
-            std::set<int> s;
+            std::set<Id> s;
             for (auto &o : d.objectives) { CHECK(s.insert(o.item).second); CHECK(o.count >= 1 && o.count <= 6); }
             CHECK(!d.bonus.empty() && d.bonus.size() <= 3);
             if (total < 0x23) CHECK(d.bonus.size() == 1);
@@ -63,8 +65,8 @@ int main()
     CHECK(tbl.size() == 2 && tbl[0].id == 1 && tbl[1].id == 3 && tbl[1].typeMode == 4);
     CHECK((tbl[0].offerText == std::vector<int>{0x10, 0x11}));
     CHECK((tbl[0].completionText == std::vector<int>{0x12, -2}));
-    CHECK(tbl[0].objectives.size() == 1 && tbl[0].objectives[0].count == 2 && tbl[0].objectives[0].item == 5);
-    CHECK(tbl[0].spawn.empty() && tbl[1].spawn.size() == 1 && tbl[1].spawn[0].item == 0x77);
+    CHECK(tbl[0].objectives.size() == 1 && tbl[0].objectives[0].count == 2 && tbl[0].objectives[0].item == legacyItemId(5));
+    CHECK(tbl[0].spawn.empty() && tbl[1].spawn.size() == 1 && tbl[1].spawn[0].item == legacyItemId(0x77));
     CHECK((tbl[1].completionText == std::vector<int>{0x21, -7}));
     std::puts("import ok");
 
@@ -76,10 +78,11 @@ int main()
     int inv5 = 0, spawned = 0, placed = 0, cleared = 0, flaggedPlaced = 0;
     auto &h = qr.h;
     h.text = [](int id) { return "t" + std::to_string(id); };
-    h.held = [&](int item) { return item == 5 ? inv5 : 0; };
-    h.remove = [&](int item, int n) { if (item == 5) inv5 -= n; };
-    h.spawn = [&](int, int, int, bool f) { if (f) ++spawned; };
-    h.place = [&](int, int, int, bool f) { ++placed; flaggedPlaced += f; };
+    const Id item5 = legacyItemId(5);
+    h.held = [&](const Id &item) { return item == item5 ? inv5 : 0; };
+    h.remove = [&](const Id &item, int n) { if (item == item5) inv5 -= n; };
+    h.spawn = [&](int, const Id &, int, bool f) { if (f) ++spawned; };
+    h.place = [&](const Id &, int, int, bool f) { ++placed; flaggedPlaced += f; };
     h.randomEvent = [] {};
     h.clearFlagged = [&] { ++cleared; };
     h.sfx = [](int) {};

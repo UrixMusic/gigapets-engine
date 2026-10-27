@@ -18,33 +18,6 @@ namespace gp
         bool present(int bit) const { return bit < 0 || ((w[size_t(bit >> 4) & 63] >> (bit & 15)) & 1); }
     };
 
-    // Quest-count part of Game_ProcessTick. n = quests.counter.
-    inline void applyQuestGates(int area, int n, ProgressBits &b)
-    {
-        switch (area)
-        {
-        case 0:
-            if (n < 4) b.set(0x32, false);
-            if (n < 0x2a) b.set(0x17, false);   // area 6 door (the call whose args the decompile lost)
-            if (n <= 0x5a) b.set(6, false);
-            b.set(0x19, n > 0x29); b.set(0x1a, !(n > 0x29)); // inferred: two calls lost their args in the decompile
-            b.set(4, n > 0x5a);    b.set(5, !(n > 0x5a));
-            break;
-        case 1:
-            b.set(5, n <= 0x59); b.set(4, !(n <= 0x59));
-            if (n < 0x10) b.set(0x17, false);
-            if (n < 0xe)  b.set(0x5d, false);
-            if (n <= 0x59) b.set(3, false);
-            break;
-        case 3: if (n < 0x11) b.set(0x3a, false); break;
-        case 7: if (n > 0x3c) b.set(0x3b, false); break;
-        case 9:
-            if (n <= 0x42) b.set(0xb8, false);
-            else           b.set(0xb9, false);
-            break;
-        }
-    }
-
     // Migrate*FlagsToProgressBits. flags bit i = item (base + i), set = handed over.
     inline void migrateOfferBits(int area, uint16_t flags, ProgressBits &b)
     {
@@ -55,14 +28,14 @@ namespace gp
         for (int i = 0; i < 12; ++i) b.set(t[i], (flags >> i) & 1);
     }
 
-    // Fresh array for a room: everything present, then the ROM's two rules. Call on room entry, after a
-    // quest completes, and after a hand-in.
-    inline ProgressBits rebuildBits(int area, int questCounter, uint16_t kingFlags, uint16_t gardenFlags)
+    // Fresh array for a room: everything present, then the offer flags. Quest-count gates are no longer
+    // applied here: they are ObjectDef::questMin/questMax (see importQuestGates). Call on room entry,
+    // after a quest completes, and after a hand-in.
+    inline ProgressBits rebuildBits(int area, uint16_t kingFlags, uint16_t gardenFlags)
     {
         ProgressBits b;
         if (area == 0x1c) migrateOfferBits(area, kingFlags, b);
         if (area == 0x22) migrateOfferBits(area, gardenFlags, b);
-        applyQuestGates(area, questCounter, b);
         return b;
     }
 }

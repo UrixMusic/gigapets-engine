@@ -1,5 +1,5 @@
 // shop.hpp - shop stock, pending world items, spawn on shop entry / consume on leaving.
-// Ported from SpawnShopItemStock, SpawnItemAtRandomFreeSlot, ConsumeUnflaggedPendingEventsForArea.
+// Ported from SpawnShopItemStock, SpawnItemAtRandomFreeSlot, ConsumeUnflaggedWorldItemsForArea.
 #pragma once
 #include "../content/records.hpp"
 #include <cstdint>
@@ -120,7 +120,7 @@ namespace gp
                 v.erase(v.begin()); // real eviction rules not ported
             v.push_back(e);
         }
-        // ConsumeUnflaggedPendingEventsForArea: walks from the end, removes keep == 0 entries of that area.
+        // ConsumeUnflaggedWorldItemsForArea: walks from the end, removes keep == 0 entries of that area.
         void consumeUnflaggedForArea(int area)
         {
             for (int i = int(v.size()) - 1; i >= 0; --i)

@@ -6,6 +6,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <set>
 
 namespace gp
 {
@@ -80,6 +81,52 @@ namespace gp
                 if (std::sscanf(part.c_str(), "%d:%d", &a, &b) == 2)
                     out[a] = b;
             }
+            return out;
+        }
+        // id -> count. The count follows the LAST ':' because ids contain ':'.
+        void setIdMap(const std::string &k, const std::map<std::string, int> &m)
+        {
+            std::string s;
+            for (const auto &[id, n] : m)
+                s += (s.empty() ? "" : ",") + id + ":" + std::to_string(n);
+            kv[k] = s;
+        }
+        std::map<std::string, int> getIdMap(const std::string &k) const
+        {
+            std::map<std::string, int> out;
+            auto it = kv.find(k);
+            if (it == kv.end())
+                return out;
+            std::istringstream is(it->second);
+            std::string part;
+            while (std::getline(is, part, ','))
+            {
+                const size_t c = part.rfind(':');
+                if (c != std::string::npos && c > 0)
+                    out[part.substr(0, c)] = std::atoi(part.c_str() + c + 1);
+            }
+            return out;
+        }
+
+        // a set of ids, comma-separated
+        void setIdList(const std::string &k, const std::set<std::string> &v)
+        {
+            std::string s;
+            for (const auto &id : v)
+                s += (s.empty() ? "" : ",") + id;
+            kv[k] = s;
+        }
+        std::set<std::string> getIdList(const std::string &k) const
+        {
+            std::set<std::string> out;
+            auto it = kv.find(k);
+            if (it == kv.end())
+                return out;
+            std::istringstream is(it->second);
+            std::string part;
+            while (std::getline(is, part, ','))
+                if (!part.empty())
+                    out.insert(part);
             return out;
         }
     };

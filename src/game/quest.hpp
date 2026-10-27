@@ -4,27 +4,10 @@
 #include <utility>
 #include <algorithm>
 #include "pending_event.hpp" // RandFn
+#include "../content/records.hpp" // QuestEntry, QuestDef
 
 namespace gp
 {
-    struct QuestEntry
-    {
-        int count = -1, item = 0, w2 = 0;
-    };
-
-    struct QuestDef
-    {
-        int id = -1;      // objectKeyId == questsCompleted
-        int giver = 0;    // g_questTargetId
-        int receiver = 0; // g_contentPoolTable
-        int typeMode = 0;
-        std::vector<int> offerText, completionText; // >= 0 text id, < 0 activity code
-        int timeLimit = 0;
-        std::vector<QuestEntry> spawn, objectives, bonus;
-        int areaTier = 0; // DAT_001e70
-        bool generic = false;
-    };
-
     struct QuestState
     {
         QuestDef def;
@@ -119,10 +102,9 @@ namespace gp
 
     // ProcessQuestTurnIn (really "accept"), before the dialogue. spawn(areaTier, item, state, flagged).
     template <class Held, class Spawn>
-    void acceptQuest(QuestState &q, int done, const RandFn &rnd, Held held, Spawn spawn)
+    void acceptQuest(QuestState &q, int done, const RandFn &rnd, Held held, Spawn spawn, bool spawnObjectives = true)
     {
-        const int m = q.def.typeMode;
-        if (m != 2 && m != 4 && m != 5 && m != 6) // 5 = hardcoded per-quest spawns, TODO
+        if (spawnObjectives) // QuestTypeDef::spawnsOnAccept
             for (size_t k = 0; k < q.def.objectives.size() && k < 3; ++k)
             {
                 const QuestEntry &o = q.def.objectives[k];
@@ -217,23 +199,11 @@ namespace gp
     }
 
     // GetQuestReminderDialogue. roll = RandRange(1, 4), i.e. 1..3 (always rolled, even for modes 2/3/6/7).
-    inline const char *reminderText(int typeMode, int roll)
+    inline const char *reminderKey(const QuestTypeDef &t, int roll)
     {
-        switch (typeMode)
-        {
-        case 2:
-            return "I don't feel well...";
-        case 3:
-            return "Sigh...";
-        case 6:
-            return "Oh, I thought you had my lunch...";
-        case 7:
-            return "Hmm. You haven't found all of the litter yet.";
-        default:
-            break;
-        }
-        return roll == 1   ? "You don't have all the items I need yet."
-               : roll == 2 ? "Let's see... Nope. You haven't collected everything yet."
-                           : "I really need you to bring me all the items.";
+        if (!t.reminderKey.empty())
+            return t.reminderKey.c_str();
+        return roll == 1 ? "reminder_default_1" : roll == 2 ? "reminder_default_2"
+                                                            : "reminder_default_3";
     }
 }

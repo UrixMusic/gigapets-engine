@@ -1,5 +1,7 @@
 // gigapets.cpp - the whole game in one program: front end -> gameplay -> (F10) -> front end ...
-// Usage: build gigapets rom.u7 [--slot N] [--area N] [--collision]
+// Usage: build gigapets rom.u7 [--slot N] [--area N] [--collision] [--smooth]
+//   --smooth  : optional sub-pixel camera / interpolated movement / smooth fades, in the front end and in gameplay
+//               (F4 in the front end, F5 in gameplay toggles it live)
 //   no --slot : start at the front end (logos, main menu, new/load)
 //   --slot N  : skip the front end and go straight into that save slot (the old `walk` behaviour)
 //
@@ -14,7 +16,7 @@ int main(int argc, char **argv)
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc < 2)
     {
-        std::printf("usage: gigapets <rom> [--slot N] [--area N] [--collision]\n");
+        std::printf("usage: gigapets <rom> [--slot N] [--area N] [--collision] [--smooth]\n");
         return 1;
     }
     int slot = -1, area = 0; // area 0 = what `walk rom.u7 0` used
@@ -23,6 +25,8 @@ int main(int argc, char **argv)
     {
         if (!std::strcmp(argv[i], "--collision"))
             collision = true;
+        else if (!std::strcmp(argv[i], "--smooth"))
+            smoothCam = true;
         else if (!std::strcmp(argv[i], "--slot") && i + 1 < argc)
             slot = std::clamp(std::atoi(argv[++i]), 0, 2);
         else if (!std::strcmp(argv[i], "--area") && i + 1 < argc)

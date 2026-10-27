@@ -2,21 +2,23 @@
 // Port of the "use an item from the menu" logic: ItemMenuScreen (mode 0, food/medicine/potion
 // branches) and ApplyItemCategoryEffect (0x02dc3e). Pure state change on Player, no SDL, no UI.
 // Dialogue, sounds, saving and the potion recolor lookup stay with the caller.
+//
+// What an item does is data (ItemDef::use). The action name picks a handler from itemActions();
+// a mod registers its own with itemActions().add("mymod:heal", fn) and refers to it from an item record.
 #pragma once
 #include <algorithm>
+#include <functional>
+#include <map>
 #include <string>
 #include "item.hpp" // ItemDef / ItemType (adjust to wherever your item header lives)
+#include "item_effects.hpp"
 #include "player.hpp"
 
 namespace gp
 {
-    constexpr int kFoodForMiniPets = 8;        // w9 == 8: "This food is for mini pets", no effect
-    constexpr int kFoodSpecial = 7;            // w9 == 7: per-item overrides, ids 0x35..0x3c
-    constexpr int kMedicineNoIllness = 0xffff; // w9 == -1 on medicine: opens an empty dialogue
-
     // ItemDef::index -> the string id used in Player::inventory. Change this one function if
     // your ContentDB names items differently.
-    inline std::string itemKey(int index) { return "base:item/" + std::to_string(index); }
+    inline const Id &itemKey(const ItemDef &d) { return d.id; }
 
     // Hook for the pieces that live outside Player. Defaults do nothing.
     struct ItemUseHost
@@ -31,7 +33,7 @@ namespace gp
         NotOwned,      // nothing happened
         NeedsDialogue, // caller shows the item's dialogue (decor types 1-8, TreasureMap, blocked cases)
         Ate,           // food eaten, one removed (menu result 2)
-        TookMedicine,  // one removed (menu result 3); illness id is ItemDef::w9
+        TookMedicine,  // one removed (menu result 3); illness id is the "illness" param (w9 for base items)
         UsedPotion,    // not consumed here (menu result 4); caller does the 0xb061 recolor lookup
         Nothing        // PickupBag and unhandled types
     };
@@ -40,170 +42,166 @@ namespace gp
     {
         inline int personalityCounter(PersonalityStat s) { return 2 + 4 * static_cast<int>(s); }
 
-        // IDs 0x35..0x3a raise one personality stat by min(20, 9999 - current).
-        // IDs 0x37, 0x38, 0x3b, 0x3c lower one by min(current, 10).
-        // The stat index is inferred from the AdjustPersonalityStat arguments (the decompiler
-        // dropped GetPersonalityStat's parameter, so it is assumed to be the same index).
-        inline void applySpecialFood(Player &p, int id, ItemUseHost &host)
+        inline int param(const ItemUseDef &u, const char *k, int fallback = 0)
         {
-            // TODO(verify in MAME): AdjustCareStat(0) with its arguments lost; the notes call this
-            // "full restore", so hunger is filled here.
-            p.adjustCare(Hunger, kMaxCare);
+            auto i = u.num.find(k);
+            return i == u.num.end() ? fallback : i->second;
+        }
+        inline bool has(const ItemUseDef &u, const char *k) { return u.num.count(k) != 0; }
 
+        inline bool statByName(const std::string &n, PersonalityStat &out)
+        {
+            if (n == "halos")
+                out = Halos;
+            else if (n == "pitchforks")
+                out = Pitchforks;
+            else if (n == "stars")
+                out = Stars;
+            else if (n == "lightbulbs")
+                out = Lightbulbs;
+            else
+                return false;
+            return true;
+        }
+
+        // The "food" action's effect, no removal. Order matches the original: fill, care stats, personality.
+        inline void applyFoodParams(Player &p, const ItemUseDef &u, ItemUseHost &host)
+        {
+            if (has(u, "hunger"))
+                p.adjustCare(Hunger, param(u, "hunger"));
+            if (has(u, "happiness"))
+                p.adjustCare(Happiness, param(u, "happiness"));
+            if (has(u, "health"))
+                p.adjustCare(Health, param(u, "health"));
+
+            // The stat index is inferred from the AdjustPersonalityStat arguments (the decompiler dropped
+            // GetPersonalityStat's parameter, so it is assumed to be the same index).
             PersonalityStat stat;
-            bool raise;
-            switch (id)
-            {
-            case 0x35:
-                stat = Halos;
-                raise = true;
-                break;
-            case 0x36:
-                stat = Pitchforks;
-                raise = true;
-                break;
-            case 0x39:
-                stat = Stars;
-                raise = true;
-                break;
-            case 0x3a:
-                stat = Lightbulbs;
-                raise = true;
-                break;
-            case 0x3c:
-                stat = Halos;
-                raise = false;
-                break;
-            case 0x3b:
-                stat = Pitchforks;
-                raise = false;
-                break;
-            case 0x38:
-                stat = Stars;
-                raise = false;
-                break;
-            case 0x37:
-                stat = Lightbulbs;
-                raise = false;
-                break;
-            default:
+            auto s = u.str.find("stat");
+            if (s == u.str.end() || !statByName(s->second, stat))
                 return;
-            }
             const int cur = p.personality[stat];
-            const int delta = raise ? std::min(20, kMaxPersonality - cur) : -std::min(cur, 10);
+            int delta = 0;
+            if (has(u, "raise"))
+                delta = std::min(param(u, "raise"), kMaxPersonality - cur);
+            else if (has(u, "lower"))
+                delta = -std::min(cur, param(u, "lower"));
+            else
+                return;
             p.adjustPersonality(stat, delta);
             host.addStatCounter(personalityCounter(stat), delta);
         }
     } // namespace detail
 
-    // ApplyItemCategoryEffect. Care stats: Hunger, Health, Happiness.
+    // The effective use of an item: its own record, or the one derived from the legacy fields.
+    inline ItemUseDef effectiveUse(const ItemDef &d) { return d.use.action.empty() ? legacyItemUse(d) : d.use; }
+
+    // ApplyItemCategoryEffect, kept as an entry point for callers and tests.
     inline void applyFoodEffect(Player &p, const ItemDef &d, ItemUseHost &host)
     {
-        switch (d.w9)
-        {
-        case 1:
-            p.adjustCare(Hunger, 10);
-            p.adjustCare(Happiness, 6);
-            p.adjustCare(Health, -6);
-            break;
-        case 2:
-            p.adjustCare(Hunger, 10);
-            p.adjustCare(Happiness, 3);
-            p.adjustCare(Health, -3);
-            break;
-        case 3:
-            p.adjustCare(Hunger, 3);
-            p.adjustCare(Happiness, 6);
-            break;
-        case 4:
-            p.adjustCare(Hunger, 10);
-            p.adjustCare(Happiness, 6);
-            break;
-        case 5:
-            p.adjustCare(Hunger, 10);
-            p.adjustCare(Health, 6);
-            break;
-        case kFoodSpecial:
-            detail::applySpecialFood(p, d.index, host);
-            break;
-        default:
-            break; // categories 0 and 6: decompiler lost the AdjustCareStat arguments (TODO)
-        }
+        detail::applyFoodParams(p, effectiveUse(d), host);
     }
 
-    // GetIllnessItemCure (decompile traced by hand): illness id -> item id.
-    inline int illnessCureItem(int illness)
+    // GetIllnessItemCure (decompile traced by hand): illness id -> base item id. The fallback for illnessCureItem.
+    inline Id legacyIllnessCure(int illness)
     {
         switch (illness)
         {
         case 0:
-            return 0x57;
+            return legacyItemId(0x57);
         case 1:
-            return 0x51;
+            return legacyItemId(0x51);
         case 3:
-            return 0x4e;
+            return legacyItemId(0x4e);
         case 4:
-            return 0x59;
+            return legacyItemId(0x59);
         case 5:
-            return 0x4f;
+            return legacyItemId(0x4f);
         case 6:
-            return 0x54;
+            return legacyItemId(0x54);
         case 7:
-            return 0x4c; // Aspirin, Brain Ache
+            return legacyItemId(0x4c); // Aspirin, Brain Ache
         case 8:
-            return 0x56;
+            return legacyItemId(0x56);
         case 9:
-            return 0x50;
+            return legacyItemId(0x50);
         default:
-            return 0x58; // illness 2 (Panda Pox), and also 0xa; the original has no explicit case for it
+            return legacyItemId(0x58); // illness 2 (Panda Pox), and also 0xa; the original has no explicit case for it
         }
+    }
+
+    // The medicine whose record cures `illness` (the first in db order, so the base game wins over mods), the same
+    // rule applyMedicine uses. No such medicine = the original table.
+    inline Id illnessCureItem(const std::vector<ItemDef> &items, int illness)
+    {
+        for (const ItemDef &d : items)
+            if (d.type == static_cast<int>(ItemType::Medicine) &&
+                detail::param(effectiveUse(d), "illness", d.w9) == illness)
+                return d.id;
+        return legacyIllnessCure(illness);
     }
 
     // Cures when the medicine matches the current illness. Returns true if the pet was cured.
     inline bool applyMedicine(Player &p, const ItemDef &d)
     {
-        if (p.illnessId != d.w9)
+        if (p.illnessId != detail::param(effectiveUse(d), "illness", d.w9))
             return false;
         p.illnessId = kHealthy;
         return true;
     }
 
-    // Menu mode 0 ("use"). Removes the item itself when the original does.
+    // A handler returns what the menu should do next. It removes the item itself when the original does.
+    using ItemActionFn = std::function<ItemUseResult(Player &, const ItemDef &, const ItemUseDef &, ItemUseHost &)>;
+
+    class ItemActions
+    {
+    public:
+        void add(const std::string &name, ItemActionFn fn) { fns_[name] = std::move(fn); } // same name replaces
+        const ItemActionFn *find(const std::string &name) const
+        {
+            auto i = fns_.find(name);
+            return i == fns_.end() ? nullptr : &i->second;
+        }
+
+    private:
+        std::map<std::string, ItemActionFn> fns_;
+    };
+
+    inline ItemActions makeBaseItemActions()
+    {
+        ItemActions a;
+        a.add("food", [](Player &p, const ItemDef &d, const ItemUseDef &u, ItemUseHost &host)
+              {
+                  detail::applyFoodParams(p, u, host);
+                  p.removeItem(itemKey(d), 1);
+                  return ItemUseResult::Ate; });
+        a.add("medicine", [](Player &p, const ItemDef &d, const ItemUseDef &, ItemUseHost &)
+              {
+                  p.removeItem(itemKey(d), 1);
+                  return ItemUseResult::TookMedicine; });
+        a.add("potion", [](Player &, const ItemDef &, const ItemUseDef &, ItemUseHost &)
+              { return ItemUseResult::UsedPotion; });
+        a.add("dialogue", [](Player &, const ItemDef &, const ItemUseDef &, ItemUseHost &)
+              { return ItemUseResult::NeedsDialogue; });
+        a.add("none", [](Player &, const ItemDef &, const ItemUseDef &, ItemUseHost &)
+              { return ItemUseResult::Nothing; });
+        return a;
+    }
+
+    // The registry the game uses. Mods add handlers here at load time.
+    inline ItemActions &itemActions()
+    {
+        static ItemActions a = makeBaseItemActions();
+        return a;
+    }
+
+    // Menu mode 0 ("use").
     inline ItemUseResult useItem(Player &p, const ItemDef &d, ItemUseHost &host)
     {
-        const std::string key = itemKey(d.index);
-        if (p.itemCount(key) <= 0)
+        if (p.itemCount(itemKey(d)) <= 0)
             return ItemUseResult::NotOwned;
-
-        switch (static_cast<ItemType>(d.type))
-        {
-        case ItemType::Food:
-            if (d.w9 == kFoodForMiniPets)
-                return ItemUseResult::NeedsDialogue;
-            applyFoodEffect(p, d, host);
-            p.removeItem(key, 1);
-            return ItemUseResult::Ate;
-
-        case ItemType::Medicine:
-            if (d.w9 == kMedicineNoIllness)
-                return ItemUseResult::NeedsDialogue;
-            p.removeItem(key, 1);
-            return ItemUseResult::TookMedicine;
-
-        case ItemType::Potion:
-            return ItemUseResult::UsedPotion;
-
-        case ItemType::TreasureMap:
-            return ItemUseResult::NeedsDialogue; // text id is d.w9
-
-        case ItemType::PickupItem:
-            return ItemUseResult::Nothing;
-
-        default:
-            // Types 1-8 (wall..toy) open the place/decor dialogue.
-            if (d.type >= 1 && d.type <= 8)
-                return ItemUseResult::NeedsDialogue;
-            return ItemUseResult::Nothing;
-        }
+        const ItemUseDef u = effectiveUse(d);
+        const ItemActionFn *fn = itemActions().find(u.action);
+        return fn ? (*fn)(p, d, u, host) : ItemUseResult::Nothing;
     }
 } // namespace gp

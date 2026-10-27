@@ -74,18 +74,29 @@ namespace gp
         {
             return;
         }
-       // std::printf("UI 0x%x: hdr w=%d h=%d first=%d count=%d\n", spriteId, h.w, h.h, h.firstPiece, h.pieceCount);
+        // std::printf("UI 0x%x: hdr w=%d h=%d first=%d count=%d\n", spriteId, h.w, h.h, h.firstPiece, h.pieceCount);
         SpriteFrame fr;
         if (!decodeSpriteFrame(rom, spriteId, palette, fr))
         {
-          //  std::printf("UI 0x%x: decode FAILED\n", spriteId);
+            //  std::printf("UI 0x%x: decode FAILED\n", spriteId);
             return;
         }
-       // std::printf("UI 0x%x: ok %dx%d anchor(%d,%d) d(%d,%d)\n", spriteId, fr.w, fr.h, fr.anchorX, fr.anchorY, fr.dx, fr.dy);
+        // std::printf("UI 0x%x: ok %dx%d anchor(%d,%d) d(%d,%d)\n", spriteId, fr.w, fr.h, fr.anchorX, fr.anchorY, fr.dx, fr.dy);
         Anim a;
         a.id = uiSpriteId(spriteId, palette);
         a.frames.push_back(std::move(fr));
         db.put(std::move(a));
+    }
+
+    // Registers mod-supplied art as a UI sprite. Returns the number to store in ItemDef::iconSprite / worldSprite.
+    // `art` is plain RGBA frames (no ROM palette involved); pal must be the palette the game draws that sprite with
+    // (gp::kMenuPalette for items).
+    inline int registerUiArt(ContentDB &db, Anim art, int pal)
+    {
+        const int n = db.allocModSprite();
+        art.id = uiSpriteId(n, pal);
+        db.put(std::move(art));
+        return n;
     }
 
 } // namespace gp

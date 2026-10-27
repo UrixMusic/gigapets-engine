@@ -52,7 +52,7 @@ private:
             const int k = c - 0x21;
             if (font_ && k >= 0 && k < 0x5e && k < int(tex_.size()) && tex_[k]) {
                 const gp::SpriteFrame& g = font_->glyph[k];
-                SDL_Rect r{x + pen + g.dx, y + g.dy, g.w, g.h};   // the game draws glyphs at the pen position + the sprite's offsets
+                SDL_Rect r{x + pen + g.dx, y + g.dy + 1, g.w, g.h};   // DrawTile's +1, same as tileF/tilePalF
                 SDL_RenderCopy(ren_, tex_[k], nullptr, &r);
             }
             pen += advance(c);

@@ -15,7 +15,7 @@ struct StoryExit {
     int objectId;
     int spawnReason;       // g_storyInteractionSpawnReason
     int flag1a9d;          // value written to RAM 0x1a9d, or -1 if untouched
-    bool consumeAndSpawn;  // ConsumeAllInactivePendingEvents + SpawnPendingEventItems(reason, 6, 0)
+    bool consumeAndSpawn;  // ConsumeAllInactiveWorldItems + SpawnWorldItemItems(reason, 6, 0)
 };
 
 inline const StoryExit* findStoryExit(int area, int objectId) {

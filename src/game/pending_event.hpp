@@ -1,8 +1,8 @@
 // pending_event.hpp - the ROM's 56-slot pending-event table: buried dig spots, hidden quest items,
 // ground items and shop stock. Pure logic: no SDL, no ROM access, no rendering. The RNG is injected.
 //
-// Port of PickRandomEventItemId (0x3f633), SpawnPendingEvent (0x3f792), SpawnPendingEventItems,
-// FindPendingEventNearPosition (0x3f93b), the hole ring (g_eventRefs) and the pickup branch of
+// Port of PickRandomEventItemId (0x3f633), SpawnWorldItem (0x3f792), SpawnWorldItemItems,
+// FindWorldItemNearPosition (0x3f93b), the hole ring (g_eventRefs) and the pickup branch of
 // ProcessStoryModeObjectInteraction (0x13546). Spec: dig_notes.md. "ASSUMED" marks anything the notes
 // do not pin down.
 //
@@ -43,7 +43,7 @@ namespace gp
     constexpr int kEventNoSlot = 0xff;
     constexpr int kDigReach = 30; // px
     constexpr int kHoleRingSize = 5;
-    constexpr int kRandomSpawnBatch = 6; // SpawnPendingEventItems(area, 6, 0) on area entry
+    constexpr int kRandomSpawnBatch = 6; // SpawnWorldItemItems(area, 6, 0) on area entry
     constexpr int kSpawnRetries = 200;
 
     enum class EventState : uint8_t
@@ -54,7 +54,7 @@ namespace gp
         Shop = 3          // pickup marker; opens the purchase dialogue
     };
 
-    struct PendingEvent
+    struct WorldItem
     {
         uint32_t uid = 0;             // engine-side unique id (not in the ROM)
         uint16_t item = 0;            // 0 = dud hole
@@ -174,37 +174,37 @@ namespace gp
         std::function<void(int)> grant;   // GrantItemOrEvent(item, 1, 1)
     };
 
-    class PendingEventTable
+    class WorldItems
     {
     public:
-        const std::vector<PendingEvent> &events() const { return ev_; }
+        const std::vector<WorldItem> &events() const { return ev_; }
         const std::vector<Hole> &holes() const { return holes_; }
         int size() const { return int(ev_.size()); }
 
         int countForArea(int area) const
         {
             int n = 0;
-            for (const PendingEvent &e : ev_)
+            for (const WorldItem &e : ev_)
                 if (e.area == area)
                     ++n;
             return n;
         }
 
-        // SpawnPendingEvent. Returns the new event's index, or -1 if the table is full of persistent events.
+        // SpawnWorldItem. Returns the new event's index, or -1 if the table is full of persistent events.
         // Pass slot 0xffff for fixed spots. Indices are invalidated by any later spawn/remove.
         int spawn(int area, int slot, int item, int x, int y, EventState st,
                   bool persist, bool category, int trigger)
         {
             if (int(ev_.size()) >= kEventTableMax &&
-                !evictFirst([](const PendingEvent &e)
+                !evictFirst([](const WorldItem &e)
                             { return !e.persistent; }))
                 return -1;
             // ASSUMED: "more than 7 category-flagged entries evicts by category" = evict the first
             // category-flagged entry once 7 already exist.
             if (category && countCategory() >= kEventCategoryMax)
-                evictFirst([](const PendingEvent &e)
+                evictFirst([](const WorldItem &e)
                            { return e.category; });
-            PendingEvent e;
+            WorldItem e;
             e.uid = nextUid_++;
             e.item = uint16_t(item);
             e.x = e.homeX = int16_t(x);
@@ -223,7 +223,7 @@ namespace gp
         // been dug to. Lets area-entry code call the fixed spawns twice without duplicating anything.
         bool hasFixedEvent(int area, int item, int x, int y) const
         {
-            for (const PendingEvent &e : ev_)
+            for (const WorldItem &e : ev_)
                 if (e.area == area && e.spawnSlot == kEventNoSlot && e.item == item && e.homeX == x && e.homeY == y)
                     return true;
             return false;
@@ -248,12 +248,12 @@ namespace gp
         // First half of every area entry: delete all non-persistent events, whatever their state.
         void clearNonPersistent()
         {
-            ev_.erase(std::remove_if(ev_.begin(), ev_.end(), [](const PendingEvent &e)
+            ev_.erase(std::remove_if(ev_.begin(), ev_.end(), [](const WorldItem &e)
                                      { return !e.persistent; }),
                       ev_.end());
         }
 
-        // SpawnPendingEventItems(area, n, 0). Returns how many were placed.
+        // SpawnWorldItemItems(area, n, 0). Returns how many were placed.
         // ASSUMED: "current events" in the clamp means events already in this area.
         int spawnRandom(const AreaDef &def, int n, const RandFn &rnd)
         {
@@ -308,10 +308,10 @@ namespace gp
             return spawn(area, 0xffff, item, x, y, EventState::Visible, persist, true, kEventNoTrigger);
         }
 
-        // ConsumeAllFlaggedPendingEvents: flag bit 0 = persist, so this deletes every persistent event.
+        // ConsumeAllFlaggedWorldItems: flag bit 0 = persist, so this deletes every persistent event.
         void consumePersistent()
         {
-            ev_.erase(std::remove_if(ev_.begin(), ev_.end(), [](const PendingEvent &e)
+            ev_.erase(std::remove_if(ev_.begin(), ev_.end(), [](const WorldItem &e)
                                      { return e.persistent; }),
                       ev_.end());
         }
@@ -335,7 +335,7 @@ namespace gp
             return spawnRandom(def, 1, rnd) > 0;
         }
 
-        // FindPendingEventNearPosition. (px, py) is the dig point in world pixels.
+        // FindWorldItemNearPosition. (px, py) is the dig point in world pixels.
         // First matching event in table order wins. Scans states 0 and 1 only: the spec says "state is
         // not 2", which would also let a dig hit shop stock (state 3); that looks unintended, so it is excluded.
         DigResult dig(int area, int px, int py, uint32_t &triggerFlags, const RandFn &rnd)
@@ -343,7 +343,7 @@ namespace gp
             DigResult r;
             for (size_t i = 0; i < ev_.size(); ++i)
             {
-                PendingEvent &e = ev_[i];
+                WorldItem &e = ev_[i];
                 if (e.area != area)
                     continue;
                 if (e.state != EventState::BuriedRandom && e.state != EventState::HiddenQuest)
@@ -352,7 +352,8 @@ namespace gp
                     continue;
 
                 const Hole hole{int16_t(px), int16_t(py), e.area, e.uid};
-                // ASSUMED: roll 0 of 3 = +20, otherwise -20 ("one in three chance of +20").
+                // Verified in the decompile of FindPendingEventNearPosition (0x3f93b): RandRange(1, 3) == 1 gives
+                // +20, otherwise -20 (so 1 in 2, not the "1 in 3" the notes say), relative to the dig point.
                 e.x = int16_t(px + (rnd(1, 3) == 1 ? 20 : -20));
                 e.y = int16_t(py + 7);
                 e.state = EventState::Visible;
@@ -384,7 +385,7 @@ namespace gp
         }
 
         // g_eventRefs ring. When a sixth hole is added the oldest is dropped, and if its item is still lying
-        // unclaimed it goes back to state 0 (ClearPendingEventMarkerForItem). The caller plays the fill-in
+        // unclaimed it goes back to state 0 (ClearWorldItemMarkerForItem). The caller plays the fill-in
         // bubble when the returned hole is in the current area.
         std::optional<Hole> addHole(const Hole &h)
         {
@@ -405,7 +406,7 @@ namespace gp
             int best = -1, bestD = INT_MAX;
             for (size_t i = 0; i < ev_.size(); ++i)
             {
-                const PendingEvent &e = ev_[i];
+                const WorldItem &e = ev_[i];
                 if (e.area != area)
                     continue;
                 if (e.state != EventState::Visible && e.state != EventState::Shop)
@@ -429,7 +430,7 @@ namespace gp
             PickupOutcome o;
             if (idx < 0 || idx >= int(ev_.size()))
                 return o;
-            const PendingEvent e = ev_[size_t(idx)];
+            const WorldItem e = ev_[size_t(idx)];
             if (e.state == EventState::Shop)
             {
                 o.result = PickupResult::ShopDialogue;
@@ -468,14 +469,14 @@ namespace gp
         int countCategory() const
         {
             int n = 0;
-            for (const PendingEvent &e : ev_)
+            for (const WorldItem &e : ev_)
                 if (e.category)
                     ++n;
             return n;
         }
         bool slotInUse(int area, int slot) const
         {
-            for (const PendingEvent &e : ev_)
+            for (const WorldItem &e : ev_)
                 if (e.area == area && e.spawnSlot == slot)
                     return true;
             return false;
@@ -490,7 +491,7 @@ namespace gp
         // ASSUMED: only the event that made this hole is reset, back to its spawn position.
         void resetUnclaimed(const Hole &h)
         {
-            for (PendingEvent &e : ev_)
+            for (WorldItem &e : ev_)
             {
                 if (e.uid != h.uid)
                     continue;
@@ -504,7 +505,7 @@ namespace gp
             }
         }
 
-        std::vector<PendingEvent> ev_;
+        std::vector<WorldItem> ev_;
         std::vector<Hole> holes_;
         uint32_t nextUid_ = 1;
     };

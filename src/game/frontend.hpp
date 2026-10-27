@@ -351,7 +351,7 @@ namespace gp::fe
     inline SaveData newGame(const StarterPick &p, const std::string &name, int house, const NewGameEnv &env)
     {
         SaveData s;
-        s.setInt("version", 2);
+        s.setInt("version", 3);
         s.setInt("species", p.species);
         s.setInt("appearance", p.appearance);
         s.setInt("house", house);

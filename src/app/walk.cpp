@@ -4,6 +4,10 @@
 // Areas, objects, exits and NPCs now come from the ContentDB (filled once by importRom).
 // The ROM is only opened once, by importRom. Nothing else in the game reads it.
 //
+// --smooth: optional sub-pixel camera. The sim still ticks at 30 Hz on whole pixels; the renderer interpolates
+// the pet / NPCs / camera between ticks and draws the world at float positions. F5 toggles it while playing.
+// With it off, every float is a whole number and the output is identical to the old integer renderer.
+//
 // Pet keys: E = eat (29), B = bark (47), S = sit down (49) then sit idle (45), F = toggle flip formula,
 //           P = dump the current animation's frames, 1-5 / J L I K = anchor experiments.
 // Z = use an exit / talk to the nearest NPC (and close a dialogue box).
@@ -20,9 +24,10 @@
 #include "../game/befriend.hpp"
 #include "../game/encounter.hpp"
 #include "../game/encounter_sequence.hpp"
-#include "text_draw.hpp"
+#include "../game/text_draw.hpp"
 #include "../game/shop.hpp" // with the other includes
 #include "../engine/render.hpp"
+#include "../engine/sprite_cache.hpp" // AnimRef, SpriteCache
 #include "../game/menu_draw.hpp"
 #include "../game/menu_bar.hpp"
 #include "../game/item_use.hpp" // at the top with the other includes
@@ -30,24 +35,40 @@
 #include "../game/fixed_spawn.hpp"
 #include "../loaders/fixed_spots.hpp"
 #include "../game/quest_flow.hpp"
-#include "../loaders/quest_import.hpp"
 #include "../game/item.hpp"
 #include "../game/progress_bits.hpp"
 #include "../game/offerings.hpp"
 #include "../game/save.hpp"
 #include "../game/save_player.hpp"
+#include "../game/swift_pick.hpp"
+#include "../mods/mod_loader.hpp"
+#include "../game/three_in_a_row.hpp"
+#include "../game/memory_match.hpp"
+#include "../game/item_pools.hpp"
+#include "../game/interactions.hpp"
+#include "../mods/script_host.hpp"
+#include "../mods/script_check.hpp" // hook target / hook name validation
 #include "app_context.hpp"
+#include "../game/minigame_ui.hpp" // AnimRef, readRomString, Minigames (swift pick, wells, tents)
 
 #include <random>
 #include <set>
 #include <functional>
+#include <optional>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <vector>
+//../game/walk/
+#include "../game/walk/walk_state.hpp" // pet/world/flow/ui state of a run (needs the game headers above)
+#include "../game/walk/walk_services.hpp"  // shared services for free functions
+#include "../game/walk/walk_script_bindings.hpp" // ScriptHost <-> game
+#include "../game/walk/walk_npc_talk.hpp" // talking to NPCs, friend greetings, onTalk seam
+#include "../game/walk/walk_interactions.hpp" // Z on an object: actions, minigame starters, onInteract seam
 
 constexpr int kProbeDY = -4;      // collision probe sits 4px above pos (game's coords)
 constexpr int kCamY = 145;        // game camera: cam.y = pos.y - 145
@@ -55,6 +76,7 @@ constexpr int kStatsState = 0x0f; // PLACEHOLDER: press the first bar button, re
 constexpr int kBubbleFps = 6;
 
 bool showStats = false;
+bool smoothCam = false; // --smooth / F5: sub-pixel camera + interpolation between 30 Hz ticks (not reset per run)
 
 gp::Player player;
 
@@ -85,6 +107,13 @@ static int clampCam(int raw, int world, int view)
 {
     return std::min(std::max(raw, 0), world - view); // same order as the game
 }
+
+static float clampCamF(float raw, int world, int view)
+{
+    return std::min(std::max(raw, 0.f), float(world - view));
+}
+
+static float lerpf(float a, float b, float t) { return a + (b - a) * t; }
 
 // once, at startup (after rom is loaded)
 struct FrameRec
@@ -125,14 +154,6 @@ gp::Image makeScreenBg(const gp::Rom &rom, int a, int palId)
     return img;
 }
 
-// A db animation plus its SDL textures (one per frame, same order).
-struct AnimRef
-{
-    const gp::Anim *anim = nullptr;
-    const std::vector<SDL_Texture *> *tex = nullptr;
-    size_t size() const { return tex ? tex->size() : 0; }
-};
-
 // Keep on the heap and never copy: members hold references into each other and into the ContentDB
 // (the db must outlive every Loaded and must not be modified while one exists).
 struct Loaded
@@ -166,90 +187,58 @@ static std::unique_ptr<Loaded> loadArea(const gp::ContentDB &db, const gp::Id &i
 
 // What the pet is doing. Move/Wait show the walk animation (frame 0 while waiting);
 // the rest play the animation selected by animId.
-enum class Pose
-{
-    Move,
-    Wait,
-    Settle,
-    Idle,
-    Special
-};
-
-// One step of an animation sequence (e.g. 52 -> 53 -> 34).
-struct AnimStep
-{
-    int id;
-    bool loop;
-    int rate;
-};
-
-inline std::string readRomString(const gp::Rom &rom, int addr)
-{
-    std::string s;
-    for (int c; (c = rom.u16(addr++) & 0xff) != 0 && s.size() < 100;)
-        s += char(c);
-    return s;
-}
+// Pose and AnimStep live in walk_state.hpp
 
 // CreateNewPet, the stat part: care stats, starting money and personality.
 // startStat = GetDefaultStatValue(0..3) = g_starterHaloStat[0..3]: the four numbers the starter-select screen showed.
 // startSick = GetDefaultStatValue(4): the flag the starter-select pet carried (the front end stores it as startStat4).
-// Not ported yet: SetInventorySlot, SetTricksKnownAndRerollTraits and LoadScriptedQuestData.
 
-// RollRandomIllnessId(species): RandRange(1, 0xb); 1..6 -> 4..9, 7..8 -> 3, 9..11 -> the species' own illness (0, 1, 2).
-static int rollRandomIllnessId(int species)
+// RollRandomIllnessId(species): RandRange(1, 0xb); 1..6 -> 4..9, 7..8 -> 3, 9..11 -> the species' own illness.
+static int rollRandomIllnessId(const gp::SpeciesDef &sp)
 {
     const int r = 1 + std::rand() % 11;
     if (r <= 6)
         return r + 3;
     if (r <= 8)
         return 3;
-    return species == 0 ? 0 : species == 1 ? 1
-                                           : 2;
+    return sp.ownIllness;
 }
 
-static void applyNewPetDefaults(gp::Player &p, const int (&startStat)[4], int startSick, int species)
+// CreateNewPet, the stat part. All the numbers now come from the SpeciesDef (see importSpecies in import.hpp).
+static void applyNewPetDefaults(gp::Player &p, const int (&startStat)[4], int startSick, const gp::SpeciesDef &sp)
 {
-    // AdjustCareStat(index, value). Indices assume the enum order Hunger, Health, ???, Happiness, Tiredness, Cleanliness.
-    p.adjustCare(gp::Health, 0x41);      // AdjustCareStat(1, 0x41)
-    p.adjustCare(gp::Hunger, 0x34);      // AdjustCareStat(0, 0x34)
-    p.adjustCare(gp::Happiness, 0x50);   // AdjustCareStat(3, 0x50)
-    p.adjustCare(gp::Cleanliness, 0x4b); // AdjustCareStat(5, 0x4b)
-    p.adjustCare(gp::Tiredness, 0x4b);   // AdjustCareStat(4, 0x4b)
+    p.adjustCare(gp::Health, sp.startHealth);
+    p.adjustCare(gp::Hunger, sp.startHunger);
+    p.adjustCare(gp::Happiness, sp.startHappiness);
+    p.adjustCare(gp::Cleanliness, sp.startCleanliness);
+    p.adjustCare(gp::Tiredness, sp.startTiredness);
     p.money = 0;
-    p.adjustMoney(0x28 + std::rand() % (0x3d - 0x28 + 1)); // RandRange(0x28, 0x3d)
+    p.adjustMoney(sp.startMoneyMin + std::rand() % std::max(1, sp.startMoneyMax - sp.startMoneyMin + 1));
     for (int i = 0; i < 4; ++i)
         p.adjustPersonality(gp::PersonalityStat(i), startStat[i]);
     if (startSick != 0) // GetDefaultStatValue(4) != 0 -> RollRandomIllnessId(species) -> SetActiveIllness
-        p.illnessId = rollRandomIllnessId(species);
+        p.illnessId = rollRandomIllnessId(sp);
 }
 
-// CreateNewPet's GrantItemOrEvent(item, count, 0) calls. Item 1 is granted first for every species, then:
-// seven {item, count} pairs per species (rows: species 0, 1, 2). Counts are clamped to the item's max quantity.
-//
-// Also in CreateNewPet but NOT ported (nothing to store it in yet): SetInventorySlot(slot, item) per species.
-//   species 0: (0x1b,0x6b) (0x1c,0x6f) (3,0x73) (9,0x83)   (1,0x9e) (0,0x93)
-//   species 1: (0x1b,0x6e) (0x1c,0x6f) (3,0x75) (0xc,0x89) (1,0xa0) (0,0x96)
-//   species 2: (0x1b,0x6d) (0x1c,0x6f) (3,0x74) (6,0x86)   (1,0x9f) (0,0x9c)
-static void grantStarterItems(std::map<int, int> &inv, const std::vector<gp::ItemDef> &defs, int species)
+// CreateNewPet's GrantItemOrEvent(item, count, 0) calls. The list lives in SpeciesDef::starterItems.
+// Counts are clamped to the item's max quantity.
+static void grantStarterItems(gp::Player &p, const std::vector<gp::ItemDef> &defs, const gp::SpeciesDef &sp)
 {
-    static const int kStarter[3][7][2] = {
-        {{0x6b, 1}, {0x6f, 1}, {0x73, 1}, {0x83, 1}, {0x1c, 2}, {0x9e, 1}, {0x93, 1}},
-        {{0x6e, 1}, {0x6f, 1}, {0x75, 1}, {0x89, 1}, {0x21, 2}, {0xa0, 1}, {0x96, 1}},
-        {{0x6d, 1}, {0x6f, 1}, {0x74, 1}, {0x86, 1}, {0x23, 2}, {0x9f, 1}, {0x9c, 1}},
-    };
-    auto give = [&](int item, int n)
+    for (const gp::StarterItem &e : sp.starterItems)
     {
-        if (item < 0 || item >= int(defs.size()))
-            return;
-        int &have = inv[item];
-        have = std::min(have + n, std::max(1, int(defs[size_t(item)].maxQty)));
-    };
-    give(1, 1);
-    for (const auto &e : kStarter[std::clamp(species, 0, 2)])
-        give(e[0], e[1]);
+        const gp::ItemDef *d = nullptr;
+        for (const gp::ItemDef &c : defs)
+            if (c.id == e.item)
+            {
+                d = &c;
+                break;
+            }
+        if (!d)
+            continue;
+        int &have = p.inventory[d->id];
+        have = std::min(have + e.count, std::max(1, int(d->maxQty)));
+    }
 }
-
 // Returns gp::kRunQuit (window closed), gp::kRunToMenu (F10) or gp::kRunError.
 int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 {
@@ -268,43 +257,100 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
     uint16_t gardenFlags = haveSave ? uint16_t(sd.getInt("gardenFlags") & 0xfff) : 0;
     std::function<void()> refreshBits, saveGame;
     uint32_t lastSaveTick = 0;
-
     const int sp = playerSpecies;
-
-    // The pet's palette: the colour picked in the front end (stored in the slot), else the species default.
-    static const int kPetPal[3] = {0x1df, 0x29e, 0x31e};
-    const auto slotInfo = gp::peekSlot(slot);
-    const int petPal = (slotInfo.full && slotInfo.appearance >= 0) ? slotInfo.appearance : kPetPal[playerSpecies];
-    std::printf("pet palette 0x%x (%s)\n", petPal, (slotInfo.full && slotInfo.appearance >= 0) ? "from save" : "species default");
     try
     {
         // ---- 1. LOAD ----
+        WalkState S; // plain-data state of this run (walk_state.hpp); the locals below are aliases into it
         gp::Rom &rom = *ctx.rom; // owned by the AppHost now
         for (int i = 0x1a4f; i <= 0x1a57; ++i)
             std::printf("btn word 0x%x = 0x%x\n", i, rom.u16(i));
         gp::ContentDB db;
-        gp::importRom(rom, db, playerSpecies);
-        for (const gp::FixedSpotDef &s : gp::baseFixedSpots())
-            db.put(s); // before any loadArea: db must not change under a Loaded
+        gp::importRom(rom, db, playerSpecies); // line 290
+
+        gp::ModReport rep = gp::importMods(db, "mods"); // <- new, after all base content
+        gp::ScriptHost scripts;
+        for (const auto &w : rep.warnings)
+            std::fprintf(stderr, "mod warning: %s\n", w.c_str());
+        for (const auto &e : rep.errors)
+            std::fprintf(stderr, "mod error: %s\n", e.c_str());
+        for (const auto &id : rep.loaded)
+            std::printf("loaded mod %s\n", id.c_str());
+        if (!rep.ok())
+            return 1;
+        for (const std::string &id : rep.loaded)
+            scripts.loadMod(id, std::filesystem::path("mods") / id);
+        for (const auto &e : scripts.errors())
+            std::fprintf(stderr, "script error: %s\n", e.c_str());
+        if (!scripts.errors().empty())
+            return 1;
+        // Every hook must point at something that exists and use a real hook name, or it would silently never fire.
+        {
+            gp::HookTargets targets;
+            targets.npcExists = [&](const std::string &id)
+            { return db.hasNpc(id); };
+            targets.areaExists = [&](const std::string &id)
+            { return db.area(id) != nullptr; };
+            const std::vector<std::string> hookProblems = gp::validateHooks(scripts, targets);
+            for (const std::string &p : hookProblems)
+                std::fprintf(stderr, "script error: %s\n", p.c_str());
+            if (!hookProblems.empty())
+                return 1;
+        }
+        // The pet's species and palette come from the db now: the colour picked in the front end, else the species default.
+        const gp::SpeciesDef *speciesDef = db.speciesByLegacy(playerSpecies);
+        if (!speciesDef)
+        {
+            std::printf("species %d not found in the content db\n", playerSpecies);
+            return gp::kRunError;
+        }
+        const auto slotInfo = gp::peekSlot(slot);
+        const int petPal = (slotInfo.full && slotInfo.appearance >= 0) ? slotInfo.appearance : speciesDef->defaultPalette;
+        std::printf("pet palette 0x%x (%s)\n", petPal, (slotInfo.full && slotInfo.appearance >= 0) ? "from save" : "species default");
         // find record tables by content: sprite, pal, x, y
 
-        const std::vector<gp::ItemDef> itemDefs = gp::readItems(rom);
-        std::map<int, int> inventory; // item id -> count; stand-in until Player has one
+        // Items come from the db now (base game first, then mods): itemDefs[i].index == i. A reference, not a copy:
+        // the db must not gain items while the game runs.
+        const std::vector<gp::ItemDef> &itemDefs = db.items();
+        // player.inventory (item id -> count) is the only inventory now.
         for (const gp::ItemDef &d : itemDefs)
-            if (d.type == 9 || d.type == 10 || d.type == 3)
-                inventory[d.index] = 1 + d.index % 4;
+            if (d.type == int(gp::ItemType::Food) || d.type == int(gp::ItemType::Medicine) || d.type == int(gp::ItemType::FoodDish))
+                player.inventory[d.id] = 1 + d.index % 4;
         for (int ill = 0; ill < 10; ++ill)
         {
-            const gp::ItemDef &m = itemDefs[gp::illnessCureItem(ill)];
-            if (m.type != int(gp::ItemType::Medicine) || m.w9 != ill)
-                std::printf("cure table mismatch: illness %d -> item %d (type %d, w9 %d)\n", ill, m.index, m.type, m.w9);
+            const gp::Id cure = gp::illnessCureItem(itemDefs, ill);
+            if (cure != gp::legacyIllnessCure(ill))
+                std::printf("cure table mismatch: illness %d -> %s (table says %s)\n", ill, cure.c_str(),
+                            gp::legacyIllnessCure(ill).c_str());
         }
         if (haveSave)
         {
-            inventory.clear();
-            for (const auto &[it, n] : sd.getMap("inventory"))
-                if (it >= 0 && it < int(itemDefs.size()) && n > 0)
-                    inventory[it] = n;
+            player.inventory.clear();
+
+            auto convert = [&](const char *key, const char *setId)
+            {
+                const gp::OfferSetDef *s = db.offerSet(setId);
+                if (!s || !sd.kv.count(key))
+                    return;
+                const unsigned bits = unsigned(sd.getInt(key)) & 0xfff;
+                for (int i = 0; i < 12 && i < int(s->items.size()); ++i)
+                    if (bits >> i & 1)
+                        player.setFlag(gp::offeredKey(s->items[size_t(i)])); // OR-merge: never clears
+            };
+            convert("kingFlags", "base:offers/king");
+            convert("gardenFlags", "base:offers/gardenia");
+            if (sd.has("itemIds") && !sd.getStr("itemIds").empty()) // new format
+            {
+                for (const auto &[id, n] : sd.getIdMap("itemIds"))
+                    if (n > 0) // ids the db doesn't know (an uninstalled mod) are kept, so they survive the next save
+                        player.inventory[id] = n;
+            }
+            else // old saves: item numbers
+            {
+                for (const auto &[it, n] : sd.getMap("inventory"))
+                    if (it >= 0 && it < int(itemDefs.size()) && n > 0)
+                        player.inventory[gp::legacyItemId(it)] = n;
+            }
         }
         gp::ShopStock shopStock;
         if (!gp::loadStockDump("stock.bin", shopStock))
@@ -317,7 +363,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             std::printf("shop row %d:", r);
             for (const gp::StockEntry &e : shopStock.rows[r])
                 if (e.w0)
-                    std::printf(" %dx%s", e.stock(), db.textOr("base:text/" + std::to_string(itemDefs[e.item()].nameText), "?").c_str());
+                    std::printf(" %dx%s", e.stock(), db.textOr(itemDefs[e.item()].name, "?").c_str());
             std::printf("\n");
         }
         gp::PendingList pending;
@@ -333,9 +379,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         constexpr int kMaxSlotProbe = 16;
 
         {
+            // Ground sprites. Mod items bring their own art (already in the db), so only ROM sprite numbers are imported here.
             std::set<int> done;
             for (const gp::ItemDef &d : itemDefs)
-                if (d.worldSprite != 0xffff && done.insert(d.worldSprite).second)
+                if (d.worldSprite != 0xffff && !gp::isModSprite(d.worldSprite) && done.insert(d.worldSprite).second)
                     try
                     {
                         gp::importUiSprite(db, rom, d.worldSprite, gp::kMenuPalette);
@@ -362,18 +409,19 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             for (int s = 0; s < kMaxSlotProbe; ++s)
                 gp::drawSlotScene(col, rom, s);
             gp::drawSlotScene(col, rom, 0x1e);
-            for (int s : {0x400, 0x40a, 0x3f4, 0x3f2, 0xacb})
+            for (int s : {0x400, 0x40a, 0x3f4, 0x3f2, 0xacb, 0x478}) // 0x478: Three in a Row's "not selected" reel frame
                 col.pairs.insert({s, gp::kMenuPalette});
             for (int i = 0; i < 20; ++i)
                 std::printf("%04x ", rom.u16(gp::kSlotTable + i));
             gp::StatsView dummy;
             dummy.healthy = false;
             dummy.questText = "x";
-            static const int pets[3] = {0x1df, 0x29e, 0x31e};
-            for (int s2 = 0; s2 < 3; ++s2)
+            for (const gp::SpeciesDef *spd : db.allSpecies())
             {
-                dummy.species = s2;
-                dummy.petPalette = pets[s2];
+                if (spd->legacyIndex < 0) // mod species have no ROM-side pet-stats art
+                    continue;
+                dummy.species = spd->legacyIndex;
+                dummy.petPalette = spd->defaultPalette;
                 gp::drawPetStats(col, rom, dummy, "");
             }
             dummy.species = sp; // and this pet's own colour
@@ -416,7 +464,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     std::printf("GRID-LIKE slot 0x%x: %d records on cell positions, sprites:%s\n", s, hits, sprites.c_str());
             }
             for (const gp::ItemDef &d : itemDefs)
-                if (d.index < 0x5d || d.index > 0x5f) // starter-palette items skipped for now
+                if ((d.index < 0x5d || d.index > 0x5f) && !gp::isModSprite(d.iconSprite)) // starter-palette items skipped for now
                     col.pairs.insert({d.iconSprite, gp::kMenuPalette});
             for (auto [s, p] : col.pairs)
                 gp::importUiSprite(db, rom, s, p);
@@ -424,7 +472,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
         for (int r = 0; r < 22; ++r)
             for (const gp::StockEntry &e : shopStock.rows[r])
-                if (e.w0)
+                if (e.w0 && !gp::isModSprite(itemDefs[e.item()].worldSprite))
                     try
                     {
                         gp::importUiSprite(db, rom, itemDefs[e.item()].worldSprite, gp::kMenuPalette);
@@ -450,6 +498,35 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             {
                 std::printf("flower/hole sprite 0x%x import failed: %s\n", s, e.what());
             }
+        for (int s = 0x994; s <= 0x9ab; ++s) // DrawShadow blobs: 12 normal + 12 for species 2
+            try
+            {
+                gp::importUiSprite(db, rom, s, 0x28c);
+            }
+            catch (const std::exception &e)
+            {
+                std::printf("shadow sprite 0x%x import failed: %s\n", s, e.what());
+            }
+
+        // Memory Match: card back / face / cursor are palette 0x28c (DrawTile(0x471, 0x28c, ...)); item icons use the
+        // menu palette and are already imported by the iconSprite loop.
+        for (int s : {gp::MemoryMatch::kSpriteBack, gp::MemoryMatch::kSpriteFace, gp::MemoryMatch::kSpriteCursor})
+            try
+            {
+                gp::importUiSprite(db, rom, s, 0x28c);
+            }
+            catch (const std::exception &e)
+            {
+                std::printf("memory match sprite 0x%x import failed: %s\n", s, e.what());
+            }
+        try
+        {
+            gp::importAnim(rom, db, gp::MemoryMatch::kFlipAnim, gp::MemoryMatch::kFlipAnimPal);
+        }
+        catch (const std::exception &)
+        {
+        }
+
         // Bar cursor sprites: 8 words per button (normal rec, pressed rec), 4 words each: sprite, pal, x, y
         for (bool house : {false, true})
         {
@@ -502,8 +579,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 for (int j = 0; j < 4; ++j)
                     startStat[j] = sd.getInt("startStat" + std::to_string(j), 0); // written by the front end
                 const int startSick = sd.getInt("startStat4", 0);                 // written by the front end: the selector pet was sick
-                applyNewPetDefaults(player, startStat, startSick, sp);
-                grantStarterItems(inventory, itemDefs, sp);
+                applyNewPetDefaults(player, startStat, startSick, *speciesDef);
+                grantStarterItems(player, itemDefs, *speciesDef);
                 std::printf("new pet: defaults applied (money %d, illness %d, personality %d/%d/%d/%d)\n", player.money, player.illnessId,
                             player.personality[gp::Halos], player.personality[gp::Pitchforks],
                             player.personality[gp::Stars], player.personality[gp::Lightbulbs]);
@@ -531,7 +608,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         // (RunPetRoomGameplayLoop, slot = house). Otherwise: free spot closest to the middle of the room.
         static const int kSlotSpawn[3][2] = {{0x826, 0x38d}, {0x7c7, 0x4cf}, {0x6cc, 0x40d}};
 
-        gp::Point pos{cur->room.width / 2, cur->room.height / 2};
+        gp::Point &pos = S.world.pos;
+        pos = {cur->room.width / 2, cur->room.height / 2};
         long best = -1;
         bool slotSpawned = false;
         if (slot >= 0 && slot < 3)
@@ -565,11 +643,17 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 std::printf("warning: no walkable spot found, starting at the center\n");
         }
 
+        gp::Point &prevPos = S.world.prevPos; // where the pet was before the latest tick (smooth camera interpolates from here)
+        prevPos = pos;
+
         // ---- 2. WINDOW ----
         const int W = 320, H = 240;
         unsigned statsBase = 0xD8DC;
-        SDL_Renderer *ren = ctx.ren; // window + renderer belong to the AppHost
+        SDL_Renderer *ren = ctx.ren;                     // window + renderer belong to the AppHost
+        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0"); // nearest (SDL's default): keeps pixel art crisp at fractional positions
         SDL_RenderSetLogicalSize(ren, W, H);
+        const SDL_bool oldIntScale = SDL_RenderGetIntegerScale(ren);
+        SDL_RenderSetIntegerScale(ren, smoothCam ? SDL_TRUE : SDL_FALSE); // uniform pixel widths while scrolling smoothly
         SDL_SetWindowTitle(ctx.win, "walk");
         SDL_Texture *tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, cur->img.w, cur->img.h);
         SDL_UpdateTexture(tex, nullptr, cur->img.rgba.data(), cur->img.w * 4);
@@ -583,29 +667,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
         SDL_Texture *bgTex = makeBgTex(0x1e, 0x5dc);      // item menu
         SDL_Texture *statsBgTex = makeBgTex(0x20, 0x5de); // pet stats
+        SDL_Texture *swiftBgTex = makeBgTex(0, 0x5c3);    // Swift Pick (same as the intro)
 
         // ---- 3. ANIMATIONS (pet and NPCs): coloured frames come from the db, textures are built on first use ----
-        std::map<gp::Id, std::vector<SDL_Texture *>> animTex;
-        auto animTextures = [&](const gp::Id &animId) -> const std::vector<SDL_Texture *> *
-        {
-            const gp::Anim *a = db.anim(animId);
-            if (!a)
-                return nullptr;
-            auto it = animTex.find(animId);
-            if (it == animTex.end())
-            {
-                std::vector<SDL_Texture *> v;
-                for (const gp::SpriteFrame &f : a->frames)
-                {
-                    SDL_Texture *t = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, f.w, f.h);
-                    SDL_UpdateTexture(t, nullptr, f.rgba.data(), f.w * 4);
-                    SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND); // transparent pixels stay transparent
-                    v.push_back(t);
-                }
-                it = animTex.emplace(animId, std::move(v)).first;
-            }
-            return &it->second;
-        };
+        SpriteCache sprites(ren, db); // anim and object textures, built on first use and freed when this scope ends
+        auto animTextures = [&](const gp::Id &animId)
+        { return sprites.animTextures(animId); };
         // petPal is defined at the top of runWalk (saved colour, else the species default)
 
         std::vector<int> petIds;
@@ -675,40 +742,33 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         const int kWalkAnim[3] = {gp::kWalkUp[sp], gp::kWalkDown[sp], gp::kWalkSide[sp]}; // 0 = up, 1 = down, 2 = sideways
 
         // ---- objects: drawn as sprites (not baked into the background) so they can sort against NPCs and the pet ----
-        std::map<gp::Id, SDL_Texture *> objTex;
-        auto objTexture = [&](const gp::ObjectType &t) -> SDL_Texture *
-        {
-            auto it = objTex.find(t.id);
-            if (it == objTex.end())
-            {
-                SDL_Texture *tx = nullptr;
-                if (t.hasArt && t.art.w > 0 && t.art.h > 0)
-                {
-                    tx = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, t.art.w, t.art.h);
-                    SDL_UpdateTexture(tx, nullptr, t.art.rgba.data(), t.art.w * 4);
-                    SDL_SetTextureBlendMode(tx, SDL_BLENDMODE_BLEND);
-                }
-                it = objTex.emplace(t.id, tx).first;
-            }
-            return it->second;
-        };
-        auto drawObject = [&](const gp::ObjectDef &o, int camX, int camY)
-        {
-            const gp::ObjectType *t = db.objectType(o.type);
-            SDL_Texture *tx = t ? objTexture(*t) : nullptr;
-            if (!tx)
-                return;
-            SDL_Rect r{o.x - camX - t->art.anchorX + t->art.dx, o.y - camY - t->art.anchorY + t->art.dy, t->art.w, t->art.h};
-            SDL_RenderCopy(ren, tx, nullptr, &r);
-        };
+        auto drawObject = [&](const gp::ObjectDef &o, float camX, float camY)
+        { sprites.drawObject(o, camX, camY); };
 
         // ---- NPCs: records come from the db ----
-        std::vector<gp::NpcActor> npcs;
-        gp::Rng npcRng;
+        std::vector<gp::NpcActor> &npcs = S.world.npcs;
+        gp::Rng &npcRng = S.world.npcRng;
         npcRng.state = SDL_GetTicks() | 1u; // must be non-zero
+        // ---- smooth camera: positions between the last two 30 Hz ticks ----
+        std::vector<std::pair<int, int>> &npcPrev = S.world.npcPrev; // each NPC's x,y before the latest tick (same order as npcs)
+        float &renderAlpha = S.world.renderAlpha;                  // how far through the current tick this frame is (0..1), set every frame
+        auto smoothAt = [&](int prev, int now) -> float
+        {
+            if (!smoothCam || std::abs(now - prev) > 16) // a jump (door, snap, respawn) is never glided over
+                return float(now);
+            return lerpf(float(prev), float(now), renderAlpha);
+        };
+        auto npcPosF = [&](const gp::NpcActor &n) -> std::pair<float, float>
+        {
+            const size_t i = size_t(&n - npcs.data());
+            if (npcPrev.size() == npcs.size() && i < npcPrev.size())
+                return {smoothAt(npcPrev[i].first, n.x()), smoothAt(npcPrev[i].second, n.y())};
+            return {float(n.x()), float(n.y())};
+        };
         auto loadNpcs = [&]()
         {
             npcs.clear();
+            npcPrev.clear();
             const int area = cur->def->legacyId;
             for (const gp::NpcDef *d : db.npcsInArea(area))
             {
@@ -722,10 +782,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
         loadNpcs();
         auto animRefById = [&](const gp::Id &id) -> AnimRef
-        {
-            const gp::Anim *a = db.anim(id);
-            return a ? AnimRef{a, animTextures(id)} : AnimRef{};
-        };
+        { return sprites.animRef(id); };
 
         auto reactAnimId = [](int id, int pal)
         {
@@ -755,7 +812,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             n.setAnim(key, frames, 14, key < 4); // keys 4/5 are one-shots
             n.advanceAnim(frames);
         };
-        auto drawNpc = [&](const gp::NpcActor &n, int camX, int camY)
+        auto drawNpc = [&](const gp::NpcActor &n, float camX, float camY)
         {
             const AnimRef A = npcAnim(n, std::max(n.anim.animId, 0));
             if (A.size() == 0)
@@ -767,11 +824,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                               : (key == 4 || key == 5) ? n.body.facing == gp::FaceRight
                               : key == 6               ? n.forcedFlip
                                                        : false;
-            const int x = flip ? n.x() - camX + s.anchorX - s.dx - s.w
-                               : n.x() - camX - s.anchorX + s.dx;
-            SDL_Rect r{x, n.y() - camY - s.anchorY + s.dy + 1, s.w, s.h};
-            SDL_RenderCopyEx(ren, (*A.tex)[fr], nullptr, &r, 0, nullptr,
-                             flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+            const auto np = npcPosF(n);
+            const float x = flip ? np.first - camX + s.anchorX - s.dx - s.w
+                                 : np.first - camX - s.anchorX + s.dx;
+            SDL_FRect r{x, np.second - camY - s.anchorY + s.dy + 1, float(s.w), float(s.h)};
+            SDL_RenderCopyExF(ren, (*A.tex)[fr], nullptr, &r, 0, nullptr,
+                              flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
         };
 
         for (int a = 0; a < 4; ++a)
@@ -812,12 +870,13 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         // ---- dialogue: one box at a time; while it is open the world is frozen ----
         gp::Dialogue dialogue;
         gp::QuestRuntime quests;
-        uint32_t gameTicks = 0;                          // the game's tick counter: +2 per 30 Hz tick
-        TextDrawer text(ren, db.font(gp::fontId(0)));    // dialogue text: font 0
-        TextDrawer numbers(ren, db.font(gp::fontId(2))); // stat numbers: font 2
+        uint32_t &gameTicks = S.world.gameTicks; // the game's tick counter: +2 per 30 Hz tick
+        TextDrawer signText(ren, db.font(gp::fontId(1, 0x11f))); // sign text: font 1, palette 0x11f
+        TextDrawer text(ren, db.font(gp::fontId(0)));            // dialogue text: font 0
+        TextDrawer numbers(ren, db.font(gp::fontId(2)));         // stat numbers: font 2
         TextDrawer badge(ren, db.font(gp::fontId(7)));
-        std::unique_ptr<gp::EncounterSequence> enc;
-        gp::NpcActor *encNpc = nullptr;
+        std::unique_ptr<gp::EncounterSequence> &enc = S.world.enc;
+        gp::NpcActor *&encNpc = S.world.encNpc;
         auto nearestNpc = [&]() -> gp::NpcActor *
         {
             gp::NpcActor *bestNpc = nullptr;
@@ -833,63 +892,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             }
             return bestNpc;
         };
-        auto openNpcDialogue = [&](const gp::NpcActor &n)
-        {
-            const gp::NpcDef &d = *n.def;
-            gp::DialogueBox b;
-            b.kind = gp::BoxKind::Stats;
-            b.npcId = d.id;
-            b.title = gp::fmtS(db.textOr("base:str/stats_title", "%s"), {db.textOr(d.nameText, "?")});
-            const int delta = gp::personalityStatDelta(d.halos, d.pitchforks); // the NPC's own requirements
-            const char *key = gp::statHintKey(delta, player.personality[gp::Halos], player.personality[gp::Pitchforks]);
-            b.body = db.textOr(std::string("base:str/") + key);
-            b.req = {d.halos, d.pitchforks, d.stars, d.lightbulbs};
-            dialogue.show(std::move(b));
-        };
+        // The 12 signs the original builds at runtime with SprintF. Tried before the table lookup.
 
-        // GrantFriendship; again = its third argument (0 = "meet", 1 = "see you again")
-        auto grantFriendship = [&](bool again)
-        {
-            const gp::FriendGreeting g = gp::rollFriendGreeting(npcRng);
-            const char *key = nullptr;
-            switch (g)
-            {
-            case gp::FriendGreeting::Hello:
-                key = again ? "greet_again" : "greet_meet";
-                break;
-            case gp::FriendGreeting::Gift:
-                key = again ? "gift_again" : "gift_meet";
-                break;
-            case gp::FriendGreeting::Game:
-                key = again ? "game_again" : "game_meet";
-                break;
-            }
-            gp::DialogueBox b = gp::messageBox(gp::fmtAll(db.textOr(std::string("base:str/") + key, "?"), player.name));
-            if (g == gp::FriendGreeting::Game)
-            {
-                b.kind = gp::BoxKind::Confirm;
-                b.onYes = []
-                { std::printf("game offer: yes (minigames not ported)\n"); };
-                b.onNo = []
-                { std::printf("game offer: no\n"); };
-            }
-            dialogue.show(std::move(b));
-        };
-
-        auto openFriendPanel = [&](const gp::NpcActor &n)
-        {
-            const gp::NpcDef &d = *n.def;
-            gp::DialogueBox b;
-            b.kind = gp::BoxKind::StatsLow;
-            b.npcId = d.id;
-            const std::string name = db.textOr(d.nameText, "?");
-            b.title = gp::fmtS(db.textOr("base:str/stats_title", "%s"), {name});
-            const std::string line = gp::fmtAll(db.textOr(gp::defaultLineId(npcRng), "..."), player.name);
-            b.body = gp::fmtS(db.textOr("base:str/fmt_name_and_line", "%s %s"), {name, line});
-            b.req = {d.halos, d.pitchforks, d.stars, d.lightbulbs};
-            b.portrait = gp::uiSpriteId(d.portraitSprite, d.portraitPalette);
-            dialogue.show(std::move(b));
-        };
+        // Minigame starters now live in the ContentDB as InteractionDefs (importInteractions in import.hpp).
 
         auto nearestShopItem = [&]() -> const gp::ShopEvent *
         {
@@ -909,88 +914,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             return b;
         };
 
-        // TryBefriendNPC, first meeting only: resolve instantly (the real game walks up and plays reactions first).
-        // Friended NPCs and NPCs already met just open the stats panel for now.
-        auto talkToNpc = [&](gp::NpcActor &n)
-        {
-            const gp::NpcDef &d = *n.def;
-            if (quests.talk(d.index))
-                return;
-            if (d.index == 0x49 || d.index == 0x40) // king / Gardenia
-            {
-                const bool king = d.index == 0x49;
-                const gp::OfferResult r = gp::tryOffer(
-                    king ? gp::kKingOffers : gp::kGardeniaOffers, king ? kingFlags : gardenFlags,
-                    [&](int it)
-                    { auto f = inventory.find(it); return f == inventory.end() ? 0 : f->second; }, {});
-                if (r.item >= 0)
-                {
-                    if (--inventory[r.item] <= 0)
-                        inventory.erase(r.item);
-                    gp::DialogueBox b = gp::messageBox(king
-                                                           ? "Oh, thank you returning this. It will be placed in my royal vault."
-                                                           : "Oh, thank you for this beautiful flower. It will go right in my garden.");
-                    b.portrait = gp::uiSpriteId(d.portraitSprite, d.portraitPalette);
-                    dialogue.show(std::move(b));
-                    refreshBits();
-                    saveGame();
-                    return;
-                }
-            }
-            // std::printf("talk: %s stationary=%d index=%d\n", d.id.c_str(), int(d.stationary), d.index);
-            if (d.stationary || d.index > 50) // not friendable: the real interaction (shop, quest, ...) isn't ported yet
-            {
-                if (d.stationary)
-                {
-                    if (d.lines.size() < 3)
-                    {
-                        std::printf("npc %s: no rotating lines\n", d.id.c_str());
-                        return;
-                    }
-                    player.dialogueRotation = (player.dialogueRotation + 1) % 3;
-                    const int k = player.dialogueRotation == 1 ? 0 : player.dialogueRotation == 2 ? 1
-                                                                                                  : 2;
-                    // std::printf("stationary %s: line %d = %s\n", d.id.c_str(), k, d.lines[k].c_str());
-                    dialogue.show(gp::messageBox(gp::fmtAll(db.textOr(d.lines[k], "(missing text)"), player.name)));
-                    return;
-                    gp::DialogueBox b;
-                    b.kind = gp::BoxKind::Message;
-                    b.body = gp::fmtAll(db.textOr(d.lines[k], "(missing text)"), player.name);
-                    std::printf("box kind=%d layout=%d len=%zu\n", int(b.kind), b.layout, b.body.size());
-                    dialogue.show(std::move(b));
-                    return;
-                }
-            }
-            if (player.isFriended(d.id))
-            {
-                // Trick teachers (0x30..0x32) and their 10-minute cooldown are not ported.
-                if (!player.hasEncountered(d.id)) // first visit this session
-                {
-                    player.adjustCare(gp::Happiness, 5);
-                    player.setEncountered(d.id);
-                    const int chance = gp::friendVisitChance(d.befriendOdds, player.personality[gp::Stars], d.stars);
-                    const bool hit = gp::befriendRoll(npcRng, chance);
-                    std::printf("friend visit %s: chance %d -> %s\n", d.id.c_str(), chance, hit ? "hit" : "miss");
-                    if (hit)
-                    {
-                        grantFriendship(true);
-                        return;
-                    }
-                }
-                openFriendPanel(n);
-                return;
-            }
-            const int pet = gp::personalityStatDelta(player.personality[gp::Halos], player.personality[gp::Pitchforks]);
-            const int npc = gp::personalityStatDelta(d.halos, d.pitchforks);
-            player.setEncountered(d.id);
-            encNpc = &n;
-            enc = std::make_unique<gp::EncounterSequence>(pet, npc);
-        };
-
         // Draws a UI sprite the way objects are drawn: position minus anchor, plus the frame's offset.
-        auto drawUi = [&](int spriteId, int x, int y)
+        auto drawUi = [&](int spriteId, int x, int y, int pal = gp::kDialoguePalette)
         {
-            const gp::Id uid = gp::uiSpriteId(spriteId);
+            const gp::Id uid = gp::uiSpriteId(spriteId, pal);
             const AnimRef A = animRefById(uid);
             static std::set<gp::Id> warned; // #include <set>
             if (A.size() == 0)
@@ -1045,6 +972,14 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             const int indent = b.portrait.empty() ? 0 : 0x36;
             const int indentH = b.portrait.empty() ? 0 : 0x28;
 
+            if (b.kind == gp::BoxKind::Sign) // <-- the block goes here, inside the lambda
+            {
+                drawUi(0x17, 0, 0, 0x11f);
+                const int h = signText.layout(b.body, 0x1e, 0, 0x105, gp::Align::Center).height;
+                signText.draw(b.body, 0x1e, 0x6e - h / 2, 0x105, gp::Align::Center);
+                return;
+            }
+
             drawUi(L.frame, L.x, L.y);
             if (!b.portrait.empty())
                 drawUiId(b.portrait, L.x + 0x14, L.y + 0x14);
@@ -1095,13 +1030,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             drawUi(0x27, L.x + L.btnX, L.y + L.btnY);
         };
 
-        struct BarAnim
-        {
-            int id = -1, frame = 0, ticks = 0;
-            bool done = true, visible = false;
-        } barAnim;
-        int barBusy = 0; // g_isPetBusy
-        bool barInHouse = false;
+        BarAnim &barAnim = S.ui.barAnim;
+        int &barBusy = S.ui.barBusy; // g_isPetBusy
+        bool &barInHouse = S.ui.barInHouse;
         const int kBarRate = 12;
         auto playBarAnim = [&](int id)
         { barAnim = {id, 0, 0, false, true}; };
@@ -1173,28 +1104,34 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             SDL_RenderCopy(ren, (*A.tex)[0], nullptr, &r);
         };
         auto ownedCount = [&](int id)
-        { auto it = inventory.find(id); return it == inventory.end() ? 0 : it->second; };
+        {
+            if (id < 0 || id >= int(itemDefs.size()))
+                return 0;
+            return player.itemCount(itemDefs[size_t(id)].id);
+        };
         auto itemName = [&](int id)
-        { return db.textOr("base:text/" + std::to_string(itemDefs[id].nameText), "?"); };
+        { return db.textOr(itemDefs[id].name, "?"); };
         const std::string emptyText = "You don't have any."; // real string at 0xb2e4: decode later
+
+        for (int id : {0xf5, 0xf4, 0xf3, 0xf2, 0xf0, 0xef, 0xee, 0, 0xf1, 0xed, 0, 0x105})
+            std::printf("swift pick %3d (0x%x): %s\n", id, id,
+                        id < int(itemDefs.size()) ? itemName(id).c_str() : "?");
 
         // ---- pending events: dig spots, hidden quest items, ground items ----
         std::mt19937 digGen(SDL_GetTicks());
         const gp::RandFn rnd = gp::makeRandFn(digGen);
-        gp::PendingEventTable events;
-        uint32_t triggerFlags = 0;               // g_eventTriggeredFlags (not saved yet)
-        std::set<int> offeredItems, legacyFlags; // stand-ins; nothing sets them yet
+        gp::WorldItems events;
+        // Shared services for the free functions in walk_npc_talk.hpp / walk_script_bindings.hpp.
+        WalkServices svc{db, scripts, player, dialogue, quests, S, events, refreshBits, saveGame,
+                         [&]
+                         { return cur->def->legacyId; }};
 
-        gp::FixedSpawnEnv spawnEnv;
-        spawnEnv.held = [&](int it)
-        { return ownedCount(it); };
-        spawnEnv.offered = [&](int it)
-        { return offeredItems.count(it) > 0; };
-        spawnEnv.legacy = [&](int it)
-        { return legacyFlags.count(it) > 0; };
-        spawnEnv.triggered = [&](int n)
-        { return n >= 0 && n < 32 && (triggerFlags >> n & 1u) != 0; };
-
+        gp::FixedSpawnEnv spawnEnv = gp::playerSpawnEnv(player);
+        spawnEnv.itemNumber = [&](const gp::Id &id) // db lookup, so mod items work
+        {
+            const gp::ItemDef *d = db.item(id);
+            return d ? d->index : -1;
+        };
         auto enterAreaEvents = [&](const gp::AreaDef &a, bool newZone)
         {
             if (gp::shopRowForArea(a.legacyId) >= 0)
@@ -1308,11 +1245,24 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             {
                 if (!grantSpecial(i, true))
                 {
-                    ++inventory[i];
+                    if (i >= 0 && i < int(itemDefs.size()))
+                        player.addItem(itemDefs[size_t(i)].id, 1);
                     gp::onItemGranted(events, area, i, db.fixedSpotsIn(area), spawnEnv);
                 }
             };
+            const int pickedItem = idx >= 0 && idx < events.size() ? events.events()[size_t(idx)].item : -1;
             const gp::PickupOutcome o = events.pickup(idx, pe);
+            if (o.result == gp::PickupResult::Granted && pickedItem >= 0 && pickedItem < int(itemDefs.size()))
+            {
+                // Spots with notLegacyFlag stay gone once their item has been picked up (SetLegacyFlag).
+                const gp::Id &pickedId = itemDefs[size_t(pickedItem)].id;
+                for (const gp::FixedSpotDef *s : db.fixedSpotsIn(area))
+                    if (s->notLegacyFlag && s->item == pickedId)
+                    {
+                        gp::markLegacy(player, pickedId);
+                        break;
+                    }
+            }
             if (o.result == gp::PickupResult::NeedItem)
                 dialogue.show(gp::messageBox("You need " + itemName(o.needItem) + " first.")); // placeholder text
             else if (o.result == gp::PickupResult::AtCapacity)
@@ -1323,7 +1273,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         constexpr int kEvPal = 0x28c, kFlowerSprite = 0x9c1, kHoleSprite = 0x9c2;
         constexpr int kPromptArrowAnim = 0x11; // GUESS: try 0x10 / 0x11 / 0x12
 
-        auto drawWorldSprite = [&](const gp::Id &id, int wx, int wy, int camX, int camY)
+        auto drawWorldSprite = [&](const gp::Id &id, int wx, int wy, float camX, float camY)
         {
             const AnimRef A = animRefById(id);
             if (!A.size())
@@ -1334,12 +1284,92 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 return;
             }
             const gp::SpriteFrame &s = A.anim->frames[0];
-            SDL_Rect r{wx - camX - s.anchorX + s.dx, wy - camY - s.anchorY + s.dy, s.w, s.h};
-            SDL_RenderCopy(ren, (*A.tex)[0], nullptr, &r);
+            SDL_FRect r{wx - camX - s.anchorX + s.dx, wy - camY - s.anchorY + s.dy, float(s.w), float(s.h)};
+            SDL_RenderCopyF(ren, (*A.tex)[0], nullptr, &r);
         };
         int kHoleDY = 8; // tune by eye
 
-        auto drawGroundSprite = [&](const gp::Id &id, int wx, int wy, int camX, int camY)
+        // Object type id -> shadow ("marker") sprite, -1 = none. Resolved the first time a type is drawn.
+        std::map<gp::Id, int> objShadow;
+        auto shadowFor = [&](const gp::Id &type) -> int
+        {
+            const auto cached = objShadow.find(type);
+            if (cached != objShadow.end())
+                return cached->second;
+            int sprite = -1, t = -1;
+            const std::string head = type.substr(0, type.find('@')); // ignore a trailing "@palette"
+            const size_t last = head.find_last_of("0123456789");
+            if (last != std::string::npos)
+            {
+                size_t b = last;
+                while (b > 0 && std::isdigit(static_cast<unsigned char>(head[b - 1])))
+                    --b;
+                t = std::atoi(head.c_str() + b); // the last run of digits in the id
+            }
+            if (t >= 0 && db.objectType(type))
+            {
+                const int base = 0xe9bd + t * 5; // hasMarker, tile, palette, markerTile, overlayTile
+                const int marker = rom.u16(base + 3);
+                if (rom.u16(base) != 0 && marker != 0xffff)
+                    try
+                    {
+                        gp::importUiSprite(db, rom, marker, 0x28c);
+                        sprite = marker;
+                    }
+                    catch (const std::exception &e)
+                    {
+                        std::printf("object shadow 0x%x import failed: %s\n", marker, e.what());
+                    }
+            }
+            std::printf("object type '%s' -> index %d, shadow sprite %d\n", type.c_str(), t, sprite);
+            objShadow[type] = sprite;
+            return sprite;
+        };
+
+        constexpr Uint8 kShadowAlpha = 175; // tune by eye: 255 = opaque
+        auto drawShadowSprite = [&](const gp::Id &id, float wx, float wy, float camX, float camY)
+        {
+            const AnimRef A = animRefById(id);
+            if (!A.size())
+                return;
+            const gp::SpriteFrame &s = A.anim->frames[0];
+            SDL_Texture *tx = (*A.tex)[0];
+            SDL_SetTextureAlphaMod(tx, kShadowAlpha); // these textures are only ever used for shadows
+            SDL_FRect r{wx - camX - s.anchorX + s.dx, wy - camY - s.anchorY + s.dy, float(s.w), float(s.h)};
+            SDL_RenderCopyF(ren, tx, nullptr, &r);
+        };
+
+        // DrawShadow: the blob is chosen by the sprite's WIDTH (the game's "GetSpriteHeight" is really the width);
+        // "alt" is the species-2 variant.
+        auto drawShadow = [&](int spriteW, float wx, float wy, bool alt, float camX, float camY)
+        {
+            int idx = (spriteW - 16 >= 0) ? (spriteW - 16) >> 3 : (spriteW - 9) >> 3;
+            idx = std::clamp(idx, 0, 11);
+            drawShadowSprite(gp::uiSpriteId((alt ? 0x9a0 : 0x994) + idx, 0x28c),
+                             wx - (idx * 8 + 8) / 2, wy - (alt ? 0x10 : 6), camX, camY);
+        };
+        auto drawNpcShadow = [&](const gp::NpcActor &n, float camX, float camY)
+        {
+            if (n.def->index == 0x39)
+                return;
+            const AnimRef A = npcAnim(n, std::max(n.anim.animId, 0));
+            if (A.size() == 0)
+                return;
+            const int fr = std::min(n.anim.currentFrame, int(A.size()) - 1);
+            const int nsp = n.def->speciesOrAnim == 0xfffe ? playerSpecies : n.def->speciesOrAnim;
+            const auto np = npcPosF(n);
+            drawShadow(A.anim->frames[fr].w, np.first, np.second, nsp == 2, camX, camY);
+        };
+        auto drawItemShadow = [&](int item, int wx, int wy, float camX, float camY)
+        {
+            if (item < 0 || item >= int(itemDefs.size()))
+                return;
+            const AnimRef A = animRefById(gp::uiSpriteId(itemDefs[item].worldSprite, gp::kMenuPalette));
+            if (A.size())
+                drawShadow(A.anim->frames[0].w, wx, wy, false, camX, camY);
+        };
+
+        auto drawGroundSprite = [&](const gp::Id &id, int wx, int wy, float camX, float camY)
         {
             const AnimRef A = animRefById(id);
             if (!A.size())
@@ -1356,10 +1386,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 shown = true;
                 std::printf("hole frame: w=%d h=%d anchor(%d,%d) d(%d,%d)\n", s.w, s.h, s.anchorX, s.anchorY, s.dx, s.dy);
             }
-            SDL_Rect r{wx - camX - s.w / 2 + s.dx, wy - camY - s.h / 2 + s.dy + kHoleDY, s.w, s.h};
-            SDL_RenderCopy(ren, (*A.tex)[0], nullptr, &r);
+            SDL_FRect r{wx - camX - float(s.w / 2) + s.dx, wy - camY - float(s.h / 2) + s.dy + kHoleDY, float(s.w), float(s.h)};
+            SDL_RenderCopyF(ren, (*A.tex)[0], nullptr, &r);
         };
-        auto drawEvent = [&](const gp::PendingEvent &e, int camX, int camY)
+        auto drawEvent = [&](const gp::WorldItem &e, float camX, float camY)
         {
             if (e.state == gp::EventState::BuriedRandom) // kind 5: flower
                 drawWorldSprite(gp::uiSpriteId(kFlowerSprite, kEvPal), e.x, e.y, camX, camY);
@@ -1396,14 +1426,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             return out;
         };
 
-        struct ItemMenu
-        {
-            bool open = false;
-            int category = 0, tab = 0;
-            gp::MenuSub sub = gp::MenuSub::Grid;
-            int firstRow = 1, selRow = 1, selCol = 1;
-            std::vector<int> filtered;
-        } im;
+        ItemMenu &im = S.ui.im;
 
         auto itemWindow = [&]
         {
@@ -1445,17 +1468,17 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             }
         };
 
-        struct Fade
+        Fade &fade = S.flow.fade; // starts black and fades in
+        std::optional<gp::ExitDef> &pendingExit = S.flow.pendingExit;
+
+        std::function<void()> &pendingScreen = S.flow.pendingScreen; // runs while the screen is fully black
+        auto requestScreen = [&](std::function<void()> sw)
         {
-            double a = 1.0, to = 0.0, sec = 16.0 / 30; // alpha 0..1, target, seconds for a full 0..1
-            void go(double t, double s) { to = t; sec = s; }
-            void step(double dt)
-            {
-                const double d = dt / sec;
-                a = a < to ? std::max(std::min(a + d, to), a) : std::max(a - d, to);
-            }
-        } fade; // starts black and fades in
-        std::optional<gp::ExitDef> pendingExit; // needs #include <optional> at the top
+            if (pendingScreen || pendingExit)
+                return;
+            pendingScreen = std::move(sw);
+            fade.go(1.0, 8.0 / 30);
+        };
 
         auto openBar = [&](bool house) // OpenMenuBar when closed; closes it if already open
         {
@@ -1476,7 +1499,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         {
             if (s == kStatsState)
             {
-                statsOpen = true;
+                requestScreen([&]
+                              { statsOpen = true; });
                 return;
             }
             if (s != 0xe)
@@ -1492,12 +1516,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
 
         // Queue draw calls, then sort by layer
-        struct Cmd
-        {
-            int layer;
-            std::function<void()> draw;
-        };
-        std::vector<Cmd> menuCmds;
+        std::vector<Cmd> &menuCmds = S.ui.menuCmds;
         struct ItemGfx : gp::Gfx
         {
             std::function<void(int, int, int, int, int)> tile;
@@ -1541,30 +1560,52 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             return A.size() ? A.anim->frames[0].h : 0;
         };
 
-        int facing = 1;        // start facing down
-        bool faceLeft = false; // the game's facing word: 0 = left, 1 = right (2 = up, 3 = down); persists while turning
-        int speedMul = 1;
-        int walkTicks = 0;
-        uint8_t prevDirs = 0;      // to detect new key presses
-        const int kFrameRate = 14; // the rate the game passes for walking; frames per second at 30 ticks/sec
-        int anchorMode = 0, offX = 0, offY = 1;
-        int flipMode = 0; // 0 = old mirror formula, 1 = hypothesis using record word 2 (toggle with F)
+        // Swift Pick, wishing wells (Three in a Row) and Memory Match / game tents live in minigame_ui.hpp.
+        TextDrawer swiftTitle(ren, db.font(gp::fontId(3, 0x104))); // minigame titles: font 3, palette 0x104
+        MinigameEnv mgEnv{ren, rom, db, player, itemDefs, text, swiftTitle, swiftBgTex};
+        mgEnv.randIn = randIn;
+        mgEnv.sfx = sfx;
+        mgEnv.animRefById = animRefById;
+        mgEnv.requestScreen = requestScreen;
+        mgEnv.showBox = [&](gp::DialogueBox b)
+        { dialogue.show(std::move(b)); };
+        mgEnv.drawSlotScene = [&] // DrawActiveSlotSprites(): same call the item menu makes
+        {
+            menuCmds.clear();
+            gp::drawSlotScene(itemGfx, rom, itemSlot);
+            std::stable_sort(menuCmds.begin(), menuCmds.end(),
+                             [](const Cmd &a, const Cmd &b)
+                             { return a.layer < b.layer; });
+            for (Cmd &c : menuCmds)
+                c.draw();
+        };
+        // mgEnv.startItemDrop is set where startItemDrop is defined (below).
+        Minigames minigames(mgEnv);
+
+        int &facing = S.pet.facing;        // start facing down
+        bool &faceLeft = S.pet.faceLeft; // the game's facing word: 0 = left, 1 = right (2 = up, 3 = down); persists while turning
+        int &speedMul = S.pet.speedMul;
+        int &walkTicks = S.pet.walkTicks;
+        uint8_t &prevDirs = S.pet.prevDirs; // to detect new key presses
+        const int kFrameRate = 14;          // the rate the game passes for walking; frames per second at 30 ticks/sec
+        int &anchorMode = S.pet.anchorMode, &offX = S.pet.offX, &offY = S.pet.offY;
+        int &flipMode = S.pet.flipMode; // 0 = old mirror formula, 1 = hypothesis using record word 2 (toggle with F)
 
         // ---- pet animation state ----
-        Pose pose = Pose::Move; // Move with walkTicks == 0 shows walk frame 0
-        int settleTicks = 0;
+        Pose &pose = S.pet.pose; // Move with walkTicks == 0 shows walk frame 0
+        int &settleTicks = S.pet.settleTicks;
         const int kSettleTicks = 5; // the game waits 0.15 s with no direction held (2 ticks of delta per 30 Hz tick)
-        int animId = 54, animFrame = 0, animTicks = 0, animRate = 14;
-        bool animLoop = true, animDone = false;
-        std::vector<AnimStep> queue;          // what plays after the current one-shot finishes
-        int idleTicks = 0, idleThreshold = 0; // base idle (34) -> after 3.0-6.0 s the game runs action 7 (46, then 45)
-        bool animReverse = false;             // move this up, before playAni
-        int feedStep = 0, feedRepeats = 0, feedCount = 0, feedHappy = 0;
+        int &animId = S.pet.animId, &animFrame = S.pet.animFrame, &animTicks = S.pet.animTicks, &animRate = S.pet.animRate;
+        bool &animLoop = S.pet.animLoop, &animDone = S.pet.animDone;
+        std::vector<AnimStep> &queue = S.pet.queue; // what plays after the current one-shot finishes
+        int &idleTicks = S.pet.idleTicks, &idleThreshold = S.pet.idleThreshold; // base idle (34) -> after 3.0-6.0 s the game runs action 7 (46, then 45)
+        bool &animReverse = S.pet.animReverse; // move this up, before playAni
+        int &feedStep = S.pet.feedStep, &feedRepeats = S.pet.feedRepeats, &feedCount = S.pet.feedCount, &feedHappy = S.pet.feedHappy;
 
-        bool medStuck = false; // wrong medicine: walking in place until another animation plays
-        int medStuckTicks = 0, medStuckLimit = 0;
-        int overId = -1, overTicks = 0; // overhead medicine animation (-1 = none)
-        bool feedFood = true;           // the +6 Happiness bonus is food only
+        bool &medStuck = S.pet.medStuck; // wrong medicine: walking in place until another animation plays
+        int &medStuckTicks = S.pet.medStuckTicks, &medStuckLimit = S.pet.medStuckLimit;
+        int &overId = S.pet.overId, &overTicks = S.pet.overTicks; // overhead medicine animation (-1 = none)
+        bool &feedFood = S.pet.feedFood; // the +6 Happiness bonus is food only
 
         auto playAnim = [&](int aid, bool loop, int rate, Pose p,
                             std::vector<AnimStep> next = {})
@@ -1679,7 +1720,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         host.pet.rand = [&](int lo, int hi)
         { return lo + std::rand() % (hi - lo + 1); };
 
-        int settlePhase = 0; // TickActor_SettleFacing: no 0.15 s wait, ends facing down
+        int &settlePhase = S.pet.settlePhase; // TickActor_SettleFacing: no 0.15 s wait, ends facing down
         host.pet.settle = [&]() -> bool
         {
             if (settlePhase == 0)
@@ -1842,8 +1883,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
 
         // PlayDigForItemRoutine, simplified: settle, bubble + sounded task, then the hit test.
-        int digAnimDY = 1; // 0 = anchor sits at the pet's feet; tune with 9 / 0
-        int digStep = 0, digTicks = 0;
+        int &digAnimDY = S.pet.digAnimDY; // 0 = anchor sits at the pet's feet; tune with 9 / 0
+        int &digStep = S.pet.digStep, &digTicks = S.pet.digTicks;
         constexpr int kDigAnimId[3] = {0x1c, 0x80, 0xe9}; // PlayTaskAnimationVariant table, by species
         constexpr int kDigTicks = 30;                     // placeholder: length of sound 0xbe (SFX category 9)
 
@@ -1875,20 +1916,30 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 break;
             case 4:
             { // IsBubbleFinished, then the hit test
-
                 const int frames = int(animRefById(reactAnimId(0x16, 0x28c)).size());
                 if (frames > 0 && overTicks * kBubbleFps / 30 < frames)
                     break;
                 overId = -1;
                 const size_t holesBefore = events.holes().size();
-                const gp::DigResult r = events.dig(cur->def->legacyId, pos.x, pos.y, triggerFlags, rnd);
+
+                uint32_t bits = 0; // player flags -> bits
+                for (int n = 0; n < 32; ++n)
+                    if (player.hasTrigger(n))
+                        bits |= 1u << n;
+
+                const gp::DigResult r = events.dig(cur->def->legacyId, pos.x, pos.y, bits, rnd);
+
+                for (int n = 0; n < 32; ++n) // bits -> player flags (only new ones matter)
+                    if (bits >> n & 1u)
+                        player.setTrigger(n);
+
                 const bool found = r.kind == gp::DigResult::Kind::Item;
                 std::printf("dig: %s\n", found ? "item" : r.kind == gp::DigResult::Kind::Dud ? "dud"
                                                                                              : "miss");
                 std::printf("holes now: %zu\n", events.holes().size());
                 if (r.triggerSet)
-                    std::printf("trigger flags 0x%x (SavePetStatusBlock)\n", triggerFlags);
-                animDone = true; // no art: let the sequence move on
+                    std::printf("trigger flags 0x%x (SavePetStatusBlock)\n", bits);
+                animDone = true;
                 digStep = 5;
                 break;
             }
@@ -1899,6 +1950,49 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     playAnim(gp::kIdleBase[sp], true, 14, Pose::Idle);
                 }
                 break;
+            }
+        };
+
+        int &swiftDropStep = S.pet.swiftDropStep, &swiftDropTicks = S.pet.swiftDropTicks;
+        std::vector<int> &swiftDropItems = S.pet.swiftDropItems;
+        auto startItemDrop = [&](std::vector<int> items)
+        {
+            if (items.empty())
+                return;
+            sfx(0x5d);
+            swiftDropItems = std::move(items);
+            swiftDropStep = 1;
+            swiftDropTicks = 0;
+            settlePhase = 0;
+            walkTicks = 0;
+        };
+        mgEnv.startItemDrop = startItemDrop;
+        auto tickSwiftDrop = [&]
+        {
+            if (!swiftDropStep || minigames.active() || pendingScreen) // activity runs once the world is back
+                return;
+            if (swiftDropStep == 1)
+            {
+                if (host.pet.settle())
+                    swiftDropStep = 2;
+            }
+            else if (++swiftDropTicks >= 45) // 1.5 s at 30 Hz
+            {
+                // ROM RandRange is exclusive at the top; this randIn is inclusive, so hi - 1.
+                int x = minigames.petX + randIn(-35, 35), y = minigames.petY + randIn(-2, 3);
+                for (size_t k = 0; k < swiftDropItems.size(); ++k)
+                {
+                    if (k > 0) // each next item: 6..10 lower, 0x14..0x22 to the other side of the target x (sign of the side: GUESS)
+                    {
+                        y += randIn(6, 0xb - 1);
+                        const int d = randIn(0x14, 0x23 - 1);
+                        x = minigames.petX + (x >= minigames.petX ? -d : d);
+                    }
+                    events.placeAt(cur->def->legacyId, swiftDropItems[k], x, y, false); // persist flag is a guess
+                }
+                sfx(0x54);
+                swiftDropStep = 0;
+                playAnim(gp::kIdleBase[sp], true, 14, Pose::Idle);
             }
         };
 
@@ -1914,8 +2008,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 if (d.w9 == gp::kMedicineNoIllness)
                     return;
                 const bool cured = gp::applyMedicine(player, d);
-                if (--inventory[d.index] <= 0)
-                    inventory.erase(d.index);
+                player.removeItem(d.id, 1);
                 im.open = false;
                 barBusy = 0;
                 const int illnessBefore = player.illnessId;
@@ -1949,8 +2042,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             gp::applyFoodEffect(player, d, itemHost);
             std::printf("ate item %d (cat %d)\n", d.index, d.w9);
 
-            if (--inventory[d.index] <= 0)
-                inventory.erase(d.index);
+            player.removeItem(d.id, 1);
 
             // Menu result 2: leave the menu and play the eat animation.
             im.open = false;
@@ -1960,9 +2052,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
 
         // ---- 4. STATE + AREA SWITCHING ----
-        bool exitsArmed = false; // stops bouncing straight back through the door you arrived by
-        bool prevZ = false;
-        bool prevX = false;
+        bool &exitsArmed = S.flow.exitsArmed; // stops bouncing straight back through the door you arrived by
+        bool &prevZ = S.flow.prevZ;
+        bool &prevX = S.flow.prevX;
 
         auto goTo = [&](const gp::ExitDef &e) -> bool
         {
@@ -1996,6 +2088,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             }
             world = std::make_unique<AreaWorld>(*cur->ground, *cur->runtime, cur->room);
             pos = {s.x, s.y};
+            prevPos = pos; // no gliding across the map after a door
             SDL_DestroyTexture(tex);
             tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, cur->img.w, cur->img.h);
             SDL_UpdateTexture(tex, nullptr, cur->img.rgba.data(), cur->img.w * 4);
@@ -2034,9 +2127,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
             if (q.outcome == gp::BuyOutcome::AtCap)
             { // string at 0xb61d: "You can only carry %d %s."
-                const std::string n = d.maxQty == 1            ? name
-                                      : d.pluralText != 0xffff ? db.textOr("base:text/" + std::to_string(d.pluralText), name)
-                                                               : name + "s"; // suffix string at 0xb61b: verify
+                const std::string n = d.maxQty == 1       ? name
+                                      : !d.plural.empty() ? db.textOr(d.plural, name)
+                                                          : name + "s"; // suffix string at 0xb61b: verify
                 dialogue.show(gp::messageBox("You can only carry " + std::to_string(d.maxQty) + " " + n + "."));
                 return;
             }
@@ -2054,7 +2147,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             b.onQuantity = [&, item, area, row](int qty)
             {
                 gp::deliverPurchase(shopStock, row, item, qty, [&](int id)
-                                    { if (inventory[id] < itemDefs[id].maxQty) ++inventory[id]; }, // CheckQuestItemObjectivesComplete not ported
+                                    { if (player.itemCount(itemDefs[size_t(id)].id) < itemDefs[size_t(id)].maxQty) player.addItem(itemDefs[size_t(id)].id, 1); }, // CheckQuestItemObjectivesComplete not ported
                                     [&](int)
                                     { pending.removeShopItem(area, item); });
                 money -= qty * itemDefs[item].price; // Item_ProcessPurchase: AdjustPlayerMoney(-qty * price)
@@ -2085,10 +2178,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     }
         }
 
-        auto rw = [&](uint32_t a)
-        { return int(rom.u16(int(a))); };
-        quests.table = gp::importQuestTable(rw);
-        quests.world.rom = gp::importQuestTables(rw);
+        quests.table = db.quests();          // scripted quests: imported by importRom, mods can replace or append
+        quests.world.rom = db.questTables(); // generic-quest item weights and category distances: also from the db
+        quests.world.types = db.questTypes();
         quests.world.playerSpecies = sp;
         quests.world.areaTier = [&](int p)
         { const gp::NpcDef *d = npcAt(p); return d ? d->area : 0; };
@@ -2110,10 +2202,15 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         { return clampCam(pos.y - kCamY, cur->img.h, H); };
         refreshBits = [&]
         {
-            gp::autoMarkKing(quests.counter, kingFlags);
-            const gp::ProgressBits b = gp::rebuildBits(cur->def->legacyId, quests.counter, kingFlags, gardenFlags);
+            for (const gp::Id &sid : db.offerSetIds())
+                if (const gp::OfferSetDef *s = db.offerSet(sid))
+                    gp::autoMarkOffers(*s, quests.counter, player);
             for (const gp::ObjectDef &o : cur->def->objects)
-                cur->runtime->setHidden(o.id, !b.present(o.legacySlot));
+            {
+                const bool needsOffer = !o.requiresOffered.empty();
+                const bool offered = needsOffer && player.hasFlag(gp::offeredKey(o.requiresOffered));
+                cur->runtime->setHidden(o.id, (needsOffer && !offered) || !o.availableAt(quests.counter));
+            }
             cur->runtime->updateVisible(camNowX(), camNowY());
         };
 
@@ -2121,13 +2218,13 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         {
             player.questsCompleted = quests.counter;
             gp::SaveData s = sd; // keep keys we don't own (whatever createNewSave wrote: colour, starter stats...)
-            s.setInt("version", 2);
+            s.setInt("version", 3);
             s.setInt("statsInit", 1);
             s.setInt("species", sp);
-            s.setInt("kingFlags", kingFlags);
-            s.setInt("gardenFlags", gardenFlags);
-            s.setMap("inventory", inventory);
+            s.kv.erase("kingFlags");
+            s.kv.erase("gardenFlags");
             gp::savePlayer(player, s);
+            s.kv.erase("inventory");
             gp::saveToFile(savePath, s);
         };
 
@@ -2135,19 +2232,30 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         qh.rnd = rnd;
         qh.text = [&](int id)
         { return gp::fmtAll(db.textOr("base:text/" + std::to_string(id), "?"), player.name); }; // key format: same as item names, unverified for quest text
-        qh.held = ownedCount;
-        qh.remove = [&](int it, int n)
+        qh.held = [&](const gp::Id &id)
+        { return player.itemCount(id); };
+
+        qh.remove = [&](const gp::Id &id, int n)
         {
-            if ((inventory[it] -= n) <= 0)
-                inventory.erase(it);
+            player.removeItem(id, n);
         };
-        qh.spawn = [&](int area, int item, int st, bool persist)
+
+        qh.spawn = [&](int area, const gp::Id &id, int st, bool persist)
         {
+            const gp::ItemDef *d = db.item(id);
+            if (!d)
+                return;
             if (const gp::AreaDef *a = db.areaByLegacy(area))
-                events.spawnAtFreeSlot(*a, item, st == 2 ? gp::EventState::Visible : gp::EventState::BuriedRandom, persist, rnd);
+                events.spawnAtFreeSlot(*a, d->index, st == 2 ? gp::EventState::Visible : gp::EventState::BuriedRandom, persist, rnd);
         };
-        qh.place = [&](int item, int x, int y, bool persist)
-        { events.placeAt(cur->def->legacyId, item, x, y, persist); };
+
+        qh.place = [&](const gp::Id &id, int x, int y, bool flag)
+        {
+            const gp::ItemDef *d = db.item(id);
+            if (!d)
+                return;
+            events.placeAt(cur->def->legacyId, d->index, x, y, flag);
+        };
         qh.randomEvent = [&]
         { events.spawnRandom(*cur->def, 1, rnd); }; // the ROM call's args are lost in the decompile
         qh.clearFlagged = [&]
@@ -2179,20 +2287,31 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             saveGame();
         };
 
+        walk::bindScripts(svc); // world.drop, rand.* (and later player.* / flags): walk_script_bindings.hpp
+
+        gp::QuestTextEnv &txt = quests.txt; // adjust to the real member name
+
         quests.txt.rnd = rnd;
+        quests.txt.str = [&](const std::string &k)
+        { return db.textOr("base:str/quest/" + k); }; // "" when missing: the builders then show "(key)"
         quests.txt.npcName = [&](int p)
         { const gp::NpcDef *d = npcAt(p); return d ? db.textOr(d->nameText, "?") : std::string("?"); };
         quests.txt.npcTier = quests.world.areaTier;
         quests.txt.areaName = [&](int area)
-        { return db.textOr("base:text/" + std::to_string(rom.u16(0xe303 + area)), "?"); };
-        quests.txt.itemName = [&](int it, int n)
         {
-            const gp::ItemDef &d = itemDefs[it];
-            const std::string nm = db.textOr("base:text/" + std::to_string(d.nameText), "?");
+            const gp::AreaDef *a = db.areaByLegacy(area);
+            return a ? db.textOr(a->name, "?") : std::string("?");
+        };
+        txt.itemName = [&](const gp::Id &id, int n) -> std::string
+        {
+            const gp::ItemDef *d = db.item(id);
+            if (!d)
+                return id; // or "" if you prefer
+            const std::string nm = db.textOr(d->name, "?");
             if (n < 2)
                 return nm;
-            if (d.pluralText != 0xffff)
-                return db.textOr("base:text/" + std::to_string(d.pluralText), nm);
+            if (!d->plural.empty())
+                return db.textOr(d->plural, nm);
             return (!nm.empty() && nm.back() == 's') ? nm : nm + "s"; // suffix string at 0xd135 assumed to be "s"
         };
 
@@ -2211,19 +2330,20 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 for (size_t k = 0; k < qs.def.objectives.size() && k < 3; ++k, x += 100)
                 {
                     const gp::QuestEntry &o = qs.def.objectives[k];
-                    if (o.item < 0 || o.item >= int(itemDefs.size()))
+                    const gp::ItemDef *dp = db.item(o.item);
+                    if (!dp)
                         continue;
-                    const gp::ItemDef &d = itemDefs[o.item];
+                    const gp::ItemDef &d = *dp;
                     const AnimRef A = animRefById(gp::uiSpriteId(d.worldSprite, gp::kMenuPalette)); // ROM uses item record word 7 as the palette
                     if (A.size())
                     {
                         const gp::SpriteFrame &s = A.anim->frames[0];
-                        const int y = s.h + 200; // GetSpriteWidth(...) here is the frame height (same as itemGfx.spriteW)
+                        const int y = s.h + 200;
                         SDL_Rect r{x - s.anchorX + s.dx, y - s.anchorY + s.dy + 1, s.w, s.h};
                         SDL_RenderCopy(ren, (*A.tex)[0], nullptr, &r);
                     }
-                    const int shown = std::min(ownedCount(o.item), o.count);
-                    text.draw(std::to_string(shown) + "/" + std::to_string(o.count), x, 210, 60, gp::Align::Right); // font style 0
+                    const int shown = std::min(player.itemCount(o.item), o.count);
+                    text.draw(std::to_string(shown) + "/" + std::to_string(o.count), x, 210, 60, gp::Align::Right);
                 }
             }
             if (gp::timerShown(qs))
@@ -2236,16 +2356,21 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
         enterAreaEvents(*cur->def, true);
         refreshBits(); // add
-        bool running = true;
-        bool backToMenu = false;
+        bool &running = S.flow.running;
+        bool &backToMenu = S.flow.backToMenu;
         const double kTickHz = 30.0; // verified: the game ticks at 30 Hz
         const Uint64 freq = SDL_GetPerformanceFrequency();
         Uint64 prev = SDL_GetPerformanceCounter();
-        double acc = 0;
+        double &acc = S.flow.acc;
         // Fade in from black (the front end fades out before handing over). The clock starts after the first
         // presented frame, so texture-upload hitches in that frame don't eat the fade.
 
         Uint64 fadeLast = SDL_GetPerformanceCounter();
+
+        // What pressing Z on an object does (well, tent, signs, minigames, the onInteract script seam): walk_interactions.hpp.
+        // Needs `minigames`, so it is built here rather than next to `svc`.
+        walk::Interactions interactions(svc, minigames);
+
         while (running)
         {
             SDL_Event e;
@@ -2335,6 +2460,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         player.personality = {};
                         std::printf("stats reset\n");
                         break;
+                    case SDLK_F5:
+                        smoothCam = !smoothCam;
+                        SDL_RenderSetIntegerScale(ren, smoothCam ? SDL_TRUE : SDL_FALSE);
+                        std::printf("smooth camera %s\n", smoothCam ? "on" : "off");
+                        break;
                     case SDLK_F10: // back to the front-end menu
                         backToMenu = true;
                         running = false;
@@ -2397,11 +2527,23 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     exitsArmed = false;
                 fade.go(0.0, 8.0 / 30); // fade in
             }
+            if (pendingScreen && fade.a >= 1.0)
+            {
+                auto sw = std::move(pendingScreen);
+                pendingScreen = nullptr;
+                sw();
+                fade.go(0.0, 8.0 / 30);
+            }
 
             while (acc >= 1.0 / kTickHz)
             {
                 acc -= 1.0 / kTickHz;
                 gameTicks += 2;
+                // remember where everything was before this tick, for the smooth renderer
+                prevPos = pos;
+                npcPrev.resize(npcs.size());
+                for (size_t ni = 0; ni < npcs.size(); ++ni)
+                    npcPrev[ni] = {npcs[ni].x(), npcs[ni].y()};
                 if (gameTicks - lastSaveTick >= 1800)
                 {
                     lastSaveTick = gameTicks;
@@ -2410,6 +2552,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 const Uint8 *k = SDL_GetKeyboardState(nullptr);
                 const uint8_t rawDirs = enc ? 0 : gp::pollHeld(k[SDL_SCANCODE_LEFT], k[SDL_SCANCODE_RIGHT], k[SDL_SCANCODE_UP], k[SDL_SCANCODE_DOWN]);
                 const uint8_t newlyPressed = uint8_t(rawDirs & ~prevDirs);
+
                 prevDirs = rawDirs;
 
                 // Z is read once per tick, as an edge. prevZ updates even while a box is open, so the press
@@ -2441,17 +2584,29 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         barAnim.visible = false;
                     }
                 }
-                if (pendingExit)
+                if (pendingExit || pendingScreen)
                     continue;
                 if (statsOpen)
                 {
                     if (zPressed || xPressed)
                     {
-                        statsOpen = false;
-                        barBusy = 0;
-                        barAnim.visible = false;
+                        requestScreen([&]
+                                      { statsOpen = false; barBusy = 0; barAnim.visible = false; });
                     }
                     continue;
+                }
+                if (minigames.active())
+                {
+                    MinigameInput in;
+                    in.live = fade.a <= 0.0; // ignore presses during the fade-in
+                    in.z = zPressed;
+                    in.x = xPressed;
+                    in.left = (newlyPressed & gp::DirLeft) != 0;
+                    in.right = (newlyPressed & gp::DirRight) != 0;
+                    in.up = (newlyPressed & gp::DirUp) != 0;
+                    in.down = (newlyPressed & gp::DirDown) != 0;
+                    minigames.tick(in);
+                    continue; // world frozen while a minigame is up
                 }
                 if (im.open)
                 {
@@ -2502,7 +2657,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
                 // The pet can't be controlled while the bar is opening, open, or closing (g_isPetBusy != 0).
                 // The world keeps running.
-                const bool petLocked = barBusy != 0 || feedStep != 0 || digStep != 0;
+                const bool petLocked = barBusy != 0 || feedStep != 0 || digStep != 0 || swiftDropStep != 0;
                 const uint8_t dirs = petLocked ? 0 : rawDirs;
                 if (enc)
                 {
@@ -2516,7 +2671,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         encNpc = nullptr;
                         playAnim(gp::kIdleBase[sp], true, 14, Pose::Idle);
                         if (friend_ && gp::befriendRoll(npcRng, gp::befriendChance(d.befriendOdds, player.personality[gp::Stars], d.stars)))
-                            grantFriendship(false);
+                            walk::grantFriendship(svc, false);
                     }
                     if (enc && encNpc)
                     {
@@ -2641,6 +2796,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     ++overTicks;
                 tickFeed();
                 tickDig();
+                tickSwiftDrop();
                 quests.tick(int(gameTicks));
 
                 // ---- exit trigger / talk to NPC ----
@@ -2653,6 +2809,18 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                                             ? db.findExit(cur->def->id, nearObj->id, false)
                                             : nullptr;
                 const gp::ExitDef *ex = nearObj ? db.findExit(cur->def->id, nearObj->id, true) : nullptr;
+
+                // debug: press O to dump the nearest interactable object
+                static bool prevO = false;
+                const bool oDown = SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_O];
+                if (oDown && !prevO)
+                    for (uint32_t a = 0xe393; a < 0xe540; ++a)
+                    {
+                        const int id = rom.u16(a);
+                        std::printf("%x: %d (0x%x) %s\n", a, id, id,
+                                    db.textOr("base:text/" + std::to_string(id), "").c_str());
+                    }
+                prevO = oDown;
 
                 if (ie)
                     requestGoTo(*ie);
@@ -2669,27 +2837,46 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         buyFromShop(*shopItem);
                     else if (pickIdx >= 0)
                         tryPickup(pickIdx);
+
+                    else if (nearObj && interactions.interact(cur->def->id, *nearObj))
+                    {
+                    }
                     else if (gp::NpcActor *t = nearestNpc())
-                        talkToNpc(*t);
+                        walk::talkToNpc(svc, *t);
                     else if (outdoors)
                         startDig(); // misses and duds play the no-item reaction
                 }
             }
 
-            const int camX = clampCam(pos.x - W / 2, cur->img.w, W);
-            const int camY = clampCam(pos.y - kCamY, cur->img.h, H);
-            cur->runtime->updateVisible(camX, camY);
+            renderAlpha = smoothCam ? float(std::min(acc * kTickHz, 1.0)) : 1.f;
+            const float petFX = smoothAt(prevPos.x, pos.x), petFY = smoothAt(prevPos.y, pos.y); // pet's drawn position
+            const float camX = clampCamF(petFX - W / 2, cur->img.w, W);
+            const float camY = clampCamF(petFY - kCamY, cur->img.h, H);
+            cur->runtime->updateVisible(int(std::floor(camX)), int(std::floor(camY)));
 
             // ---- DRAW ----
             SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
             SDL_RenderClear(ren);
-            SDL_Rect dst{-camX, -camY, cur->img.w, cur->img.h};
-            SDL_RenderCopy(ren, tex, nullptr, &dst);
+            SDL_FRect dst{-camX, -camY, float(cur->img.w), float(cur->img.h)};
+            SDL_RenderCopyF(ren, tex, nullptr, &dst);
 
             for (const gp::Hole &h : events.holes())
                 if (h.area == cur->def->legacyId)
                     drawGroundSprite(gp::uiSpriteId(kHoleSprite, kEvPal), h.x, h.y, camX, camY);
 
+            // Shadows first, so they lie on the ground under every sprite (layer 0x4000 in the original).
+            for (int idx : cur->runtime->visible())
+            {
+                const gp::ObjectDef *o = cur->runtime->objects()[size_t(idx)];
+                const int sprite = shadowFor(o->type);
+                if (sprite >= 0)
+                    drawShadowSprite(gp::uiSpriteId(sprite, 0x28c), o->x, o->y + 1, camX, camY);
+            }
+            for (const gp::NpcActor &n : npcs)
+                drawNpcShadow(n, camX, camY);
+            for (const gp::WorldItem &e : events.events())
+                if (e.area == cur->def->legacyId && e.state == gp::EventState::Visible)
+                    drawItemShadow(e.item, e.x, e.y, camX, camY);
             auto drawPet = [&]()
             {
                 const bool faceRight = !(facing == 2 && faceLeft);
@@ -2718,36 +2905,37 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 const int f = walking ? (walkTicks * kFrameRate / 30) % n
                                       : std::min(animFrame, n - 1);
                 const gp::SpriteFrame &s = A.anim->frames[f];
+                drawShadow(s.w, petFX, petFY, sp == 2, camX, camY); // DrawEntitySpriteWithShadow
 
                 const int ax = s.anchorX, ay = s.anchorY;
-                int x;
+                float x;
                 if (!flip)
-                    x = pos.x - camX - ax + s.dx;
+                    x = petFX - camX - ax + s.dx;
                 else if (flipMode == 0)
-                    x = pos.x - camX + ax - s.dx - s.w;
+                    x = petFX - camX + ax - s.dx - s.w;
                 else
                 {
                     // hypothesis: record word 2 gives the flipped x; the owner x is the sprite's right edge
-                    const int X = pos.x - camX + s.dr;
+                    const float X = petFX - camX + s.dr;
                     x = ax != 0 ? X - s.w : X;
                 }
-                int y = pos.y - camY - ay + s.dy;
+                float y = petFY - camY - ay + s.dy;
                 x += offX;
                 y += offY;
 
-                SDL_Rect r{x, y, s.w, s.h};
-                SDL_RenderCopyEx(ren, (*A.tex)[f], nullptr, &r, 0, nullptr,
-                                 flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+                SDL_FRect r{x, y, float(s.w), float(s.h)};
+                SDL_RenderCopyExF(ren, (*A.tex)[f], nullptr, &r, 0, nullptr,
+                                  flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
 
                 // marker 1 (magenta): the pet's position
-                SDL_SetRenderDrawColor(ren, 255, 0, 255, 255);
-                SDL_Rect dot{pos.x - camX - 1, pos.y - camY - 1, 3, 3};
-                SDL_RenderFillRect(ren, &dot);
+                // SDL_SetRenderDrawColor(ren, 255, 0, 255, 255);
+                // SDL_FRect dot{petFX - camX - 1, petFY - camY - 1, 3.f, 3.f};
+                // SDL_RenderFillRectF(ren, &dot);
 
                 // marker 2 (green): bottom-centre of the drawn sprite
-                SDL_SetRenderDrawColor(ren, 0, 255, 0, 255);
-                SDL_Rect dot2{x + s.w / 2 - 1, y + s.h - 1, 3, 3};
-                SDL_RenderFillRect(ren, &dot2);
+                // SDL_SetRenderDrawColor(ren, 0, 255, 0, 255);
+                // SDL_FRect dot2{x + s.w / 2 - 1, y + s.h - 1, 3.f, 3.f};
+                // SDL_RenderFillRectF(ren, &dot2);
             };
 
             // One y-sorted pass: objects, NPCs and the pet all sort by their feet anchor y. At equal y, objects
@@ -2767,7 +2955,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             for (const gp::NpcActor &n : npcs)
                 items.push_back({n.y(), 1, &n});
 
-            for (const gp::PendingEvent &e : events.events())
+            for (const gp::WorldItem &e : events.events())
             {
                 if (e.area != cur->def->legacyId)
                     continue;
@@ -2796,12 +2984,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     if (A.size())
                     {
                         const gp::SpriteFrame &s = A.anim->frames[0];
-                        SDL_Rect r{e.x - camX - s.anchorX + s.dx, e.y - camY - s.anchorY + s.dy, s.w, s.h};
-                        SDL_RenderCopy(ren, (*A.tex)[0], nullptr, &r);
+                        SDL_FRect r{e.x - camX - s.anchorX + s.dx, e.y - camY - s.anchorY + s.dy, float(s.w), float(s.h)};
+                        SDL_RenderCopyF(ren, (*A.tex)[0], nullptr, &r);
                     }
                 }
                 else if (it.kind == 4)
-                    drawEvent(*static_cast<const gp::PendingEvent *>(it.p), camX, camY);
+                    drawEvent(*static_cast<const gp::WorldItem *>(it.p), camX, camY);
                 else if (it.kind == 5)
                 {
                     const AnimRef A = animRefById("base:anim/" + std::to_string(overId) + "@28c");
@@ -2809,9 +2997,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     {
                         const int f = std::min(overTicks * kBubbleFps / 30, int(A.size()) - 1);
                         const gp::SpriteFrame &s = A.anim->frames[f];
-                        const int ox = pos.x - camX, oy = pos.y - camY + digAnimDY;
-                        SDL_Rect r{ox - s.anchorX + s.dx, oy - s.anchorY + s.dy, s.w, s.h};
-                        SDL_RenderCopy(ren, (*A.tex)[f], nullptr, &r);
+                        const float ox = petFX - camX, oy = petFY - camY + digAnimDY;
+                        SDL_FRect r{ox - s.anchorX + s.dx, oy - s.anchorY + s.dy, float(s.w), float(s.h)};
+                        SDL_RenderCopyF(ren, (*A.tex)[f], nullptr, &r);
                     }
                 }
                 else
@@ -2823,21 +3011,22 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 const int pi = events.nearestPrompt(cur->def->legacyId, pos.x, pos.y);
                 if (pi >= 0)
                 {
-                    const gp::PendingEvent &e = events.events()[size_t(pi)];
+                    const gp::WorldItem &e = events.events()[size_t(pi)];
                     const AnimRef A = animRefById(reactAnimId(kPromptArrowAnim, kEvPal));
                     if (A.size())
                     {
                         const int f = int(SDL_GetTicks() * 18ull / 1000) % int(A.size());
                         const gp::SpriteFrame &s = A.anim->frames[f];
-                        const int ax = e.x - camX, ay = e.y - camY - 24; // GUESS: height above the item
-                        SDL_Rect r{ax - s.anchorX + s.dx, ay - s.anchorY + s.dy, s.w, s.h};
-                        SDL_RenderCopy(ren, (*A.tex)[f], nullptr, &r);
+                        const float ax = e.x - camX, ay = e.y - camY - 24; // GUESS: height above the item
+                        SDL_FRect r{ax - s.anchorX + s.dx, ay - s.anchorY + s.dy, float(s.w), float(s.h)};
+                        SDL_RenderCopyF(ren, (*A.tex)[f], nullptr, &r);
                     }
                 }
             }
             drawQuestHud(barBusy == 0 && feedStep == 0 && digStep == 0 && !im.open && !statsOpen, true);
             if (dialogue.open())
                 drawDialogue(*dialogue.box);
+            minigames.draw(renderAlpha);
             if (showStats)
             {
                 constexpr int kRow = 16; // raise if letters still overlap
@@ -2947,7 +3136,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (bar.isOpen() && barBusy == 2)
                 gp::drawBarCursor(barGfx, rom, barInHouse, bar.selected(), barHost.pressed);
             static bool prevFullUi = false; // or a local declared before the loop
-            const bool fullUi = im.open || statsOpen;
+            const bool fullUi = im.open;
             if (fullUi != prevFullUi)
             {
                 prevFullUi = fullUi;
@@ -2971,16 +3160,13 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             SDL_RenderPresent(ren);
         }
         saveGame();
+        SDL_RenderSetIntegerScale(ren, oldIntScale); // the renderer outlives this run: hand it back as we found it
         // the renderer outlives this run now, so free what we made
         SDL_DestroyTexture(tex);
         SDL_DestroyTexture(bgTex);
         SDL_DestroyTexture(statsBgTex);
-        for (auto &kv : animTex)
-            for (SDL_Texture *t : kv.second)
-                SDL_DestroyTexture(t);
-        for (auto &kv : objTex)
-            if (kv.second)
-                SDL_DestroyTexture(kv.second);
+        SDL_DestroyTexture(swiftBgTex);
+        // anim and object textures are freed by ~SpriteCache
         return backToMenu ? gp::kRunToMenu : gp::kRunQuit;
     }
     catch (const std::exception &e)
@@ -2998,7 +3184,7 @@ int main(int argc, char **argv)
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc < 3)
     {
-        std::printf("usage: walk <rom> <area> [--collision]\n");
+        std::printf("usage: walk <rom> <area> [--collision] [--slot N] [--smooth]\n");
         return 1;
     }
     bool showCollision = false;
@@ -3007,6 +3193,8 @@ int main(int argc, char **argv)
     {
         if (std::strcmp(argv[i], "--collision") == 0)
             showCollision = true;
+        else if (std::strcmp(argv[i], "--smooth") == 0)
+            smoothCam = true;
         else if (std::strcmp(argv[i], "--slot") == 0 && i + 1 < argc)
             slot = std::clamp(std::atoi(argv[++i]), 0, 2);
     }

@@ -7,6 +7,7 @@
 
 namespace gp
 {
+    // Kept only for old callers. Saves no longer use it.
     inline int npcIndexOf(const std::string &id) // "base:npc/48" -> 48
     {
         const size_t p = id.rfind('/');
@@ -24,14 +25,11 @@ namespace gp
         s.setInt("appearance", p.appearance);
         s.setInt("illness", p.illnessId);
         s.setInt("tricksKnown", p.tricksKnown);
-        s.setUInt("eventTriggers", p.eventTriggers);
         s.setList("personality", std::vector<int>(p.personality.begin(), p.personality.end()));
         s.setList("care", std::vector<int>(p.care.begin(), p.care.end()));
-        std::vector<int> friends;
-        for (const std::string &id : p.friended)
-            if (const int i = npcIndexOf(id); i >= 0)
-                friends.push_back(i);
-        s.setList("friends", friends);
+        s.setIdList("friendIds", p.friended); // string ids, so mod NPCs survive a save
+        s.setIdMap("itemIds", p.inventory);
+        s.setIdList("flagIds", p.flags);
     }
 
     inline void loadPlayer(const SaveData &s, Player &p)
@@ -47,7 +45,9 @@ namespace gp
         if (s.has("tricksKnown"))
             p.tricksKnown = std::max(0, s.getInt("tricksKnown"));
         if (s.has("eventTriggers"))
-            p.eventTriggers = s.getUInt("eventTriggers");
+            for (int n = 0; n < 32; ++n)
+                if (s.getUInt("eventTriggers") >> n & 1u)
+                    p.setTrigger(n);
         if (s.has("species"))
             p.species = std::clamp(s.getInt("species"), 0, 2);
         if (s.has("colour"))
@@ -58,12 +58,19 @@ namespace gp
             p.personality[i] = std::clamp(per[i], 0, kMaxPersonality);
         for (size_t i = 0; i < care.size() && i < p.care.size(); ++i)
             p.care[i] = std::clamp(care[i], 0, kMaxCare);
-        if (s.has("friends"))
+
+        if (s.has("friendIds")) // v3
+            p.friended = s.getIdList("friendIds");
+        else if (s.has("friends")) // v2: NPC numbers
         {
             p.friended.clear();
             for (int i : s.getList("friends"))
                 p.friended.insert("base:npc/" + std::to_string(i));
         }
+        if (s.has("itemIds"))
+            p.inventory = s.getIdMap("itemIds");
+        if (s.has("flagIds"))
+            p.flags = s.getIdList("flagIds");
     }
 
     inline void createNewSave(int slot, const std::string &name, int species, int colour)
@@ -75,7 +82,7 @@ namespace gp
         p.questsCompleted = 1; // the ROM's counter starts at 1
         SaveData s;
         savePlayer(p, s);
-        s.setInt("version", 2);
+        s.setInt("version", 3);
         saveToFile(slotPath(slot), s);
     }
 }

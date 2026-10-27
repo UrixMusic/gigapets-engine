@@ -35,7 +35,7 @@ namespace gp
         {
             const int c = int16_t(w(p));
             if (c == -1) break;
-            v.push_back({c, int(w(p + 1)), int(w(p + 2))});
+            v.push_back({c, legacyItemId(int(w(p + 1))), int(w(p + 2))});
         }
         return v;
     }
@@ -70,7 +70,7 @@ namespace gp
     QuestRomTables importQuestTables(const Word &w)
     {
         QuestRomTables t;
-        for (int i = 0; i < 0x43; ++i) t.itemWeights.push_back({int(w(0xc4c5 + 2 * i)), int(w(0xc4c6 + 2 * i))});
+        for (int i = 0; i < 0x43; ++i) t.itemWeights.push_back({legacyItemId(int(w(0xc4c5 + 2 * i))), int(w(0xc4c6 + 2 * i))});
         for (int a = 0; a < 10; ++a)
             for (int b = 0; b < 10; ++b) t.distance[a][b] = int16_t(w(0xe339 + a * 10 + b));
         return t;

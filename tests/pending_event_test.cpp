@@ -69,7 +69,7 @@ static void testSpawn() {
     const RandFn rnd = makeRandFn(g);
 
     for (int iter = 0; iter < 50; ++iter) {
-        PendingEventTable t;
+        WorldItems t;
         t.enterArea(gridArea(20), rnd);
         CHECK(t.size() == 6);
         std::set<int> slots;
@@ -83,14 +83,14 @@ static void testSpawn() {
     }
 
     {   // count clamps to the number of spawn points
-        PendingEventTable t;
+        WorldItems t;
         t.enterArea(gridArea(3), rnd);
         CHECK(t.size() == 3);
         t.enterArea(gridArea(3), rnd);                   // re-entry clears non-persistent, respawns
         CHECK(t.size() == 3);
     }
     {   // persistent events survive entry and count against the clamp
-        PendingEventTable t;
+        WorldItems t;
         t.spawn(0, 0xffff, 50, 10, 10, EventState::Visible, true, false, 0xffff);
         t.enterArea(gridArea(20), rnd);
         CHECK(t.size() == 7);
@@ -99,7 +99,7 @@ static void testSpawn() {
         CHECK(t.countForArea(0) == 1 && t.countForArea(1) == 6);
     }
     {   // holes within 30 px block a point; the one free point is always picked
-        PendingEventTable t;
+        WorldItems t;
         const AreaDef sp = gridArea(4);
         t.addHole({50, 50, 0, 900});
         t.addHole({160, 40, 0, 901});
@@ -107,13 +107,13 @@ static void testSpawn() {
         CHECK(t.spawnRandom(sp, 1, rnd) == 1);
         CHECK(t.events()[0].spawnSlot == 3);
         t.addHole({350, 50, 0, 903});                       // now every point is blocked
-        PendingEventTable u;
+        WorldItems u;
         u.addHole({50, 50, 0, 1}); u.addHole({150, 50, 0, 2}); u.addHole({250, 50, 0, 3}); u.addHole({350, 50, 0, 4});
         CHECK(u.spawnRandom(sp, 1, rnd) == 0);           // gives up after 200 tries, no hang
         CHECK(u.size() == 0);
     }
     {   // refill gate
-        PendingEventTable t;
+        WorldItems t;
         const AreaDef sp = gridArea(10, 2);
         CHECK(!t.refillOne(sp, 1, rnd));                 // quest active
         CHECK(t.refillOne(sp, 0, rnd));
@@ -125,7 +125,7 @@ static void testSpawn() {
 
 static void testDig() {
     {
-        PendingEventTable t;
+        WorldItems t;
         uint32_t flags = 0;
         t.spawn(0, 0xffff, 13, 200, 200, EventState::HiddenQuest, false, false, 5);
         t.spawn(0, 7, 0, 500, 500, EventState::BuriedRandom, false, false, kNone);   // dud
@@ -133,33 +133,33 @@ static void testDig() {
 
         CHECK(t.dig(0, 400, 400, flags, constRng(0)).kind == DigResult::Kind::Miss);
         CHECK(t.dig(0, 230, 200, flags, constRng(0)).kind == DigResult::Kind::Miss); // |dx| = 30 is outside
-        DigResult r = t.dig(0, 229, 171, flags, constRng(0));                        // |dx|,|dy| = 29, 29
+        DigResult r = t.dig(0, 229, 171, flags, constRng(1));                        // |dx|,|dy| = 29, 29
         CHECK(r.kind == DigResult::Kind::Item);
         CHECK(r.item == 13 && r.triggerSet && flags == (1u << 5));
-        const PendingEvent& e = t.events()[size_t(r.index)];
-        CHECK(e.state == EventState::Visible && e.x == 220 && e.y == 207);           // roll 0 -> +20, y +7
-        CHECK(t.holes().size() == 1 && t.holes()[0].x == 200 && t.holes()[0].y == 200);
+        const WorldItem& e = t.events()[size_t(r.index)];
+        CHECK(e.state == EventState::Visible && e.x == 249 && e.y == 178);           // roll 1 of RandRange(1, 3) -> dig point x +20, y +7
+        CHECK(t.holes().size() == 3 && t.holes()[2].x == 229 && t.holes()[2].y == 171); // every dig leaves a hole at the dig point: 2 misses, then the hit
         CHECK(t.dig(0, 200, 200, flags, constRng(0)).kind == DigResult::Kind::Miss); // already visible
 
-        r = t.dig(0, 500, 500, flags, constRng(0));
+        r = t.dig(0, 500, 500, flags, constRng(1));
         CHECK(r.kind == DigResult::Kind::Dud);
         CHECK(t.size() == 2);                                                        // dud slot deleted
         CHECK(flags == (1u << 5));
-        CHECK(t.holes().size() == 2);
+        CHECK(t.holes().size() == 5);                                                 // + the already-visible miss and the dud (ring holds 5)
         for (const auto& ev : t.events()) if (ev.area == 1) CHECK(ev.state == EventState::BuriedRandom);
     }
-    {   // roll != 0 -> -20; trigger 0xffff sets no flag
-        PendingEventTable t;
+    {   // roll 2 -> -20; trigger 0xffff sets no flag
+        WorldItems t;
         uint32_t flags = 0;
         t.spawn(0, 3, 2, 300, 300, EventState::BuriedRandom, false, false, 0xffff);
-        const DigResult r = t.dig(0, 300, 300, flags, constRng(1));
+        const DigResult r = t.dig(0, 300, 300, flags, constRng(2));
         CHECK(r.kind == DigResult::Kind::Item && !r.triggerSet && flags == 0);
         CHECK(t.events()[0].x == 280 && t.events()[0].y == 307);
     }
 }
 
 static void testHoleRing() {
-    PendingEventTable t;
+    WorldItems t;
     uint32_t flags = 0;
     for (int i = 0; i < 6; ++i) t.spawn(0, i, 2, 100 + 100 * i, 100, EventState::BuriedRandom, false, false, kNone);
     for (int i = 0; i < 5; ++i) {
@@ -179,7 +179,7 @@ static void testHoleRing() {
 
 static void testTableLimits() {
     {
-        PendingEventTable t;
+        WorldItems t;
         t.spawn(0, 0xffff, 1, 0, 0, EventState::Visible, true, false, 0xffff);
         for (int i = 1; i < kEventTableMax; ++i) t.spawn(0, 0xffff, 100 + i, i, 0, EventState::Visible, false, false, 0xffff);
         CHECK(t.size() == kEventTableMax);
@@ -190,7 +190,7 @@ static void testTableLimits() {
         CHECK(t.events().back().item == 999);
     }
     {
-        PendingEventTable t;
+        WorldItems t;
         for (int i = 0; i < kEventTableMax; ++i) t.spawn(0, 0xffff, 1, i, 0, EventState::Visible, true, false, 0xffff);
         CHECK(t.spawn(0, 0xffff, 2, 0, 0, EventState::Visible, false, false, 0xffff) == -1);
         CHECK(t.size() == kEventTableMax);
@@ -200,7 +200,7 @@ static void testTableLimits() {
 static void testPickup() {
     std::map<int, int> held;
     int granted = 0;
-    PendingEventTable t;
+    WorldItems t;
     PickupEnv env;
     env.held = [&](int it) { auto f = held.find(it); return f == held.end() ? 0 : f->second; };
     env.capacity = [](int) { return 3; };
@@ -234,7 +234,7 @@ static void testPickup() {
 }
 
 static void testPrompt() {
-    PendingEventTable t;
+    WorldItems t;
     t.spawn(0, 0xffff, 2, 100, 100, EventState::Visible, false, false, 0xffff);       // 0
     t.spawn(0, 0xffff, 2, 110, 100, EventState::Visible, false, false, 0xffff);       // 1
     t.spawn(0, 1, 2, 101, 100, EventState::BuriedRandom, false, false, 0xffff);       // buried: never a target

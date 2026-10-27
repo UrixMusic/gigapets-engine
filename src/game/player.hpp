@@ -41,6 +41,8 @@ namespace gp
     // with the other constants
     constexpr int kMaxMoney = 99999; // 0x1869f, AdjustPlayerMoney's cap
 
+    inline std::string triggerKey(int n) { return "base:trigger/" + std::to_string(n); }
+
     struct Player
     {
         std::array<int, kNumPersonality> personality{};
@@ -65,8 +67,9 @@ namespace gp
         std::set<std::string> encountered; // g_unlockActive (session only, no save call seen)
         uint32_t lastEncounterTick = 0;    // g_lastEncounterTick (0 = never)
 
-        uint32_t eventTriggers = 0; // g_eventTriggeredFlags (saved)
-        bool hasTrigger(int n) const { return n >= 0 && n < 32 && ((eventTriggers >> n) & 1u) != 0; }
+        // player.hpp: replace the bit twiddling, delete the eventTriggers member
+        bool hasTrigger(int n) const { return hasFlag(triggerKey(n)); }
+        void setTrigger(int n) { setFlag(triggerKey(n)); }
 
         bool isFriended(const std::string &id) const { return friended.count(id) != 0; }
         void markFriended(const std::string &id) { friended.insert(id); } // MarkNPCFriended
