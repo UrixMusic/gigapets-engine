@@ -86,6 +86,77 @@ inline void bindScripts(WalkServices &svc)
     { return svc.player.hasFlag(flag); };
     api.setFlag = [&svc](const std::string &flag)
     { svc.player.setFlag(flag); };
+
+    // The pet's stats. The host has checked the names against careStatNames() / personalityStatNames(); the mapping
+    // below must cover every one of them. Changes go through Player::adjustCare / adjustPersonality, so the game's own
+    // rules apply (clamping, negative care ignored until 4 quests, halos / lightbulbs clearing "encountered") and the
+    // callbacks report the change that was actually made. (AddToStatCounter is not called: the counters are not stored yet.)
+    auto careStat = [](const std::string &name, gp::CareStat &out)
+    {
+        static const std::pair<const char *, gp::CareStat> t[] = {{"hunger", gp::Hunger},         {"health", gp::Health},
+                                                                  {"happiness", gp::Happiness},   {"tiredness", gp::Tiredness},
+                                                                  {"cleanliness", gp::Cleanliness}};
+        for (const auto &[n, s] : t)
+            if (name == n)
+            {
+                out = s;
+                return true;
+            }
+        return false;
+    };
+    auto personalityStat = [](const std::string &name, gp::PersonalityStat &out)
+    {
+        static const std::pair<const char *, gp::PersonalityStat> t[] = {{"halos", gp::Halos},   {"pitchforks", gp::Pitchforks},
+                                                                         {"stars", gp::Stars}, {"lightbulbs", gp::Lightbulbs}};
+        for (const auto &[n, s] : t)
+            if (name == n)
+            {
+                out = s;
+                return true;
+            }
+        return false;
+    };
+    api.getCare = [&svc, careStat](const std::string &name)
+    {
+        gp::CareStat s;
+        return careStat(name, s) ? svc.player.care[s] : 0;
+    };
+    api.adjustCare = [&svc, careStat](const std::string &name, int delta)
+    {
+        gp::CareStat s;
+        if (!careStat(name, s))
+            return 0;
+        const int before = svc.player.care[s];
+        svc.player.adjustCare(s, delta);
+        return svc.player.care[s] - before;
+    };
+    api.getPersonality = [&svc, personalityStat](const std::string &name)
+    {
+        gp::PersonalityStat s;
+        return personalityStat(name, s) ? svc.player.personality[s] : 0;
+    };
+    api.adjustPersonality = [&svc, personalityStat](const std::string &name, int delta)
+    {
+        gp::PersonalityStat s;
+        if (!personalityStat(name, s))
+            return 0;
+        const int before = svc.player.personality[s];
+        svc.player.adjustPersonality(s, delta);
+        return svc.player.personality[s] - before;
+    };
+
+    // Money: Player::adjustMoney clamps to 0..99999 and returns the change made. (AddToLifetimeEarnings is not ported.)
+    api.getMoney = [&svc]
+    { return svc.player.money; };
+    api.adjustMoney = [&svc](int delta)
+    { return svc.player.adjustMoney(delta); };
+    // Illness: the host's illnessNames() order is the ROM illness number 0..9, and Player::illnessId uses the same
+    // numbers (kHealthy = 10 for none), so no name table is needed here. The pet's sick / medicine animations are not
+    // started from here; they belong to the use / eat flows in walk.cpp.
+    api.getIllness = [&svc]
+    { return svc.player.isHealthy() ? -1 : svc.player.illnessId; };
+    api.setIllness = [&svc](int illness)
+    { svc.player.illnessId = illness < 0 ? gp::kHealthy : illness; };
 }
 
 } // namespace walk

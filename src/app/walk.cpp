@@ -291,6 +291,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             { return db.hasNpc(id); };
             targets.areaExists = [&](const std::string &id)
             { return db.area(id) != nullptr; };
+            targets.itemExists = [&](const std::string &id)
+            { return db.item(id) != nullptr; };
             const std::vector<std::string> hookProblems = gp::validateHooks(scripts, targets);
             for (const std::string &p : hookProblems)
                 std::fprintf(stderr, "script error: %s\n", p.c_str());
@@ -2002,6 +2004,16 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (idx >= im.filtered.size())
                 return;
             const gp::ItemDef &d = itemDefs[im.filtered[idx]];
+
+            // Item.hooks(id).onItemUse: a script that returns false takes the whole use over (no eating, no medicine,
+            // nothing consumed unless the script takes it). The menu closes so it is rebuilt from the new inventory.
+            if (scripts.fireItemUse(d.id).suppress)
+            {
+                im.open = false;
+                barBusy = 0;
+                barAnim.visible = false;
+                return;
+            }
 
             if (d.type == int(gp::ItemType::Medicine))
             {

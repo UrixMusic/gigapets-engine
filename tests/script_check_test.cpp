@@ -1,6 +1,6 @@
 // script_check_test.cpp - hook validation (bad targets, bad hook names) and runtime error reporting.
 // Needs only script_check.hpp, script_host.hpp and Lua.
-#include "../script_check.hpp"
+#include "../mods/script_check.hpp"
 #include <cstdio>
 
 static int fails = 0;
@@ -23,6 +23,7 @@ static gp::HookTargets targets()
     gp::HookTargets t;
     t.npcExists = [](const std::string &id) { return id == "base:npc/66" || id == "m:npc/ok"; };
     t.areaExists = [](const std::string &id) { return id == "base:area/0" || id == "m:area/ok"; };
+    t.itemExists = [](const std::string &id) { return id == "base:item/5" || id == "m:item/ok"; };
     return t;
 }
 
@@ -77,6 +78,29 @@ int main()
         const auto p = gp::validateHooks(h, targets());
         CHECK(p.size() == 2);
         CHECK(has(at(p, 0) + at(p, 1), "valid: onInteract") && has(at(p, 0) + at(p, 1), "valid: onTalkStart, onTalk"));
+    }
+    // --- item hooks: an item that does not exist, a wrong hook name, and a good one (base items work too) ---
+    {
+        gp::ScriptHost h;
+        CHECK(h.runString("m",
+                          "local I = Item.hooks('m:item/ok'); function I:onItemUse(ctx) end\n"
+                          "local B = Item.hooks('base:item/5'); function B:onItemUse(ctx) end\n"));
+        CHECK(gp::validateHooks(h, targets()).empty());
+
+        gp::ScriptHost bad;
+        CHECK(bad.runString("m",
+                            "Item.hooks('m:item/typo')\n"
+                            "local I = Item.hooks('m:item/ok'); function I:onUseItem(ctx) end\n"
+                            "local N = Npc.hooks('m:item/ok'); function N:onItemUse(ctx) end\n"));
+        const auto p = gp::validateHooks(bad, targets());
+        CHECK(p.size() == 4); // missing item, wrong item hook name, missing NPC, and onItemUse is not an NPC hook
+        std::string all;
+        for (const auto &s : p)
+            all += s + "\n";
+        CHECK(has(all, "Item.hooks(\"m:item/typo\"): no such item"));
+        CHECK(has(all, "onUseItem") && has(all, "valid: onItemUse")); // a transposed name is not a typo of the right case
+        CHECK(has(all, "Npc.hooks(\"m:item/ok\")") && has(all, "no such NPC"));
+        CHECK(has(all, "defines 'onItemUse'") && has(all, "valid: onTalkStart, onTalk"));
     }
     // --- an unset predicate skips that check; two mods are attributed separately ---
     {

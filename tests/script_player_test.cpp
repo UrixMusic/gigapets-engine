@@ -145,6 +145,115 @@ int main()
         CHECK(!h.fireNpcTalk("beta:npc/b", 0, 0)); // and the hook is now off for the session
         CHECK(h.errors().size() == 1 && h.errors()[0].find("[beta]") == 0);
     }
+    // --- pet stats: care / personality read and adjust, by name, reporting the change actually made ---
+    {
+        gp::ScriptHost h;
+        std::map<std::string, int> care{{"hunger", 40}, {"health", 100}, {"happiness", 0}, {"tiredness", 70}, {"cleanliness", 10}};
+        std::map<std::string, int> pers{{"halos", 9990}, {"pitchforks", 5}, {"stars", 0}, {"lightbulbs", 0}};
+        h.api().getCare = [&](const std::string &s) { return care.at(s); };
+        h.api().adjustCare = [&](const std::string &s, int d) // clamped to 0..100 like Player::adjustCare
+        {
+            const int before = care.at(s);
+            care[s] = std::max(0, std::min(100, before + d));
+            return care[s] - before;
+        };
+        h.api().getPersonality = [&](const std::string &s) { return pers.at(s); };
+        h.api().adjustPersonality = [&](const std::string &s, int d)
+        {
+            const int before = pers.at(s);
+            pers[s] = std::max(0, std::min(9999, before + d));
+            return pers[s] - before;
+        };
+        CHECK(h.runString("m",
+                          "assert(player.care('hunger') == 40 and player.personality('halos') == 9990)\n"
+                          "assert(player.adjustCare('hunger', 25) == 25 and player.care('hunger') == 65)\n"
+                          // health is already full (no change); cleanliness clamps at 0; halos clamps at 9999
+                          "assert(player.adjustCare('health', 10) == 0)\n"
+                          "assert(player.adjustCare('tiredness', 100 - player.care('tiredness')) == 30)\n"
+                          "assert(player.adjustCare('cleanliness', -50) == -10)\n"
+                          "assert(player.adjustPersonality('halos', 50) == 9)\n"
+                          "assert(player.adjustPersonality('stars', 100) == 100 and player.personality('stars') == 100)\n"));
+        CHECK(care["hunger"] == 65 && care["tiredness"] == 100 && care["cleanliness"] == 0);
+        CHECK(pers["halos"] == 9999 && pers["stars"] == 100);
+        CHECK(h.errors().empty());
+    }
+    // --- unknown stat names, bad amounts and missing arguments are loud script errors ---
+    {
+        const char *bad[] = {"player.care('hungr')",              "player.adjustCare('halos', 1)", // a personality stat is not a care stat
+                             "player.personality('hunger')",     "player.adjustPersonality('stars')",
+                             "player.adjustCare('hunger', 1.5)", "player.adjustCare('hunger', 10000)",
+                             "player.adjustPersonality('stars', -10000)", "player.care()"};
+        for (const char *code : bad)
+        {
+            gp::ScriptHost h;
+            CHECK(!h.runString("m", code));
+            CHECK(h.errors().size() == 1);
+        }
+        gp::ScriptHost h;
+        CHECK(!h.runString("m", "player.care('hungr')"));
+        CHECK(h.errors()[0].find("unknown stat \"hungr\"") != std::string::npos &&
+              h.errors()[0].find("valid: hunger, health, happiness, tiredness, cleanliness") != std::string::npos);
+        CHECK(!h.runString("m", "player.adjustPersonality('luck', 1)"));
+        CHECK(h.errors()[1].find("valid: halos, pitchforks, stars, lightbulbs") != std::string::npos);
+    }
+    // --- money: clamped like Player::adjustMoney, reports the change made ---
+    {
+        gp::ScriptHost h;
+        int money = 99990;
+        h.api().getMoney = [&] { return money; };
+        h.api().adjustMoney = [&](int d)
+        {
+            const int before = money;
+            money = std::max(0, std::min(99999, money + d));
+            return money - before;
+        };
+        CHECK(h.runString("m",
+                          "assert(player.money() == 99990)\n"
+                          "assert(player.adjustMoney(25) == 9 and player.money() == 99999)\n" // capped
+                          "assert(player.adjustMoney(-99999) == -99999 and player.money() == 0)\n"));
+        CHECK(!h.runString("m", "player.adjustMoney(100000)")); // out of range is a script error
+        CHECK(!h.runString("m", "player.adjustMoney(2.5)"));
+        CHECK(!h.runString("m", "player.adjustMoney()"));
+        CHECK(h.errors().size() == 3);
+    }
+    // --- illness: named ids, nil = healthy, setIllness / cure ---
+    {
+        gp::ScriptHost h;
+        int ill = -1; // the ROM number; -1 = healthy
+        h.api().getIllness = [&] { return ill; };
+        h.api().setIllness = [&](int i) { ill = i; };
+        CHECK(h.runString("m", "assert(player.illness() == nil and player.cure() == false)")); // healthy: nothing to cure
+        CHECK(h.runString("m", "player.setIllness('panda_pox')"));
+        CHECK(ill == 2); // the position in illnessNames() is the ROM number
+        CHECK(h.runString("m", "assert(player.illness() == 'panda_pox')"));
+        CHECK(h.runString("m", "assert(player.cure() == true and player.illness() == nil)"));
+        CHECK(ill == -1);
+        for (size_t i = 0; i < gp::ScriptHost::illnessNames().size(); ++i) // every name round-trips
+        {
+            CHECK(h.runString("m", "player.setIllness('" + gp::ScriptHost::illnessNames()[i] + "')"));
+            CHECK(ill == int(i));
+        }
+        ill = 10; // an out-of-range number from the game reads as healthy
+        CHECK(h.runString("m", "assert(player.illness() == nil)"));
+        CHECK(h.errors().empty());
+        CHECK(!h.runString("m", "player.setIllness('measles')"));
+        CHECK(h.errors().size() == 1 && h.errors()[0].find("unknown illness \"measles\"") != std::string::npos &&
+              h.errors()[0].find("valid: dog_breath, gone_bananas, panda_pox, cold") != std::string::npos);
+        CHECK(!h.runString("m", "player.setIllness(nil)")); // nil is not a name: use player.cure()
+        CHECK(!h.runString("m", "player.setIllness()"));
+        CHECK(ill == 10);
+    }
+    // --- a game that has not wired the stats: reads and changes are 0, nothing breaks ---
+    {
+        gp::ScriptHost h;
+        CHECK(h.runString("m",
+                          "assert(player.care('hunger') == 0 and player.personality('stars') == 0)\n"
+                          "assert(player.adjustCare('hunger', 5) == 0 and player.adjustPersonality('stars', 5) == 0)\n"
+                          "assert(player.money() == 0 and player.adjustMoney(5) == 0)\n"
+                          "assert(player.illness() == nil and player.cure() == false)\n"
+                          "player.setIllness('cold')\n"));
+        CHECK(h.errors().empty());
+    }
     std::printf(fails ? "FAILED: %d check(s)\n" : "script_player_test: all passed\n", fails);
     return fails ? 1 : 0;
 }

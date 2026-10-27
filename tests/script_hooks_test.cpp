@@ -175,6 +175,50 @@ int main()
         CHECK(h.fireAreaInteract("m:area/a", "pile").suppress && given == 2);
         CHECK(!h.fireAreaInteract("m:area/a", "tree").suppress && given == 2);
     }
+    // --- Item.hooks(...).onItemUse: ctx.item, ctx.player; return false takes the use over ---
+    {
+        gp::ScriptHost h;
+        wire(h);
+        int taken = 0, given = 0;
+        h.api().take = [&](const std::string &, int n) { taken += n; return n; };
+        h.api().give = [&](const std::string &, int n) { given += n; return n; };
+        CHECK(h.runString("m",
+                          "seen = {}\n"
+                          "local I = Item.hooks('m:item/box')\n"
+                          "function I:onItemUse(ctx)\n"
+                          "  seen[#seen + 1] = ctx.item.id .. '/' .. ctx.player.name\n"
+                          "  player.take(ctx.item.id, 1); player.give('base:item/5', 1)\n"
+                          "  return false\n"
+                          "end\n"
+                          "local P = Item.hooks('m:item/passive')\n"
+                          "function P:onItemUse(ctx) end\n"));
+        auto r = h.fireItemUse("m:item/box");
+        CHECK(r.ran && r.suppress && taken == 1 && given == 1);
+        r = h.fireItemUse("m:item/passive"); // runs, returns nothing: the game's own use goes ahead
+        CHECK(r.ran && !r.suppress);
+        r = h.fireItemUse("m:item/other"); // no hook for this item
+        CHECK(!r.ran && !r.suppress);
+        CHECK(h.runString("m", "assert(#seen == 1 and seen[1] == 'm:item/box/Rex')"));
+        CHECK(h.errors().empty());
+    }
+    // --- item, NPC and area hooks are separate namespaces; an item hook that errors is off for the session and never
+    //     takes over ---
+    {
+        gp::ScriptHost h;
+        CHECK(h.runString("m",
+                          "local N = Npc.hooks('m:x'); function N:onTalkStart(ctx) return false end\n"
+                          "local I = Item.hooks('m:x'); function I:onItemUse(ctx) error('boom') end\n"));
+        CHECK(!h.fireItemUse("m:x").ran && h.errors().size() == 1);
+        CHECK(!h.fireItemUse("m:x").ran && h.errors().size() == 1); // off now: no second report
+        CHECK(h.fireNpcTalkStart("m:x", 0, 0).suppress);            // the NPC hook is unaffected
+    }
+    // --- an item script that loops forever is stopped, and does not take over ---
+    {
+        gp::ScriptHost h;
+        CHECK(h.runString("m", "local I = Item.hooks('m:x'); function I:onItemUse(ctx) while true do end end"));
+        const auto r = h.fireItemUse("m:x");
+        CHECK(!r.ran && !r.suppress && h.errors().size() == 1);
+    }
     std::printf(fails ? "FAILED: %d check(s)\n" : "script_hooks_test: all passed\n", fails);
     return fails ? 1 : 0;
 }

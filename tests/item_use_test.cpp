@@ -65,6 +65,23 @@ int main()
         useItem(p, b, host);
         assert(p.care[Hunger] == 10 && p.care[Health] == 30);
     }
+    { // illnessCureItem: the medicine whose record cures it, else the original table; a scripted medicine is ignored
+        std::vector<ItemDef> items;
+        ItemDef scripted;
+        scripted.id = "m:item/restore";
+        scripted.type = int(ItemType::Medicine);
+        scripted.use.action = "none"; // w9 stays 0, which must not make it the cure for illness 0
+        items.push_back(scripted);
+        ItemDef cure;
+        cure.id = "m:item/cure3";
+        cure.type = int(ItemType::Medicine);
+        cure.use.action = "medicine";
+        cure.use.num["illness"] = 3;
+        items.push_back(cure);
+        assert(illnessCureItem(items, 0) == legacyIllnessCure(0));
+        assert(illnessCureItem(items, 3) == "m:item/cure3");
+        assert(illnessCureItem(items, 9) == legacyIllnessCure(9));
+    }
     { // not owned
         Player p;
         assert(useItem(p, food(0x23, 3), host) == ItemUseResult::NotOwned);

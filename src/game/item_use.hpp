@@ -135,9 +135,13 @@ namespace gp
     inline Id illnessCureItem(const std::vector<ItemDef> &items, int illness)
     {
         for (const ItemDef &d : items)
-            if (d.type == static_cast<int>(ItemType::Medicine) &&
-                detail::param(effectiveUse(d), "illness", d.w9) == illness)
+        {
+            if (d.type != static_cast<int>(ItemType::Medicine))
+                continue;
+            const ItemUseDef u = effectiveUse(d);
+            if (u.action == "medicine" && detail::param(u, "illness", d.w9) == illness) // not a scripted "use: none" medicine
                 return d.id;
+        }
         return legacyIllnessCure(illness);
     }
 
