@@ -33,6 +33,7 @@
 #include "../game/player.hpp"
 #include "../game/save.hpp"
 #include "../game/save_player.hpp" // whatever the savePlayer header is called
+#include "../game/debug_mode.hpp"
 #include "../game/settings.hpp"
 #include "../engine/audio.hpp"
 #include "../engine/display.hpp"
@@ -1424,6 +1425,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             }
             return *slot;
         };
+        gp::DebugCode debugCode;
         bool showOutlines = false; // F8: the old white debug boxes
 
         App app(rom, ren);
@@ -1658,13 +1660,19 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                     continue;
                 }
 
+                if (screen == Screen::Menu && down && !rep && !gp::debugMode() && debugCode.press(k))
+                {
+                    gp::debugMode() = true;
+                    feSound(0x53, 200);
+                    std::printf("debug mode on\n");
+                }
                 if (down && !rep)
                 {
-                    if (k == SDLK_F1)
+                    if (gp::debugMode() && k == SDLK_F1)
                         screen = Screen::Menu;
-                    else if (k == SDLK_F2)
+                    else if (gp::debugMode() && k == SDLK_F2)
                         screen = Screen::Name;
-                    else if (k == SDLK_F3)
+                    else if (gp::debugMode() && k == SDLK_F3)
                         screen = Screen::Browse;
                     else if (k == SDLK_x)
                     {
@@ -1674,30 +1682,30 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                             goMenu();
                         // the other screens handle Escape themselves below
                     }
-                    else if (k == SDLK_F4)
+                    else if (gp::debugMode() && k == SDLK_F4)
                     {
                         smoothCam = !smoothCam;
                         std::printf("smooth mode %s\n", smoothCam ? "on" : "off");
                     }
-                    else if (k == SDLK_F5)
+                    else if (gp::debugMode() && k == SDLK_F5)
                     {
                         app.placeMode = (app.placeMode + 1) % 3;
                         std::printf("placement mode %d\n", app.placeMode);
                     }
-                    else if (k == SDLK_F6)
+                    else if (gp::debugMode() && k == SDLK_F6)
                     {
                         app.swapRB = !app.swapRB;
                         app.clearCaches();
                         std::printf("swapRB %d\n", int(app.swapRB));
                     }
-                    else if (k == SDLK_F7)
+                    else if (gp::debugMode() && k == SDLK_F7)
                     {
                         species = (species + 1) % 4;
                         std::printf("species %d\n", species);
                     }
-                    else if (k == SDLK_F8)
+                    else if (gp::debugMode() && k == SDLK_F8)
                         showOutlines = !showOutlines;
-                    else if (k == SDLK_F9)
+                    else if (gp::debugMode() && k == SDLK_F9)
                     {
                         app.transMode = (app.transMode + 1) % 3;
                         app.clearCaches();
@@ -1739,8 +1747,10 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                         if (k == SDLK_z && !rep)
                             menu.pressed = true, feSound(gp::fe::kSfxConfirm, 0x7f); // ShowMainMenuScreen: 0x2d / 0x59 at volume 0x7f
                         const int d = shift ? 8 : 1;
-                        bool changed = true;
-                        if (k == SDLK_q)
+                        bool changed = gp::debugMode();
+                        if (!changed)
+                            ;
+                        else if (k == SDLK_q)
                             menu.a -= d;
                         else if (k == SDLK_w)
                             menu.a += d;
@@ -2185,7 +2195,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                 break;
             case Screen::Name:
                 app.drawBackground(0x1f, 0x5dd);
-                drawNameEntry(gfx, name, species, SDL_GetTicks() < pressedUntil);
+                drawNameEntry(gfx, name, chosen.species, SDL_GetTicks() < pressedUntil);
                 break;
             case Screen::Browse:
                 app.drawBackground(browseA, browsePal);

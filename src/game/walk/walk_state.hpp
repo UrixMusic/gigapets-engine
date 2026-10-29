@@ -54,8 +54,8 @@ struct Fade
 struct ItemMenu
 {
     bool open = false;
-    int category = 0, tab = 0;
-    gp::MenuSub sub = gp::MenuSub::Grid;
+    int category = 0;
+    gp::ItemTabs tabs; // the category tab list (item_tabs.hpp)
     int firstRow = 1, selRow = 1, selCol = 1;
     std::vector<int> filtered;
 };

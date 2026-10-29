@@ -29,6 +29,7 @@
 #include "../engine/render.hpp"
 #include "../engine/sprite_cache.hpp" // AnimRef, SpriteCache
 #include "../game/menu_draw.hpp"
+#include "../game/item_tabs.hpp"
 #include "../game/menu_bar.hpp"
 #include "../game/item_use.hpp" // at the top with the other includes
 #include "../game/pending_event.hpp"
@@ -40,6 +41,7 @@
 #include "../game/offerings.hpp"
 #include "../game/save.hpp"
 #include "../game/save_player.hpp"
+#include "../game/debug_mode.hpp"
 #include "../game/settings.hpp"
 #include "../game/thought_bubble.hpp"
 #include "../game/pet_voice.hpp"
@@ -510,7 +512,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     {
                     }
 
-        for (int a : {0xe, 0x10, 0x11, 0x12, 0x16, 0x17, 0x18, gp::kStinkAnim, gp::kExclaimIntroAnim, gp::kExclaimOutroAnim, gp::kTrickQuestionBubble, gp::kTrickAnswerBubble, gp::kHaloBubble, gp::kPitchforkBubble, gp::kStarBubble}) // 0xe: the wash bubble; arrow, dig bubble; 0x17/0x18: the thought bubble
+        for (int a : {0xe, 0x10, 0x11, 0x12, 0x16, 0x17, 0x18, gp::kTabAnimIn, gp::kTabAnimOut, gp::kStinkAnim, gp::kExclaimIntroAnim, gp::kExclaimOutroAnim, gp::kTrickQuestionBubble, gp::kTrickAnswerBubble, gp::kHaloBubble, gp::kPitchforkBubble, gp::kStarBubble}) // 0xe: the wash bubble; arrow, dig bubble; 0x17/0x18: the thought bubble
             try
             {
                 gp::importAnim(rom, db, a, 0x28c);
@@ -1829,8 +1831,41 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         auto itemRows = [&]
         { return std::max(1, (int(im.filtered.size()) - 1) / 6 + 1); };
 
-        auto itemMenuTick = [&](uint8_t pressed, bool xPress)
+        auto tabAnimId = [&](bool in)
+        { return gp::Id(std::string("base:anim/") + std::to_string(in ? gp::kTabAnimIn : gp::kTabAnimOut) + "@28c"); };
+        // ItemMenuScreen's input: the grid (Menu opens the tab list), the tab list (Up/Down, Select on release, Cancel/Menu back), and
+        // nothing while the list slides.
+        auto itemMenuTick = [&](uint8_t pressed, bool xPress, bool menuPress, bool zPress, bool zRelease)
         {
+            gp::ItemTabs &tb = im.tabs;
+            if (tb.sliding())
+            {
+                tb.tick(int(animRefById(tabAnimId(tb.sub == gp::MenuSub::ToTabs)).size()));
+                return;
+            }
+            if (tb.inTabs())
+            {
+                if (pressed & gp::DirUp)
+                    tb.press(gp::ItemTabs::Up, im.category);
+                if (pressed & gp::DirDown)
+                    tb.press(gp::ItemTabs::Down, im.category);
+                if (zPress)
+                    tb.press(gp::ItemTabs::Select, im.category);
+                if (xPress)
+                    tb.press(gp::ItemTabs::Cancel, im.category);
+                else if (menuPress)
+                    tb.press(gp::ItemTabs::Menu, im.category);
+                int cat = im.category;
+                if (zRelease && tb.release(cat))
+                {
+                    im.category = cat;
+                    im.filtered = buildFiltered(cat);
+                    im.selRow = im.selCol = im.firstRow = 1;
+                }
+                return;
+            }
+            if (menuPress && tb.openList(im.category))
+                return;
             auto cellValid = [&](int row, int col)
             { return size_t((row - 1) * 6 + col - 1) < im.filtered.size(); };
             int r = im.selRow, c = im.selCol;
@@ -4677,7 +4712,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
                 else if (e.type == SDL_KEYDOWN && !e.key.repeat)
                 {
-                    switch (gp::keys().canonical(e.key.keysym.scancode, e.key.keysym.sym)) // a rebound key acts as its action's default
+                    SDL_Keycode dk = gp::keys().canonical(e.key.keysym.scancode, e.key.keysym.sym); // a rebound key acts as its action's default
+                    if (!gp::debugMode() && dk != SDLK_RETURN && dk != SDLK_TAB)
+                        dk = SDLK_UNKNOWN; // the developer keys need debug mode (typed on the main menu)
+                    switch (dk)
                     {
                     case SDLK_1:
                         anchorMode = 0;
@@ -4867,8 +4905,13 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 // that opens a box can never also close it.
                 const bool zDown = gp::keys().held(k, gp::Action::Select);
                 const bool zPressed = zDown && !prevZ;
+                const bool zReleased = !zDown && prevZ;
                 const bool xDown = gp::keys().held(k, gp::Action::Cancel);
                 const bool xPressed = xDown && !prevX;
+                static bool prevMenu = false;
+                const bool menuDown = gp::keys().held(k, gp::Action::Menu);
+                const bool menuPressed = menuDown && !prevMenu;
+                prevMenu = menuDown;
                 prevX = xDown;
                 prevZ = zDown;
                 if (barAnim.visible)
@@ -4943,8 +4986,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     sellMode = false; // left with X (or nothing left to sell): sell mode is over
                 if (im.open && !dialogue.open()) // a box asked from the item screen is answered first
                 {
-                    itemMenuTick(newlyPressed, xPressed);
-                    if (zPressed && im.open)
+                    itemMenuTick(newlyPressed, xPressed, menuPressed, zPressed, zReleased);
+                    if (zPressed && im.open && im.tabs.inGrid())
                         useSelectedItem();
                     continue; // world frozen while the item screen is up
                 }
@@ -5258,7 +5301,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     medStuck = false;  // real input ends the stuck walk
                     pose = Pose::Move; // any direction input cancels idle/special animations
                     settleTicks = 0;
-                    speedMul = (SDL_GetModState() & KMOD_SHIFT) ? 4 : 1; // temporary test boost
+                    speedMul = (gp::debugMode() && (SDL_GetModState() & KMOD_SHIFT)) ? 4 : 1; // debug mode: Shift sprints
                     for (int rep = 0; rep < speedMul; ++rep)
                         pos = gp::stepPlayer(*world, pos, dirs).pos;
                     const int oldFacing = facing;
@@ -5441,7 +5484,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
                 // debug: press O to dump the nearest interactable object
                 static bool prevO = false;
-                const bool oDown = SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_O];
+                const bool oDown = gp::debugMode() && SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_O];
                 if (oDown && !prevO)
                     for (uint32_t a = 0xe393; a < 0xe540; ++a)
                     {
@@ -5893,7 +5936,22 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 v.totalRows = itemRows();
                 v.category = im.category;
                 gp::drawItemGrid(itemGfx, itemDefs, v, ownedCount, itemName, emptyText);
-                gp::drawTabMarker(itemGfx, rom, im.tab, false, im.sub, -1);
+                {
+                    const gp::ItemTabs &tb = im.tabs;
+                    if (tb.sliding())
+                    {
+                        const AnimRef A = animRefById(tabAnimId(tb.sub == gp::MenuSub::ToTabs));
+                        if (A.size())
+                        {
+                            const gp::SpriteFrame &f = A.anim->frames[size_t(std::min(tb.animFrame(), int(A.size()) - 1))];
+                            const SDL_Rect r{gp::kTabAnimX - f.anchorX + f.dx, gp::kTabAnimY - f.anchorY + f.dy + 1, f.w, f.h};
+                            SDL_Texture *t = (*A.tex)[size_t(std::min(tb.animFrame(), int(A.size()) - 1))];
+                            menuCmds.push_back({0x3000, [=]
+                                                { SDL_RenderCopy(ren, t, nullptr, &r); }});
+                        }
+                    }
+                    gp::drawTabMarker(itemGfx, rom, tb.inTabs() || tb.sliding() ? tb.tab : im.category, tb.pressed, tb.sub, tb.sliding() ? tb.animFrame() : -1);
+                }
                 std::stable_sort(menuCmds.begin(), menuCmds.end(), [](const Cmd &a, const Cmd &b)
                                  { return a.layer < b.layer; });
                 for (Cmd &c : menuCmds)
