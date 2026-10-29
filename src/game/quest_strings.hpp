@@ -42,11 +42,24 @@ namespace gp
         {"status_next", "{where} for your next quest."},
         {"status_complete", "{where} to complete your quest."},
         {"status_find", "Find {list}."},
+        // DrawQuestObjectiveScreen: the headings (ROM 0xd140, 0xd137, 0xd146, 0xd153) and "Me" (0xd150)
+        {"objective_find", "Find:"},
+        {"objective_take", "Take:"},
+        {"objective_bring", "Bring To:"},
+        {"objective_look", "Look In:"},
+        {"objective_me", "Me"},
         // Quest failure and dev placeholders
         {"quest_failed", "Quest failed! Go see {npc} {prep} {area} to try again."},
         {"quest_failed_short", "Quest failed!"},
         {"placeholder_generated", "(generated quest text)"},
-        {"placeholder_accept", "(accept prompt text)"},
+        // The prompt on a generated quest's offer (Yes / No), one of three; and the answer to No. ROM 0xcacb.. and 0xcfc2.. (the
+        // way each is picked is inferred: one of three at random, like the other quest texts)
+        {"accept_1", "Would you please help me with this task?"},
+        {"accept_2", "Can you please help me?"},
+        {"accept_3", "Do you have time to help me with this?"},
+        {"decline_1", "OK. If you change your mind, please come find me again."},
+        {"decline_2", "That's OK. Please come back if you have time to help me later."},
+        {"decline_3", "Please find me again if you feel like working later."},
         // GetAreaNamePreposition (by area tier), and the word that joins the last item of a list
         {"prep_on", "on"},
         {"prep_at", "at"},

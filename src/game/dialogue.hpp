@@ -1,9 +1,11 @@
 #pragma once
+#include <array>
 #include <functional>
 #include <initializer_list>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace gp
 {
@@ -57,6 +59,11 @@ namespace gp
         bool yesSelected = true; // flag 0x12: cursor on Yes (the default is a guess)
         int qty = 1, qtyMax = 1;
         std::function<void(int)> onQuantity;
+        int markX = 0, markY = 0; // Picture: where the "you are here" marker goes on the island map
+        // Quest (type 7, DrawQuestObjectiveScreen): the list ("Find:" or "Take:" with a count and a name per row), where to bring
+        // it ("Me" or "<npc> <prep> <area>"), and where to look (empty = no such row).
+        std::string questHeading, questBringTo, questLookIn;
+        std::vector<std::pair<int, std::string>> questRows;
     };
 
     // PrepareDialogueMessage: the layout comes from the text length (formatted text, terminator included).

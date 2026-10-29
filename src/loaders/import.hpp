@@ -15,6 +15,7 @@
 #include "quest_import.hpp"
 #include "../game/item.hpp"
 #include "../game/item_effects.hpp"
+#include "../game/stat_gate.hpp"
 #include "../loaders/fixed_spots.hpp"
 #include <array>
 #include <cstdio>
@@ -200,6 +201,9 @@ namespace gp
                     d.walkAnim[2] = importAnim(rom, db, kWalkSide[sp], r.appearancePalette);
                     d.turn180Anim = importAnim(rom, db, kTurn180[sp], r.appearancePalette);
                     d.turn90Anim = importAnim(rom, db, kTurn90[sp], r.appearancePalette);
+                    d.idleSideAnim = importAnim(rom, db, kIdleSide[sp], r.appearancePalette); // PlayIdleAnim_Scripted, sideways
+                    d.sickIdleAnim = importAnim(rom, db, kIdleFlagB[sp], r.appearancePalette); // UpdateNPCIdleActivity: flag bit 1
+                    d.sadIdleAnim = importAnim(rom, db, kIdleFlagA[sp], r.appearancePalette);  // flag bit 2
                 }
             }
             if (i >= 0x33)
@@ -612,18 +616,33 @@ namespace gp
         // Swift Pick
         putInteraction(db, 0, 98, "minigame", {}, {{"game", "swift_pick"}});
 
-        // Minigames not built yet; resultCode is the value the original passes to SwitchGameState
-        struct Starter
+        // The player homes and the hotels. These were never minigames: the door sets g_storyInteractionResultCode to the
+        // location (0..2 homes, 4..7 hotels) and switches to the room state (ProcessStoryModeObjectInteraction).
+        struct Door
         {
-            int area, slot, code;
+            int area, slot, location;
         };
-        for (const Starter &s : {Starter{0, 63, 0}, {0, 96, 1}, {0, 81, 2}, {2, 17, 4}, {3, 47, 5}, {6, 48, 6}, {1, 81, 7}})
-            putInteraction(db, s.area, s.slot, "minigame", {{"resultCode", s.code}}, {{"game", "unimplemented"}});
+        for (const Door &s : {Door{0, 63, 0}, {0, 96, 1}, {0, 81, 2}, {2, 17, 4}, {3, 47, 5}, {6, 48, 6}, {1, 81, 7}})
+            putInteraction(db, s.area, s.slot, "room", {{"location", s.location}});
 
         // House signs in area 0: object slot -> save slot
         for (const auto &h : {std::array<int, 2>{62, 0}, {94, 1}, {75, 2}})
             putInteraction(db, 0, h[0], "house_sign", {{"saveSlot", h[1]}},
                            {{"emptyText", str(0xd2b7)}, {"fullText", str(0xd2c0)}}); // "FOR RENT" / "Welcome to the home of %s."
+
+        // The colour machine in the spaceship (area 8, object 1), and the island map sign in Gigatown (area 0, object 0x38).
+        putInteraction(db, 8, 1, "color_machine");
+        putInteraction(db, 0, 0x38, "map");
+
+        // The five stat / money guards in area 5 (stat_gate.hpp): the guard talks, its barrier goes once the condition holds.
+        for (const StatGate &g : kStatGates)
+        {
+            putInteraction(db, kGateArea, g.guard, "message", {}, {{"text", "base:text/" + std::to_string(g.text)}});
+            if (const AreaDef *a = db.areaByLegacy(kGateArea))
+                for (ObjectDef &o : db.areaMutable(a->id)->objects)
+                    if (o.legacySlot == g.barrier)
+                        o.goneOnFlag = gateFlag(kGateArea, g.barrier);
+        }
 
         // Quest-count gates: unlocked text once questsCompleted >= needed
         struct Gate
@@ -734,6 +753,7 @@ namespace gp
         k.thanksText = "base:str/offer/king_thanks";
         k.autoMarkAfterQuests = 0x11;
         k.autoMarkItem = legacyItemId(0xaa);
+        k.rewardItems = {0x10a, 3, 0xb, 0xf, 4, 0xc, 0x10, 0xd, 0x11, 0x5e, 0x14, 0x108}; // RAM 0x1e36..0x1e41, read in MAME
         db.put(std::move(k));
 
         OfferSetDef g;
@@ -741,6 +761,7 @@ namespace gp
         g.npc = "base:npc/64"; // 0x40
         g.items = range(0xdf, 0xea);
         g.thanksText = "base:str/offer/gardenia_thanks";
+        g.rewardItems = {0x10a, 0x107, 3, 0xb, 0xf, 4, 0xc, 0x10, 0xd, 0x11, 0x5f, 0x15}; // RAM 0x1e2a..0x1e35, read in MAME
         db.put(std::move(g));
     }
 

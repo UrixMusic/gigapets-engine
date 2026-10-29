@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <string>
+#include <map>
+#include "frontend.hpp" // starterKit
 #include "player.hpp"
 #include "save.hpp"
 
@@ -25,11 +27,24 @@ namespace gp
         s.setInt("appearance", p.appearance);
         s.setInt("illness", p.illnessId);
         s.setInt("tricksKnown", p.tricksKnown);
+        if (p.trickCodeRolled)
+            s.setList("trickCode", std::vector<int>(p.trickCode.begin(), p.trickCode.end()));
         s.setList("personality", std::vector<int>(p.personality.begin(), p.personality.end()));
         s.setList("care", std::vector<int>(p.care.begin(), p.care.end()));
         s.setIdList("friendIds", p.friended); // string ids, so mod NPCs survive a save
         s.setIdMap("itemIds", p.inventory);
         s.setIdList("flagIds", p.flags);
+        s.setMap("equip", p.equip);
+        s.setInt("tutorialsShown", int(p.tutorialsShown & 0xffffu));
+    }
+
+    // CreateNewPet's SetInventorySlot calls for this species: the home a new pet starts with.
+    inline std::map<int, int> starterEquip(int species)
+    {
+        std::map<int, int> e;
+        for (const auto &slotItem : fe::starterKit(species).equip)
+            e[slotItem[0]] = slotItem[1];
+        return e;
     }
 
     inline void loadPlayer(const SaveData &s, Player &p)
@@ -44,6 +59,13 @@ namespace gp
             p.illnessId = std::clamp(s.getInt("illness", kHealthy), 0, kHealthy);
         if (s.has("tricksKnown"))
             p.tricksKnown = std::max(0, s.getInt("tricksKnown"));
+        const std::vector<int> code = s.getList("trickCode");
+        if (code.size() == p.trickCode.size())
+        {
+            for (size_t i = 0; i < code.size(); ++i)
+                p.trickCode[i] = std::clamp(code[i], 0, 3);
+            p.trickCodeRolled = true;
+        }
         if (s.has("eventTriggers"))
             for (int n = 0; n < 32; ++n)
                 if (s.getUInt("eventTriggers") >> n & 1u)
@@ -71,6 +93,9 @@ namespace gp
             p.inventory = s.getIdMap("itemIds");
         if (s.has("flagIds"))
             p.flags = s.getIdList("flagIds");
+        // Saves from before homes had furnishings start with what CreateNewPet gives that species.
+        p.equip = s.has("equip") ? s.getMap("equip") : starterEquip(p.species);
+        p.tutorialsShown = s.has("tutorialsShown") ? unsigned(s.getInt("tutorialsShown")) & 0xffffu : 0u;
     }
 
     inline void createNewSave(int slot, const std::string &name, int species, int colour)
@@ -80,6 +105,7 @@ namespace gp
         p.species = species;
         p.baseColour = p.appearance = colour;
         p.questsCompleted = 1; // the ROM's counter starts at 1
+        p.equip = starterEquip(species);
         SaveData s;
         savePlayer(p, s);
         s.setInt("version", 3);

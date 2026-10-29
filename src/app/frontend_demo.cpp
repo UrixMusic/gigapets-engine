@@ -33,6 +33,17 @@
 #include "../game/player.hpp"
 #include "../game/save.hpp"
 #include "../game/save_player.hpp" // whatever the savePlayer header is called
+#include "../game/settings.hpp"
+#include "../engine/audio.hpp"
+#include "../engine/display.hpp"
+#include "../engine/keybinds.hpp"
+#include "../game/pet_voice.hpp"
+#include "../game/potion.hpp"
+#include "../game/thought_bubble.hpp"
+
+static void feSound(int id, int volume) { gp::audio().playSfx(id, volume); } // PlaySoundEffect(id, volume, 0)
+// PlaySoundFromCategory(species, category, volume)
+static void feVoice(int species, int category, int volume = 0xbe) { gp::audio().playSfx(gp::petVoiceId(species, category), volume); }
 #include "../game/dialogue.hpp"
 #include "app_context.hpp"
 #include "../loaders/import.hpp" // ContentDB + importRom: that is where the fonts live
@@ -118,11 +129,11 @@ struct MenuView
 inline void drawMainMenu(FrontGfx &g, const MenuView &v)
 {
     constexpr int P = 0x4d5, L = 0x3000, BP = 0x4c7;
-    g.drawTileF(0x9f4, P, v.fb + 0xb8, -1, L);
-    g.drawTileF(0x9f1, P, v.fa, -1, L);
-    g.drawTileF(0x9f3, v.colour[2], v.fa + 0x1b, 0x28, L);
-    g.drawTileF(0x9f0, v.colour[0], v.fa, 0x7b, L);
-    g.drawTileF(0x9f2, v.colour[1], v.fb + 0xcf, 0x44, L);
+    g.drawTileF(0x9f4, P, v.fb + 0xb8, 0, L);
+    g.drawTileF(0x9f1, P, v.fa, 0, L);
+    g.drawTileF(0x9f3, v.colour[2], v.fa + 0x1b, 0x29, L);
+    g.drawTileF(0x9f0, v.colour[0], v.fa, 0x7c, L);
+    g.drawTileF(0x9f2, v.colour[1], v.fb + 0xcf, 0x45, L);
     g.drawTileF(0x9e6, BP, 0x5f, v.fc, L);
     if (!v.ready)
         return;
@@ -174,11 +185,11 @@ inline void drawLoad(Gfx &g, int cur, bool picked, const std::string (&names)[3]
     if (cur < 3 && full[cur])
     {
         if (sp[cur] == 0)
-            g.drawTile(0x9f0, col[cur], 0, 0x7b, L, 999);
+            g.drawTile(0x9f0, col[cur], 0, 0x7c, L, 999);
         if (sp[cur] == 1)
-            g.drawTile(0x9f2, col[cur], 0xcf, 0x44, L, 999); // x assumed from the main menu
+            g.drawTile(0x9f2, col[cur], 0xcf, 0x45, L, 999); // x assumed from the main menu
         if (sp[cur] == 2)
-            g.drawTile(0x9f3, col[cur], 0x1b, 0x28, L, 999); // x assumed from the main menu
+            g.drawTile(0x9f3, col[cur], 0x1b, 0x29, L, 999); // x assumed from the main menu
     }
     g.drawTile(0x9e6, 0x4c7, 0x5f, 8, L, 999);
     for (int i = 0; i < 4; ++i)
@@ -186,6 +197,109 @@ inline void drawLoad(Gfx &g, int cur, bool picked, const std::string (&names)[3]
         const std::string label = i == 3 ? "Back" : (full[i] ? names[i] : "Empty");
         g.drawTextBox(i == cur ? (picked ? 6 : 5) : 4, 0x4c7, 0, ys[i], label, 0x140, 1, L);
     }
+}
+
+// The options screen (ShowOptionsMenuScreen 0x03da32) grown into a scrolling list: music volume, SFX volume, master volume,
+// tutorials, interpolation, scale, scale mode, window mode, Done (settings.hpp). The logo stays put and kOptVisible rows show
+// under it; the list scrolls as the selection goes past the ends. Music, master volume, tutorials and Done keep the ROM's
+// 3-state button art (normal, highlighted, pressed); the others are drawn as text, since there is no art for them.
+inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, int scroll, int capture)
+{
+    constexpr int L = 0x3000, BP = 0x4b8, kTop = 0x6f, kPitch = 24, kLabelX = 0x1e, kLabelW = 0x8c, kValueX = 0xaa, kValueW = 0x7c; // the value ends at x 0x126
+    // The long words don't fit beside each other in the big font ("Window Mode" 190 px, "Borderless" 158 px of 320), so the rows
+    // with no art use the small one (style 2: 94 px and 65 px). "SFX" keeps the big font and the position it was tuned to.
+    struct Row
+    {
+        int s[3], x;
+        const char *label;
+    };
+    static const Row rows[gp::kOptRows] = { // sprites and x from the ROM's table at 0xf47c
+        {{0x9d8, 0x9de, 0x9de}, 0x1e, nullptr},
+        {{-1, -1, -1}, 0x1e, "SFX"},
+        {{0x9dc, 0x9e2, 0x9e2}, 0x1e, nullptr},
+        {{0x9db, 0x9e1, 0x9e2}, 0x1e, nullptr},
+        {{-1, -1, -1}, 0x1e, "Interpolate"},
+        {{-1, -1, -1}, 0x1e, "Scale"},
+        {{-1, -1, -1}, 0x1e, "Scale Mode"},
+        {{-1, -1, -1}, 0x1e, "Window Mode"},
+        {{-1, -1, -1}, 0x1e, "Aspect Ratio"},
+        {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, // the key rows: named below
+        {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""},
+        {{0x9d7, 0x9dd, 0x9ed}, 0x82, nullptr},
+    };
+    static const char *const kWindowNames[gp::kWindowModeCount] = {"Windowed", "Fullscreen", "Borderless"};
+    g.drawTile(0x9e6, 0x4c7, 0x5f, 8, L, 999);
+    auto value = [&](int row, int y, const std::string &text, bool small = false)
+    {
+        if (small)
+            g.drawTextBox(2, 0x28c, kValueX, y + 4, text, kValueW, 2, L); // (the small font has only this palette, 0x28c)
+        else
+            g.drawTextBox(sel == row ? 5 : 4, sel == row ? 0x106 : 0x105, kValueX, y, text, kValueW, 2, L);
+    };
+    auto onOff = [&](int row, int y, bool on)
+    {
+        const bool hot = sel == row;
+        g.drawTile(on ? (hot ? 0x9e0 : 0x9da) : (hot ? 0x9df : 0x9d9), BP, 0xff, y, L, 999);
+    };
+    const int last = std::min(gp::kOptRows, scroll + gp::kOptVisible);
+    for (int i = scroll; i < last; ++i)
+    {
+        const int y = kTop + (i - scroll) * kPitch;
+        if (rows[i].s[0] >= 0)
+            g.drawTile(rows[i].s[i == sel ? (pressed ? 2 : 1) : 0], BP, rows[i].x, y, L, 999);
+        else if (i == gp::kOptSfx) // the big-font label, centred where it was tuned
+            g.drawTextBox(sel == i ? 5 : 4, 0x4c7, rows[i].x - 11, y + 2, rows[i].label, 0x50, 1, L);
+        else // the small-font names, left-aligned where the buttons' art starts; the value is right-aligned (below)
+        {
+            const std::string name = gp::isKeyRow(i) ? std::string("Key: ") + gp::kActionNames[gp::keyRowAction(i)] : std::string(rows[i].label);
+            g.drawTextBox(2, 0x28c, kLabelX, y + 4, name, kLabelW, 0, L);
+            if (sel == i) // the small font has no highlight colour, so the selected row gets a marker
+                g.drawTextBox(2, 0x28c, kLabelX - 12, y + 4, ">", 0x10, 0, L);
+        }
+        char buf[16];
+        switch (i)
+        {
+        case gp::kOptMusic:
+            std::snprintf(buf, sizeof buf, "%3d", o.musicVolume);
+            value(i, y, buf);
+            break;
+        case gp::kOptSfx:
+            std::snprintf(buf, sizeof buf, "%3d", o.sfxVolume);
+            value(i, y, buf);
+            break;
+        case gp::kOptVolume:
+            std::snprintf(buf, sizeof buf, "%3d", o.volume);
+            value(i, y, buf);
+            break;
+        case gp::kOptTutorials:
+            onOff(i, y, o.tutorials);
+            break;
+        case gp::kOptInterpolate:
+            value(i, y, o.interpolate ? "On" : "Off", true); // the new switches are small-font text, not the ROM's tiles
+            break;
+        case gp::kOptScale:
+            std::snprintf(buf, sizeof buf, "%dx", o.scale);
+            value(i, y, buf, true);
+            break;
+        case gp::kOptScaleMode:
+            value(i, y, o.perfectScale ? "Perfect" : "Stretch", true);
+            break;
+        case gp::kOptAspect:
+            value(i, y, o.aspect == 1 ? "16:9" : "4:3", true);
+            break;
+        case gp::kOptWindowMode:
+            value(i, y, kWindowNames[std::clamp(o.windowMode, 0, gp::kWindowModeCount - 1)], true);
+            break;
+        default:
+            if (gp::isKeyRow(i)) // a key binding: the key's name, or the prompt while it waits for one
+                value(i, y, capture == gp::keyRowAction(i) ? std::string("Press a key") : gp::keys().name(gp::keyRowAction(i)), true);
+            break;
+        }
+    }
+    if (scroll > 0) // more above / below
+        g.drawTextBox(4, 0x105, 0x12c, kTop - 6, "^", 0x10, 0, L);
+    if (last < gp::kOptRows)
+        g.drawTextBox(4, 0x105, 0x12c, kTop + (gp::kOptVisible - 1) * kPitch + 10, "v", 0x10, 0, L);
 }
 
 // ---- app --------------------------------------------------------------------------------------
@@ -533,6 +647,7 @@ struct StarterScene
         A_REP,
         A_VOC,
         A_CELEB,
+        A_EMOTE, // PlayEmoteReactionAnim: the surprise
         A_SAD,
         A_SADIDLE
     };
@@ -549,6 +664,7 @@ struct StarterScene
         bool settled = false, react = false, legs = false, sad = false;
         Act act = A_NONE;
         int sub = 0, counter = 0, tx = 0, reps = 0;
+        int ex = -1; // ticks since the exclamation bubble began over this pet, -1 = none
         double wait = 0;
         std::vector<Act> q;
         PetAnim a;
@@ -572,6 +688,9 @@ struct StarterScene
     static constexpr int kHappy[3] = {0x3c, 0xa4, 0x10d};   // PlayPositiveReactionAnimVariant
     static constexpr int kSad[3] = {0x40, 0xa9, 0x110};     // PlaySadReactionAnim
     static constexpr int kSadIdle[3] = {0x41, 0xa8, 0x111}; // PlayIdleAnim_FlagA, second table (action 0x1d, TickActor_NegativeReaction)
+    // PlayEmoteReactionAnim -> SelectAndPlayEmoteAnim / PlayShockedReactionAnim, second table (starter pets are style 1)
+    static constexpr int kEmote[3] = {0x43, 0xaa, 0x112};
+    static constexpr int kShock[3] = {0x42, 0xab, -1};
     static constexpr int kCelPre[3] = {-1, -1, 0x118};      // SelectAndPlayReactionAnim: intro/outro, third species only
 
     std::vector<P> pets;
@@ -710,13 +829,15 @@ struct StarterScene
             p.q = {A_SETTLE, A_IDLE};
             begin(p, A_SPAWN);
         }
-        else if (r < 7 || (r >= 11 && r < 15)) // walk in, settle
+        else if (r < 7 || (r >= 11 && r < 15)) // walk in, settle (the first kind then is surprised: action 5)
         {
             p.facing = p.x <= p.slotX ? 1 : 0;
             p.legs = true;
             p.counter = 1 + rb(3);
             p.tx = p.facing == 1 ? p.x + 0x1e : p.x - 0x1e;
             p.q = {A_SETTLE};
+            if (r < 7)
+                p.q.push_back(A_EMOTE);
             begin(p, A_WALK);
         }
         else if (r < 11) // excited anim 2..4 times (vanilla uses action 0x1c then 8; 8 not ported)
@@ -767,10 +888,14 @@ struct StarterScene
         case A_IDLE:
             return once(app, p, kIdle, 14);
         case A_POS:
+            if (p.sub == 0)
+                feVoice(p.species, 4); // PlayPositiveReactionAnim: category 4
             return once(app, p, kPos, s0 ? 14 : 7);
         case A_SETTLED:
             return once(app, p, kSettled, s0 ? 7 : 5);
         case A_SPAWN:
+            if (p.sub == 0)
+                feSound(6, 0xbe); // TickActor_PlaySoundAndWait: the spawn effect's sound
             return once(app, p, kSpawn, s0 ? 5 : 7);
         case A_WALK:
             if (p.sub == 0)
@@ -821,7 +946,7 @@ struct StarterScene
                 }
                 else
                 {
-                    play(p, kRep, 14);
+                    play(p, kRep, 14), feVoice(p.species, 4);
                     p.sub = 2;
                 }
             }
@@ -829,7 +954,7 @@ struct StarterScene
             {
                 if (!busy(app, p))
                 {
-                    play(p, kRep, 14);
+                    play(p, kRep, 14), feVoice(p.species, 4);
                     p.sub = 2;
                 }
             }
@@ -838,7 +963,7 @@ struct StarterScene
                 if (!busy(app, p))
                 {
                     if (--p.reps > 0)
-                        play(p, kRep, 14);
+                        play(p, kRep, 14), feVoice(p.species, 4);
                     else if (pre)
                     {
                         play(p, kPre, 14);
@@ -856,6 +981,8 @@ struct StarterScene
             if (p.sub == 0)
             {
                 play(p, kVoc, 14);
+                const int r = 1 + rb(4); // TickActor_IdleRandomSound: 2 -> category 1 (quiet in the ROM), 3 -> 1, else 2
+                feVoice(p.species, r == 2 || r == 3 ? 1 : 2);
                 p.sub = 1;
             }
             else if (p.sub == 1)
@@ -881,6 +1008,7 @@ struct StarterScene
             if (p.sub == 0)
             {
                 p.reps = 3;
+                feVoice(p.species, 4);
                 if (pre)
                 {
                     play(p, kCelPre, 14);
@@ -905,7 +1033,10 @@ struct StarterScene
                 if (!busy(app, p))
                 {
                     if (--p.reps > 0)
+                    {
                         play(p, kHappy, 14);
+                        feVoice(p.species, 4);
+                    }
                     else if (pre) // vanilla plays the outro with flag 4 (maybe reversed, unchecked)
                     {
                         play(p, kCelPre, 14);
@@ -919,6 +1050,36 @@ struct StarterScene
                 return !busy(app, p);
             return false;
         }
+        case A_EMOTE:
+            if (p.sub == 0)
+            {
+                play(p, kEmote, 14);
+                feVoice(p.species, 9, 0xff);
+                p.ex = 0;
+                p.sub = 1;
+            }
+            else if (p.sub == 1)
+            {
+                if (!busy(app, p))
+                {
+                    p.wait = 0.5;
+                    p.sub = 2;
+                }
+            }
+            else if (p.sub == 2)
+            {
+                p.wait -= 1.0 / 30;
+                if (p.wait <= 0)
+                {
+                    if (kShock[p.species] < 0)
+                        return true;
+                    play(p, kShock, 14);
+                    p.sub = 3;
+                }
+            }
+            else
+                return !busy(app, p);
+            return false;
         case A_SADIDLE: // action 0x1d, TickActor_NegativeReaction: the sad idle, picked again and again
             return once(app, p, kSadIdle, 14);
         case A_SAD: // TickNPCReactionAnimationSequence: sad anim, pause (float 0x3f00 = 0.5, unchecked), sad anim again
@@ -927,6 +1088,7 @@ struct StarterScene
             if (p.sub == 0)
             {
                 play(p, kSad, 14);
+                feVoice(p.species, 0xb); // the sad sequence's sound
                 p.sub = 1;
             }
             else if (p.sub == 1)
@@ -1057,7 +1219,8 @@ struct StarterScene
     {
         if (changed || confirmed >= 0)
             return;
-        confirmed = cursor; // vanilla also plays sound 0x59 here
+        confirmed = cursor;
+        feSound(0x59, 0xbe); // HandleStarterPetSelectInput
         // Like the original: running actions finish first (no further walk legs), then everybody
         // faces the camera. The chosen pet celebrates, the others turn sad (see pickNext).
         for (P &o : pets)
@@ -1082,6 +1245,9 @@ struct StarterScene
             step(app, p, rb);
             p.a.t += 1.0 / 30;
         }
+        for (P &p : pets)
+            if (p.ex >= 0)
+                ++p.ex;
         const int axisY = (cursor & 1) ? 0xa5 : 0x73, slotX = (cursor / 2) * 0xa0 + 0xa0;
         if (!changed)
         {
@@ -1127,6 +1293,19 @@ struct StarterScene
         const bool s2 = p.species == 2;
         app.blit((s2 ? 0x9a0 : 0x994) + idx, 0x28c, vx - (idx * 8 + 8) / 2, p.y - (s2 ? 0x10 : 6));
         app.drawFrame(A, f, vx, p.y, p.a.flip);
+        if (p.ex >= 0) // the exclamation over the head (SpawnMessageBubble 0xb, then 0xc)
+        {
+            App::AnimTex &I = app.anim(gp::kExclaimIntroAnim, 0x28c), &O = app.anim(gp::kExclaimOutroAnim, 0x28c);
+            const gp::ExclaimView v = gp::exclaimView(p.ex, int(I.frames.size()), int(O.frames.size()));
+            App::AnimTex &B = v.anim == gp::kExclaimOutroAnim ? O : I;
+            if (v.done)
+                p.ex = -1;
+            else if (!B.frames.empty())
+            {
+                const gp::BubbleOffset bo = gp::overheadOffset(p.species, 2, p.a.id);
+                app.drawFrame(B, std::min(v.frame, int(B.frames.size()) - 1), vx + bo.dx, p.y + bo.dy, false); // the pets here sit at their ROM positions, so no bubbleLower
+            }
+        }
     }
 
     void draw(App &app, FrontGfx &gfx, Uint32 now)
@@ -1195,7 +1374,8 @@ enum class Screen
     House,
     Load,
     Name,
-    Browse
+    Browse,
+    Options
 };
 
 // Returns the save slot (0..2) to play, or -1 if the window was closed.
@@ -1204,21 +1384,13 @@ enum class Screen
 int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFrames)
 {
     int chosenSlot = -1;
-    // Smooth mode switches SDL's integer scaling on; hand the renderer back as we found it when we leave.
-    struct IntScaleGuard
-    {
-        SDL_Renderer *r;
-        SDL_bool old;
-        ~IntScaleGuard() { SDL_RenderSetIntegerScale(r, old); }
-    } scaleGuard{ctx.ren, SDL_RenderGetIntegerScale(ctx.ren)};
     try
     {
         const Rom &rom = *ctx.rom; // owned by the AppHost
         SDL_Window *win = ctx.win;
         SDL_Renderer *ren = ctx.ren;
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0"); // nearest (SDL's default): crisp pixels at fractional positions
-        SDL_RenderSetLogicalSize(ren, 320, 240);
-        SDL_RenderSetIntegerScale(ren, smoothCam ? SDL_TRUE : SDL_FALSE); // uniform pixel widths while scrolling smoothly
+        SDL_RenderSetLogicalSize(ren, gp::logicalW(), 240);
 
         // Fonts come from the ContentDB. Built once (static) and reused when we come back from gameplay.
         // Species 0 is arbitrary: nothing the front end needs depends on it.
@@ -1231,7 +1403,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             // Every (font style, palette) pair the front end draws with, imported up front so the db never
             // changes once a TextDrawer holds a pointer into it. drawTextBox's first two arguments are
             // exactly (fontIndex, palette): the palette is baked into the glyphs by importFont.
-            static const int kFrontFonts[][2] = {{0, 0x28c}, {2, 0x28c}, {3, 0x104}, {4, 0x4c7}, {5, 0x4c7}, {6, 0x4c7}};
+            static const int kFrontFonts[][2] = {{0, 0x28c}, {2, 0x28c}, {3, 0x104}, {4, 0x4c7}, {5, 0x4c7}, {6, 0x4c7}, {4, 0x105}, {5, 0x106}};
             for (const auto &f : kFrontFonts)
                 if (!uiDb->font(gp::fontId(f[0], f[1])))
                     gp::importFont(*uiDb, rom, f[0], f[1]);
@@ -1301,6 +1473,10 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         int loadCur = 0;
         bool loadPicked = false;
         Uint32 loadPickedAt = 0;
+        gp::Settings opts; // the options screen works on a copy and saves it when you leave
+        int optSel = 0, optScroll = 0;
+        int optCapture = -1; // the key binding waiting for a key, -1 = none
+        bool optPressed = false;
         auto loadStart = [&]
         {
             loadCur = 3;
@@ -1463,9 +1639,24 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                 }
                 if (e.type != SDL_KEYDOWN && e.type != SDL_KEYUP)
                     continue;
-                const SDL_Keycode k = e.key.keysym.sym;
+                const SDL_Keycode k = gp::keys().canonical(e.key.keysym.scancode, e.key.keysym.sym); // a rebound key acts as its action's default
                 const bool down = e.type == SDL_KEYDOWN, rep = e.key.repeat != 0;
                 const bool shift = (e.key.keysym.mod & KMOD_SHIFT) != 0;
+                if (screen == Screen::Options && optCapture >= 0) // waiting for the new key of a binding: Escape gives up
+                {
+                    if (down && !rep)
+                    {
+                        if (e.key.keysym.scancode == SDL_SCANCODE_ESCAPE)
+                            optCapture = -1;
+                        else if (gp::keys().bind(optCapture, e.key.keysym.scancode))
+                        {
+                            opts.keys = gp::keys().key;
+                            optCapture = -1;
+                            feSound(gp::fe::kSfxConfirm, 0x7f);
+                        }
+                    }
+                    continue;
+                }
 
                 if (down && !rep)
                 {
@@ -1486,7 +1677,6 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                     else if (k == SDLK_F4)
                     {
                         smoothCam = !smoothCam;
-                        SDL_RenderSetIntegerScale(ren, smoothCam ? SDL_TRUE : SDL_FALSE);
                         std::printf("smooth mode %s\n", smoothCam ? "on" : "off");
                     }
                     else if (k == SDLK_F5)
@@ -1543,11 +1733,11 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                     if (down)
                     {
                         if (k == SDLK_UP && menu.cursor > 0)
-                            --menu.cursor;
+                            --menu.cursor, feSound(gp::fe::kSfxMove, 0x7f);
                         if (k == SDLK_DOWN && menu.cursor < 2)
-                            ++menu.cursor;
+                            ++menu.cursor, feSound(gp::fe::kSfxMove, 0x7f);
                         if (k == SDLK_z && !rep)
-                            menu.pressed = true;
+                            menu.pressed = true, feSound(gp::fe::kSfxConfirm, 0x7f); // ShowMainMenuScreen: 0x2d / 0x59 at volume 0x7f
                         const int d = shift ? 8 : 1;
                         bool changed = true;
                         if (k == SDLK_q)
@@ -1582,6 +1772,16 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                             loadStart();
                             setScreenNoFade(Screen::Load);
                         }
+                        else if (menu.cursor == 2)
+                        {
+                            opts = gp::loadSettings();
+                            optSel = 0;
+                            optScroll = 0;
+                            optCapture = -1;
+                            opts.keys = gp::keys().key;
+                            optPressed = false;
+                            setScreenNoFade(Screen::Options);
+                        }
                     }
                 }
                 else if (screen == Screen::Intro && down && !rep && fadeTick >= 16)
@@ -1602,6 +1802,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                             if (slotFull[i])
                             {
                                 loadCur = i;
+                                feSound(gp::fe::kSfxMove, 0x7f);
                                 break;
                             }
                     }
@@ -1614,12 +1815,14 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                                 goto moved;
                             }
                         loadCur = 3;
-                    moved:;
+                    moved:
+                        feSound(gp::fe::kSfxMove, 0x7f);
                     }
                     else if (k == SDLK_x)
                         setScreenNoFade(Screen::Menu); // event 5 -> state 4
                     else if (k == SDLK_z)
                     {
+                        feSound(gp::fe::kSfxConfirm, 0x7f);
                         if (loadCur == 3)
                             setScreenNoFade(Screen::Menu);
                         else if (slotFull[loadCur])
@@ -1628,6 +1831,98 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                             loadPickedAt = SDL_GetTicks();
                         }
                     }
+                }
+                else if (screen == Screen::Options && down && !optPressed)
+                {
+                    // Up and down move (wrapping, and the list scrolls to follow); left and right step a volume, a choice or a
+                    // switch; Z flips a switch, cycles a choice and presses Done; X leaves. The settings are saved on the way out
+                    // (SaveSettingsToSlot). The sound and the window follow the choices at once.
+                    auto leave = [&](bool pressed)
+                    {
+                        opts.keys = gp::keys().key;
+                        gp::saveSettings(opts);
+                        optPressed = pressed;
+                        goMenu();
+                    };
+                    auto applyAudio = [&]
+                    {
+                        gp::audio().setVolume(opts.volume);
+                        gp::audio().setMusicVolume(opts.musicVolume);
+                        gp::audio().setSfxVolume(opts.sfxVolume);
+                    };
+                    auto applyWindow = [&]
+                    {
+                        smoothCam = opts.interpolate;
+                        gp::applyDisplay(win, ren, gp::DisplaySettings{opts.scale, opts.perfectScale, opts.windowMode, opts.aspect});
+                    };
+                    // true = Z/Right (forward), false = Left
+                    auto change = [&](bool forward, bool byZ)
+                    {
+                        switch (optSel)
+                        {
+                        case gp::kOptTutorials:
+                            opts.tutorials = !opts.tutorials;
+                            break;
+                        case gp::kOptInterpolate:
+                            opts.interpolate = !opts.interpolate;
+                            applyWindow();
+                            break;
+                        case gp::kOptScaleMode:
+                            opts.perfectScale = !opts.perfectScale;
+                            applyWindow();
+                            break;
+                        case gp::kOptScale:
+                            opts.scale = byZ && opts.scale == 8 ? 1 : gp::stepScale(opts.scale, forward);
+                            applyWindow();
+                            break;
+                        case gp::kOptWindowMode:
+                            opts.windowMode = gp::stepWindowMode(opts.windowMode, forward);
+                            applyWindow();
+                            break;
+                        case gp::kOptAspect:
+                            opts.aspect = 1 - opts.aspect;
+                            applyWindow();
+                            break;
+                        default:
+                            break;
+                        }
+                    };
+                    int *slider = optSel == gp::kOptMusic ? &opts.musicVolume : optSel == gp::kOptVolume ? &opts.volume
+                                                                            : optSel == gp::kOptSfx      ? &opts.sfxVolume
+                                                                                                         : nullptr;
+                    if (k == SDLK_UP && !rep)
+                        optSel = gp::optionsMove(optSel, false), feSound(gp::fe::kSfxMove, 0x7f);
+                    else if (k == SDLK_DOWN && !rep)
+                        optSel = gp::optionsMove(optSel, true), feSound(gp::fe::kSfxMove, 0x7f);
+                    else if (k == SDLK_x && !rep)
+                        leave(false);
+                    else if ((k == SDLK_LEFT || k == SDLK_RIGHT) && slider)
+                    {
+                        const int before = *slider;
+                        *slider = gp::volumeStep(*slider, k == SDLK_RIGHT); // held keys repeat
+                        applyAudio();
+                        if (optSel != gp::kOptMusic && *slider != before) // hear the level (the music is playing already)
+                            feSound(gp::fe::kSfxConfirm, 0x7f);
+                    }
+                    else if (k == SDLK_LEFT && gp::isKeyRow(optSel) && !rep) // Left on a binding: back to its default key
+                    {
+                        gp::keys().reset(gp::keyRowAction(optSel));
+                        opts.keys = gp::keys().key;
+                    }
+                    else if ((k == SDLK_LEFT || k == SDLK_RIGHT) && !rep)
+                        change(k == SDLK_RIGHT, false);
+                    else if (k == SDLK_z && !rep)
+                    {
+                        feSound(gp::fe::kSfxConfirm, 0x7f); // ShowOptionsMenuScreen
+                        if (optSel == gp::kOptDone)
+                            leave(true);
+                        else if (gp::isKeyRow(optSel))
+                            optCapture = gp::keyRowAction(optSel); // the next key pressed is the new binding
+                        else
+                            change(true, true);
+                    }
+                    optScroll = gp::optionsScroll(optSel, optScroll);
+                    applyAudio();
                 }
                 else if (screen == Screen::House && down && !rep && fadeTick >= 16)
                 {
@@ -1673,6 +1968,12 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                     using In = NameEntry::In;
                     NameEntry::Result r;
                     bool acted = true;
+                    // HandleNameEntryInput: every direction clicks 0x2d (0xaf); Z clicks 0x59 (0x7f), except Back or Space with
+                    // nothing typed and OK on a blank name, which do nothing
+                    if (k == SDLK_LEFT || k == SDLK_RIGHT || k == SDLK_UP || k == SDLK_DOWN)
+                        feSound(0x2d, 0xaf);
+                    else if (k == SDLK_z && !rep && (name.onGrid || (name.col < 2 ? !name.name.empty() : NameEntry::nonBlank(name.name))))
+                        feSound(0x59, 0x7f);
                     if (k == SDLK_LEFT)
                         r = name.step(In::Left);
                     else if (k == SDLK_RIGHT)
@@ -1737,8 +2038,8 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             }
 
             // ---- draw
-            SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-            SDL_RenderClear(ren);
+            gp::useUiScreen(ren); // 16:9: the 320 x 240 screens sit in the middle
+            gp::clearFrame(ren);
             gfx.q.clear();
             gfx.texts.clear();
             gfx.lastText.clear();
@@ -1872,6 +2173,10 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                     }
                 }
                 break;
+            case Screen::Options:
+                app.drawBackground(2, 0x5c5);
+                drawOptions(gfx, optSel, optPressed, opts, optScroll, optCapture);
+                break;
             case Screen::House:
                 app.drawBackground(2, 0x5c5);
                 drawHouse(gfx, houseCur, slotName, slotFull);
@@ -1915,6 +2220,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             if (screen == Screen::Boot && bootPhase == 1)
                 alphaF = 255.f * std::min(16.f, float(outTick) + frac) / 16.f;
             const int alpha = int(alphaF);
+            gp::useWholeScreen(ren); // the fade covers the whole window
             if (alpha > 0)
             {
                 SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);

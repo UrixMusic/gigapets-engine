@@ -102,6 +102,23 @@ int main()
         CHECK(has(all, "Npc.hooks(\"m:item/ok\")") && has(all, "no such NPC"));
         CHECK(has(all, "defines 'onItemUse'") && has(all, "valid: onTalkStart, onTalk"));
     }
+    // --- Game.hooks() has no id to check; only the function names are validated, and the message has no empty "" ---
+    {
+        gp::ScriptHost h;
+        CHECK(h.runString("m", "local G = Game.hooks(); function G:onQuestComplete(ctx) end"));
+        CHECK(gp::validateHooks(h, targets()).empty());
+
+        gp::ScriptHost bad;
+        CHECK(bad.runString("m", "local G = Game.hooks(); function G:onquestcomplete(ctx) end; function G:onTalk(ctx) end"));
+        const auto p = gp::validateHooks(bad, targets());
+        CHECK(p.size() == 2);
+        std::string all;
+        for (const auto &s : p)
+            all += s + "\n";
+        CHECK(has(all, "Game.hooks() defines 'onquestcomplete'") && has(all, "did you mean 'onQuestComplete'?"));
+        CHECK(has(all, "Game.hooks() defines 'onTalk'") && has(all, "valid: onQuestComplete"));
+        CHECK(!has(all, "Game.hooks(\"\")") && !has(all, "no such"));
+    }
     // --- an unset predicate skips that check; two mods are attributed separately ---
     {
         gp::ScriptHost h;

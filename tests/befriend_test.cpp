@@ -28,6 +28,28 @@ int main() {
     for (int i = 0; i < 90000; i++) c[int(rollFriendGreeting(rng))]++;
     check("greeting thirds", c[1] > 28000 && c[2] > 28000 && c[3] > 28000 && c[0] == 0);
 
+    // friend gifts: 39 entries, every roll lands in the table, and all three repeated groups are reachable
+    check("gift table has 39 entries", kFriendGifts.size() == 0x27);
+    {
+        int seen[0x120] = {};
+        bool inTable = true;
+        for (int i = 0; i < 20000; i++) {
+            const int g = rollFriendGift(rng);
+            if (g < 0 || g >= 0x120) { inTable = false; break; }
+            seen[g]++;
+        }
+        check("gift rolls stay in the table", inTable);
+        check("every table entry shows up", [&]{ for (int g : kFriendGifts) if (!seen[g]) return false; return true; }());
+        check("0x2a is three times as likely as 0x17", seen[0x2a] > seen[0x17] * 2);
+    }
+    // advice lines: text ids 0x2e7..0x315 inclusive
+    check("advice ids stay in 0x2e7..0x315", [&]{
+        for (int i = 0; i < 20000; i++) {
+            const int id = std::stoi(friendAdviceId(rng).substr(10)); // after "base:text/"
+            if (id < 0x2e7 || id > 0x315) return false;
+        }
+        return true; }());
+
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }

@@ -9,6 +9,7 @@
 #pragma once
 #include <algorithm>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <random>
@@ -104,6 +105,8 @@ struct PetState
 
     int swiftDropStep = 0, swiftDropTicks = 0;
     std::vector<int> swiftDropItems;
+
+    int washStep = 0; // washing the pet (bar button 4): 0 = not washing; see pet_wash.hpp
 };
 
 // Where things are in the current area, and how far through the tick the renderer is.
@@ -148,6 +151,8 @@ struct UiState
 struct ScriptState
 {
     std::mt19937 gen;
+    // Text from scripts' say(), already formatted, waiting to be shown one box at a time (see walk::showNextSay).
+    std::deque<std::string> sayQueue;
 };
 
 struct WalkState

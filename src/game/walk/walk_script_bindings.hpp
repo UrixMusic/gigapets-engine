@@ -9,9 +9,25 @@
 #include <cstdio>
 #include <cstdlib>
 #include <random>
+#include <set>
 
 namespace walk
 {
+
+// Text queued by scripts' say(): shows the next one as a message box. The main loop calls this every tick, so a queued
+// text appears as soon as nothing else is being said (never lost, never overwriting the game's own box). A box closing
+// shows the one after it at once (Dialogue::choose closes first, so the callback may open the next box).
+inline void showNextSay(WalkServices &svc)
+{
+    auto &q = svc.S.script.sayQueue;
+    if (q.empty() || svc.dialogue.open())
+        return;
+    gp::DialogueBox b = gp::messageBox(std::move(q.front()));
+    q.pop_front();
+    b.onYes = [&svc]
+    { showNextSay(svc); };
+    svc.dialogue.show(std::move(b));
+}
 
 inline void bindScripts(WalkServices &svc)
 {
@@ -30,6 +46,28 @@ inline void bindScripts(WalkServices &svc)
         if (!it)
             return false;
         svc.events.placeAt(svc.currentArea(), it->index, x, y, false);
+        return true;
+    };
+
+    // ---- say(textId, vars) ----
+    // The text is looked up by id; "%s" becomes the pet's name (as in NPC lines), then {name} placeholders are filled
+    // from `vars` (fillTemplate; substituted values are not scanned again, so mod text can't inject a format).
+    // A hook can queue at most 16 boxes, so a runaway loop can't bury the player in dialogue.
+    api.say = [&svc](const std::string &id, const gp::ScriptApi::SayVars &vars)
+    {
+        static std::set<std::string> warned;
+        if (!svc.db.hasText(id))
+        {
+            if (warned.insert(id).second)
+                std::fprintf(stderr, "script warning: say(\"%s\"): no such text\n", id.c_str());
+            return false;
+        }
+        auto &q = svc.S.script.sayQueue;
+        if (q.size() >= 16)
+            return false;
+        // Only queued here: the main loop shows it on the next tick, after any dialogue the game opens right after
+        // the hook (a hook that does not take over), so a script's text never gets overwritten.
+        q.push_back(gp::fillTemplateVars(gp::fmtAll(svc.db.textOr(id), svc.player.name), vars));
         return true;
     };
 

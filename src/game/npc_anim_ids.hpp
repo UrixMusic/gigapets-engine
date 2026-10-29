@@ -35,6 +35,7 @@ namespace gp
         case gp::ReactAnim::Positive:
             return side ? posS[tier] : posD[tier];
         case gp::ReactAnim::Emote:
+        case gp::ReactAnim::EmoteOutro: // same art, played in reverse
             return side ? emoS[tier] : emoD[tier];
         case gp::ReactAnim::Shocked:
             return side ? shkS[tier] : shkD[tier];
@@ -47,6 +48,7 @@ namespace gp
         case gp::ReactAnim::Outro:
             return tier == 2 ? (side ? 0x101 : 0x100) : -1;
         case gp::ReactAnim::Sad:
+        case gp::ReactAnim::SadOutro: // same art, played in reverse
             return sad[tier];
         case gp::ReactAnim::Bored:
             return bored[tier];
@@ -83,6 +85,21 @@ namespace gp
     // Mirror rule for reaction art: dog and monkey art faces left, panda faces right.
     inline bool reactMirror(int tier, bool faceRight) { return tier == 2 ? !faceRight : faceRight; }
 
+    // Is `animId` side-facing reaction art, i.e. art that reactMirror applies to when the actor faces sideways?
+    // That is every side variant the ROM mirrors with the 0x1004 sprite bank: PlayPositiveReactionAnimVariant
+    // (0x0153d6), the emote and shocked tables, and SelectAndPlayReactionAnim (0x015462) for the intro and outro.
+    // The panda's intro/outro side art (0x101) is the only intro/outro art there is; it uses the same bank rule as
+    // the happy hop it frames, so leaving it out makes the pet flip in and out around the hop.
+    inline bool isSideReactArt(int tier, int animId)
+    {
+        if (animId < 0)
+            return false;
+        for (ReactAnim a : {ReactAnim::Positive, ReactAnim::Emote, ReactAnim::Shocked, ReactAnim::Intro, ReactAnim::Outro})
+            if (reactId(a, tier, 0, true) == animId)
+                return true;
+        return false;
+    }
+
     // ---- UpdateActorSpriteFrame (0x014bde): walking, loops at 14 ----
     constexpr int kWalkUp[3] = {54, 157, 230};
     constexpr int kWalkDown[3] = {55, 158, 236};
@@ -91,6 +108,21 @@ namespace gp
     constexpr int kSitDown[3] = {46, 154, 260};
     constexpr int kSitAlt[3] = {49, 130, 234};
     constexpr int kEat[3] = {29, 127, 232};
+    // The food bowl in a room (Pet_RepeatedTrickWithDialogue 0x015ab1): the style (indoor) versions of the eating art.
+    constexpr int kBowlBite[3] = {0x3a, 0xa1, 0x108};   // PlayReactionAnimForActorKind: lean in to the bowl
+    constexpr int kEatStyle[3] = {0x3b, 0xa2, 0x109};   // PlayEatingAnim with style != 0: the chewing, repeated
+    constexpr int kActionStyle[3] = {0x46, 0xb1, 0x11a}; // PlayActorActionAnimation with style != 0 (the panda's intro)
+    // The bed in a room: the yawn (PlayBoredReactionAnim, style), getting in (UpdateActorSpriteFrame2), one sleep cycle
+    // (TriggerActorSpawnEffect) and getting out (PlayEncounterExitAnim). None of these is mirrored.
+    constexpr int kBoredStyle[3] = {0x4f, 0xb6, 0x11d};
+    constexpr int kBedGetIn[3] = {0x48, 0xb2, 0x11b};
+    constexpr int kSleepCycle[3] = {0x47, 0xae, 0x116};
+    constexpr int kBedGetOut[3] = {0x4d, 0xb4, 0x10b};
+    // SelectAndPlayReactionAnim (0x015462) with style != 0: the panda's intro before the happy hop and its outro after it
+    // (the same art, last frame to first). The dog and monkey have none. Unmirrored.
+    constexpr int kPandaFrameStyle = 0x118;
+    // PlayPositiveReactionAnimVariant with style != 0 ignores the facing and is not mirrored: the happy hop, indoor size.
+    constexpr int kPositiveStyle[3] = {0x3c, 0xa4, 0x10d};
 
     inline AnimChoice walkAnim(int sp, int facing, bool style)
     {

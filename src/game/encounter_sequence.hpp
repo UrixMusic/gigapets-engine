@@ -19,6 +19,8 @@ namespace gp
     struct EncounterHost
     {
         std::function<int()> petX, npcX, npcY;
+        std::function<int()> petY;                    // optional: where the pet stands (for the befriend drops)
+        std::function<void(int item, int x, int y)> spawnItem; // optional: SpawnPendingEvent, a visible ground item
         std::function<bool(int)> petWalkToX; // true when the pet is at x (TickActor_WalkToTargetX)
         std::function<bool(int)> petWalkToY; // true when the pet is at y (AnimateActorMoveToTarget)
         std::function<void(bool)> petFace;   // face sideways, true = left
@@ -51,6 +53,8 @@ namespace gp
         static constexpr int kApproachDX = 0x4b;  // step 6: stand 75 px from the NPC, on the pet's side
         static constexpr int kCloserDX = 0x14;    // step 0xc, friend: step 20 px closer
         static constexpr int kAwayDX = 0x1e;      // step 0xc, negative: walk 30 px away
+        static constexpr int kFriendDropItem = 0xa3, kFriendDropDY = 10; // a new friend's gift, at (targetX, petY + 10)
+        static constexpr int kMilestoneDX = 0x14, kMilestoneDY = 0x14;   // a milestone item: (targetX + 20, petY + 20)
 
         std::unique_ptr<ReactionSeq> petSeq_, npcSeq_;
         int npcDelay_ = 0;
@@ -197,10 +201,20 @@ namespace gp
                     targetX_ = nx < px ? px - kCloserDX : px + kCloserDX;
                     outcome_ = Outcome::Friend;
                     const int friends = h.markFriended();
+                    // A new friend drops item 0xa3 where the pet is about to stand, 10 px below it
+                    // (SpawnPendingEvent(area, -1, 0xa3, g_petTargetX, petY + 10, visible, not persistent, category)),
+                    // and every 5th..10th friend a milestone item 20 px further out and 20 px below.
+                    const int py = h.petY ? h.petY() : 0;
                     h.event("pending_event", 0xa3);
+                    if (h.spawnItem)
+                        h.spawnItem(kFriendDropItem, targetX_, py + kFriendDropDY);
                     h.event("sound", 0x54);
                     if (const int ms = milestoneEvent(friends))
+                    {
                         h.event("pending_event", ms);
+                        if (h.spawnItem)
+                            h.spawnItem(ms, targetX_ + kMilestoneDX, py + kMilestoneDY);
+                    }
                     enter(0xd);
                 }
                 else // neutral: straight to the settle steps

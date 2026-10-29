@@ -11,7 +11,8 @@
 namespace gp
 {
     // Replaces {name} with its value, in one pass (substituted values are not rescanned). Unknown {names} stay as written.
-    inline std::string fillTemplate(const std::string &t, std::initializer_list<std::pair<const char *, std::string>> vars)
+    // The same with variables that are only known at run time (the script API's say(textId, vars)). First match wins.
+    inline std::string fillTemplateVars(const std::string &t, const std::vector<std::pair<std::string, std::string>> &vars)
     {
         std::string out;
         for (size_t i = 0; i < t.size();)
@@ -40,6 +41,13 @@ namespace gp
             out += t[i++];
         }
         return out;
+    }
+    inline std::string fillTemplate(const std::string &t, std::initializer_list<std::pair<const char *, std::string>> vars)
+    {
+        std::vector<std::pair<std::string, std::string>> v;
+        for (const auto &p : vars)
+            v.emplace_back(p.first, p.second);
+        return fillTemplateVars(t, v);
     }
 
     // GetAreaNamePreposition: which string to use for an area tier.
@@ -169,6 +177,10 @@ namespace gp
                 t.erase(p, 7);
         return fillTemplate(t, {{"list", list}});
     }
+
+    // The Yes / No prompt after a generated quest's request, and the reply to No (BuildDeclineQuestDialogue).
+    inline std::string acceptText(const QuestTextEnv &e) { return e.s("accept_" + std::to_string(e.rnd ? e.rnd(1, 4) : 1)); }
+    inline std::string declineText(const QuestTextEnv &e) { return e.s("decline_" + std::to_string(e.rnd ? e.rnd(1, 4) : 1)); }
 
     // BuildNextQuestHintMessage. giver = g_questTargetId (the NEXT quest's giver).
     inline std::string hintText(int giver, const QuestTextEnv &e)

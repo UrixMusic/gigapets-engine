@@ -4,6 +4,7 @@
 // Everything the minigames need from the rest of the game comes in through MinigameEnv (references to shared
 // objects plus a few callbacks), so this file never touches walk.cpp's locals.
 #pragma once
+#include "../engine/display.hpp"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <array>
@@ -24,6 +25,7 @@
 #include "../engine/sprite_cache.hpp"
 #include "../game/three_in_a_row.hpp"
 #include "../game/memory_match.hpp"
+#include "../game/trick_guess.hpp"
 #include "../game/item_pools.hpp"
 #include "../game/text_draw.hpp"
 
@@ -86,7 +88,15 @@ public:
     Minigames(const Minigames &) = delete; // lambdas below capture `this`
     Minigames &operator=(const Minigames &) = delete;
 
-    bool active() const { return swiftShown_ || threeShown_ || memoryShown_; }
+    // What the Trick Teacher's game needs to know about the lesson: level 1..3, the trick's name and the teacher's portrait.
+    struct TrickLesson
+    {
+        int level = 1;
+        std::string trickName;
+        int portraitSprite = 0, portraitPal = gp::kMenuPalette;
+    };
+
+    bool active() const { return swiftShown_ || threeShown_ || memoryShown_ || trickShown_; }
 
     // ---- entry points (called from interactions) ----
     void requestSwiftPick()
@@ -139,6 +149,43 @@ public:
         e_.showBox(std::move(b));
     }
 
+    // PlayRandomMinigame (0x017d60), the "Would you like to play a game?" answer from a friend: RandRange(1, 4) picks
+    // Swift Pick, Three in a Row or Memory Match. Free of charge. Prizes drop at (x, y); the ROM passes the pet's
+    // position and 10 below it.
+    void openRandomGame(int x, int y)
+    {
+        const int pick = e_.randIn(1, 3);
+        petX = x;
+        petY = y;
+        e_.requestScreen([this, pick, x, y]
+                         {
+                             if (pick == 1)
+                             {
+                                 startSwiftPick(true);
+                                 swiftShown_ = true;
+                             }
+                             else if (pick == 2)
+                             {
+                                 startThreeInARow(Well{0, 0, 0, x, y, "", ""});
+                                 threeShown_ = true;
+                             }
+                             else
+                             {
+                                 startMemoryMatch(true);
+                                 memoryShown_ = true;
+                             }
+                         });
+    }
+
+    // Trick Teacher: fade to the code game. done(won) runs while the screen is black on the way back, so it may
+    // open a dialogue box. CANCEL and running out of attempts both report false (the ROM returns 0 for both).
+    void openTrick(TrickLesson lesson, std::function<void(bool)> done)
+    {
+        trickDone_ = std::move(done);
+        e_.requestScreen([this, l = std::move(lesson)]
+                         { startTrick(l); trickShown_ = true; });
+    }
+
     // ---- once per game tick while active() ----
     void tick(const MinigameInput &in)
     {
@@ -184,6 +231,28 @@ public:
             if (!memory_.open())
                 e_.requestScreen([this]
                                  { memoryShown_ = false; });
+            return;
+        }
+        if (trickShown_)
+        {
+            const gp::TrickGuess::Event ev = trick_.tick(in.live && in.left, in.live && in.right,
+                                                         in.live && in.up, in.live && in.down, in.live && in.x);
+            if (trick_.justRight())
+                e_.sfx(gp::TrickGuess::kSfxRight);
+            if (trick_.justWrong())
+                e_.sfx(gp::TrickGuess::kSfxWrong);
+            if (!trick_.open()) // cracked, out of attempts or cancelled: fade back, then report
+            {
+                const bool won = ev == gp::TrickGuess::Event::Finished && trick_.solved();
+                e_.requestScreen([this, won]
+                                 {
+                                     trickShown_ = false;
+                                     std::function<void(bool)> done = std::move(trickDone_);
+                                     trickDone_ = nullptr;
+                                     if (done)
+                                         done(won);
+                                 });
+            }
         }
     }
 
@@ -196,14 +265,15 @@ public:
             drawThreeInARow();
         if (memoryShown_)
             drawMemoryMatch();
+        if (trickShown_)
+            drawTrickGuess();
     }
 
 private:
     // ---- shared drawing ----
     void backdrop()
     {
-        SDL_SetRenderDrawColor(e_.ren, 0, 0, 0, 255);
-        SDL_RenderClear(e_.ren);
+        gp::clearFrame(e_.ren);
         SDL_SetTextureBlendMode(e_.bg, SDL_BLENDMODE_NONE);
         SDL_RenderCopy(e_.ren, e_.bg, nullptr, nullptr);
         e_.drawSlotScene(); // DrawActiveSlotSprites() is part of every one of these screens
@@ -239,11 +309,18 @@ private:
     }
 
     // ---- Swift Pick (area 0, slot 98): setup from ProcessStoryModeObjectInteraction, then RunSwiftPickGame ----
-    void startSwiftPick()
+    void startSwiftPick(bool random = false)
     {
         const gp::MinigameDef &mg = e_.db.minigameOr("base:minigame/swift_pick");              // pool and numbers: minigame_defs.hpp
         const bool fast = e_.player.personality[gp::Lightbulbs] > mg.get("fastAbove", 199);    // GetPersonalityStat(3) > 0xc7
         const int speed = fast ? mg.get("speedFast", 10) : mg.get("speed", 12);
+        if (random) // PlayRandomMinigame: 10 unique items (BuildUniqueRandomSet(out, 10, 2)), prizes at the caller's point
+        {
+            auto rr = [this](int lo, int hi)
+            { return e_.randIn(lo, hi - 1); };
+            swift_.start(gp::buildUniqueRandomSet(10, 2, rr), speed);
+            return;
+        }
         petX = mg.get("petX", 0x628) + e_.randIn(-mg.get("petXJitter", 10), mg.get("petXJitter", 10));
         petY = mg.get("petY", 0x4c2) + e_.randIn(-mg.get("petYJitter", 15), mg.get("petYJitter", 15));
         swift_.start(mg.list("pool"), speed);
@@ -311,10 +388,11 @@ private:
     const gp::MinigameDef &memoryDef() const { return e_.db.minigameOr("base:minigame/memory_match"); }
     int memoryCost() const { return memoryDef().get("cost", gp::MemoryMatch::kCost); }
 
-    void startMemoryMatch()
+    void startMemoryMatch(bool free = false) // free: a friend's random game, no ticket
     {
         const gp::MinigameDef &mg = memoryDef();
-        e_.player.adjustMoney(-memoryCost()); // taken before play, even if you cancel
+        if (!free)
+            e_.player.adjustMoney(-memoryCost()); // taken before play, even if you cancel
         const bool fast = e_.player.personality[gp::Lightbulbs] > mg.get("fastAbove", 199);
         const int maxWrong = fast ? mg.get("maxWrongFast", 5) : mg.get("maxWrong", 4);
         auto rr = [this](int lo, int hi)
@@ -370,10 +448,79 @@ private:
             }
     }
 
+    // ---- Trick Teacher (RunTrickGuessingMinigame, called from AttemptTrickLevel1..3) ----
+    void startTrick(const TrickLesson &l)
+    {
+        const gp::MinigameDef &mg = e_.db.minigameOr("base:minigame/trick_guess");
+        const bool fast = e_.player.personality[gp::Lightbulbs] > mg.get("fastAbove", 199);
+        const int tries = fast ? mg.get("triesFast", 4) : mg.get("tries", 3);
+        const std::vector<int> &lens = mg.list("codeLengths");
+        const size_t k = size_t(std::max(l.level, 1) - 1);
+        const int length = k < lens.size() ? lens[k] : int(k) + 3; // 3, 4, 5 characters of the pet's traits
+        lesson_ = l;
+        trick_.start(e_.player.trickCode, length, tries);
+    }
+
+    std::string trickBody() const
+    {
+        using TG = gp::TrickGuess;
+        switch (trick_.text())
+        {
+        case TG::Text::Intro:
+            return gp::fmtS(readRomString(e_.rom, TG::kStrIntro), {lesson_.trickName});
+        case TG::Text::TriesLeft:
+        {
+            std::string s = readRomString(e_.rom, TG::kStrTriesLeft); // "%d more tries"
+            const size_t p = s.find("%d");
+            if (p != std::string::npos)
+                s.replace(p, 2, std::to_string(trick_.triesLeft()));
+            return s;
+        }
+        case TG::Text::LastTry:
+            return readRomString(e_.rom, TG::kStrLastTry);
+        case TG::Text::Cracked:
+            return readRomString(e_.rom, TG::kStrCracked);
+        case TG::Text::Wrong:
+            break;
+        }
+        return readRomString(e_.rom, TG::kStrWrong);
+    }
+
+    void drawTrickGuess()
+    {
+        using TG = gp::TrickGuess;
+        backdrop();
+        tilePalF(lesson_.portraitSprite, lesson_.portraitPal, float(TG::kPortraitX), float(TG::kPortraitY));
+        e_.title.draw(readRomString(e_.rom, TG::kStrTitle), TG::kTextX, TG::kTitleY, TG::kTextW, gp::Align::Center); // "Trick Teacher"
+        const std::string body = trickBody();
+        const int h = e_.text.layout(body, TG::kBodyX, 0, TG::kBodyW, gp::Align::Center, TG::kBodyIndent, TG::kBodyIndentH).height;
+        e_.text.draw(body, TG::kBodyX, TG::kBodyMidY - h / 2, TG::kBodyW, gp::Align::Center, // centred on kBodyMidY
+                     TG::kBodyIndent, TG::kBodyIndentH);
+
+        // DrawGuessResultSlots: the slot being filled gets the cursor, filled slots a check or a cross.
+        int base = 0, pitch = 0;
+        TG::slotLayout(trick_.length(), base, pitch);
+        for (int i = 0; i < trick_.length(); ++i)
+        {
+            const float x = float(base + i * pitch);
+            if (i == trick_.guessCount())
+                tilePalF(TG::kSpriteCursor, TG::kSpritePal, x + TG::kMarkDX, float(TG::kMarkY));
+            else
+                tilePalF(TG::kSpriteSlot, TG::kSpritePal, x + TG::kSlotDX, float(TG::kSlotY));
+            if (i < trick_.guessCount())
+                tilePalF(trick_.markRight(i) ? TG::kSpriteRight : TG::kSpriteWrong, TG::kSpritePal,
+                         x + TG::kMarkDX, float(TG::kMarkY));
+        }
+        e_.text.draw(readRomString(e_.rom, TG::kStrHint), TG::kTextX, TG::kHintY, TG::kTextW, gp::Align::Center); // "Press CANCEL to exit"
+    }
+
     MinigameEnv &e_;
     gp::SwiftPick swift_;
     gp::ThreeInARow three_;
     gp::MemoryMatch memory_;
-    bool swiftShown_ = false, threeShown_ = false, memoryShown_ = false;
+    gp::TrickGuess trick_;
+    TrickLesson lesson_;
+    std::function<void(bool)> trickDone_;
+    bool swiftShown_ = false, threeShown_ = false, memoryShown_ = false, trickShown_ = false;
     std::set<int> warnedUiSprites_;
 };

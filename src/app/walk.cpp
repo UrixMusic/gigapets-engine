@@ -40,10 +40,31 @@
 #include "../game/offerings.hpp"
 #include "../game/save.hpp"
 #include "../game/save_player.hpp"
+#include "../game/settings.hpp"
+#include "../game/thought_bubble.hpp"
+#include "../game/pet_voice.hpp"
+#include "../game/trick_panel.hpp"
+#include "../game/quest_nudge.hpp"
+#include "../game/potion.hpp"
+#include "../game/stat_gate.hpp"
+#include "../game/color_machine.hpp"
+#include "../game/world_map.hpp"
+#include "../game/npc_stink.hpp"
+#include "../game/sale.hpp"
+#include "../engine/audio.hpp"
+#include "../engine/display.hpp"
+#include "../engine/keybinds.hpp"
+#include "../game/stat_notify.hpp"
 #include "../game/swift_pick.hpp"
 #include "../mods/mod_loader.hpp"
 #include "../game/three_in_a_row.hpp"
 #include "../game/memory_match.hpp"
+#include "../game/trick_showcase.hpp"
+#include "../game/pet_sit.hpp"
+#include "../game/pet_wash.hpp"
+#include "../game/selector_icon.hpp"
+#include "../game/room_scene.hpp"
+#include "../engine/room_render.hpp"
 #include "../game/item_pools.hpp"
 #include "../game/interactions.hpp"
 #include "../mods/script_host.hpp"
@@ -97,19 +118,25 @@ private:
 
 struct WalkItemHost : gp::ItemUseHost
 {
+    std::function<void(int, int)> sink; // AddToStatCounter: set by runWalk() to the stat-change panel
     void addStatCounter(int counter, int amount) override
     {
-        std::printf("stat counter %d += %d (not stored yet)\n", counter, amount);
+        if (sink)
+            sink(counter, amount);
     }
 } itemHost;
 
 static int clampCam(int raw, int world, int view)
 {
+    if (view > 320 && world < view)
+        return (world - view) / 2; // a small area on a wide screen sits in the middle
     return std::min(std::max(raw, 0), world - view); // same order as the game
 }
 
 static float clampCamF(float raw, int world, int view)
 {
+    if (view > 320 && world < view)
+        return float(world - view) / 2.f;
     return std::min(std::max(raw, 0.f), float(world - view));
 }
 
@@ -307,7 +334,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             return gp::kRunError;
         }
         const auto slotInfo = gp::peekSlot(slot);
-        const int petPal = (slotInfo.full && slotInfo.appearance >= 0) ? slotInfo.appearance : speciesDef->defaultPalette;
+        int petPal = (slotInfo.full && slotInfo.appearance >= 0) ? slotInfo.appearance : speciesDef->defaultPalette; // washing can change it
         std::printf("pet palette 0x%x (%s)\n", petPal, (slotInfo.full && slotInfo.appearance >= 0) ? "from save" : "species default");
         // find record tables by content: sprite, pal, x, y
 
@@ -483,7 +510,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     {
                     }
 
-        for (int a : {0x10, 0x11, 0x12, 0x16}) // arrow
+        for (int a : {0xe, 0x10, 0x11, 0x12, 0x16, 0x17, 0x18, gp::kStinkAnim, gp::kExclaimIntroAnim, gp::kExclaimOutroAnim, gp::kTrickQuestionBubble, gp::kTrickAnswerBubble, gp::kHaloBubble, gp::kPitchforkBubble, gp::kStarBubble}) // 0xe: the wash bubble; arrow, dig bubble; 0x17/0x18: the thought bubble
             try
             {
                 gp::importAnim(rom, db, a, 0x28c);
@@ -491,7 +518,15 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             catch (const std::exception &)
             {
             }
-        for (int s : {0x9c1, 0x9c2}) // flower, dug hole
+        for (int s = gp::kTrickIconFirst; s <= gp::kTrickIconLast; ++s) // the tricks panel's icons and placeholders
+            try
+            {
+                gp::importUiSprite(db, rom, s, 0x28c);
+            }
+            catch (const std::exception &)
+            {
+            }
+        for (int s : {gp::kMapMarkerTile, 0x9c1, 0x9c2, gp::kThoughtHungerIcon, gp::kThoughtTiredIcon, gp::kThoughtSickIcon, gp::kThoughtMoodIcon}) // flower, dug hole, the thought bubble icons
             try
             {
                 gp::importUiSprite(db, rom, s, 0x28c);
@@ -500,6 +535,23 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             {
                 std::printf("flower/hole sprite 0x%x import failed: %s\n", s, e.what());
             }
+        for (const gp::StatNoticeSlot &sl : gp::kStatNoticeSlots) // the stat-change panel's icons and backdrop
+            try
+            {
+                gp::importUiSprite(db, rom, sl.tile, sl.palette);
+                gp::importUiSprite(db, rom, gp::kStatNoticeBg, 0x28c);
+            }
+            catch (const std::exception &)
+            {
+            }
+        try
+        {
+            gp::importUiSprite(db, rom, gp::kMapTile, gp::kMapPalette); // the island map, full screen
+        }
+        catch (const std::exception &e)
+        {
+            std::printf("map sprite import failed: %s\n", e.what());
+        }
         for (int s = 0x994; s <= 0x9ab; ++s) // DrawShadow blobs: 12 normal + 12 for species 2
             try
             {
@@ -528,6 +580,48 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         catch (const std::exception &)
         {
         }
+
+        gp::importRoomTilesets(rom, db); // the wall and floor tilesets of the home and hotel rooms
+        {
+            // The room's own pieces (door, hooks, ...) and the sprites of every furnishing item: sprite ids, not anim ids.
+            auto importDecor = [&](int sprite, int palette)
+            {
+                if (sprite <= 0 || sprite == gp::kNoSprite)
+                    return;
+                try
+                {
+                    gp::importUiSprite(db, rom, sprite, palette);
+                }
+                catch (const std::exception &e)
+                {
+                    std::printf("room sprite 0x%x import failed: %s\n", sprite, e.what());
+                }
+            };
+            for (int loc : {0, 4})
+                for (const gp::RoomDecoration &d : gp::roomDecorations(rom, loc))
+                    importDecor(d.sprite, d.palette);
+            for (int marker : {0x33d, 0x3b0, 0x319}) // the "put it here" markers while placing a furnishing
+                importDecor(marker, 0x28c);
+            for (int bowl : {0x95d, 0x95e, 0x963, 0x961}) // the food in the bowl, full to empty
+                importDecor(bowl, 0x28c);
+            for (const gp::ItemDef &it : itemDefs)
+                if (it.type >= 3 && it.type <= 8)
+                {
+                    importDecor(it.decorSprite, it.w7);
+                    importDecor(it.w9, it.w7);
+                }
+        }
+
+        // Trick Teacher game: slot frame and cursor (0x478, 0x400) are already in; add the check and the cross.
+        for (int s : {gp::TrickGuess::kSpriteSlot, gp::TrickGuess::kSpriteCursor, gp::TrickGuess::kSpriteRight, gp::TrickGuess::kSpriteWrong})
+            try
+            {
+                gp::importUiSprite(db, rom, s, gp::TrickGuess::kSpritePal);
+            }
+            catch (const std::exception &e)
+            {
+                std::printf("trick guess sprite 0x%x import failed: %s\n", s, e.what());
+            }
 
         // Bar cursor sprites: 8 words per button (normal rec, pressed rec), 4 words each: sprite, pal, x, y
         for (bool house : {false, true})
@@ -562,6 +656,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         player.questsCompleted = 1; // g_totalQuestsCompleted starts at 1
         if (haveSave)
             gp::loadPlayer(sd, player);
+        const gp::Settings settings = gp::loadSettings(); // the options screen's choices; tutorials decide the first-time messages
         {
             // A pet that was created but never played has no stats yet: run CreateNewPet's stat part once.
             // "statsInit" is written by every later save; the all-zero check keeps older test saves untouched.
@@ -649,13 +744,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         prevPos = pos;
 
         // ---- 2. WINDOW ----
-        const int W = 320, H = 240;
+        const int W = gp::logicalW(), H = 240; // 320, or 426 in 16:9 (the world fills it; the menus sit in the middle)
         unsigned statsBase = 0xD8DC;
         SDL_Renderer *ren = ctx.ren;                     // window + renderer belong to the AppHost
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0"); // nearest (SDL's default): keeps pixel art crisp at fractional positions
         SDL_RenderSetLogicalSize(ren, W, H);
-        const SDL_bool oldIntScale = SDL_RenderGetIntegerScale(ren);
-        SDL_RenderSetIntegerScale(ren, smoothCam ? SDL_TRUE : SDL_FALSE); // uniform pixel widths while scrolling smoothly
         SDL_SetWindowTitle(ctx.win, "walk");
         SDL_Texture *tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, cur->img.w, cur->img.h);
         SDL_UpdateTexture(tex, nullptr, cur->img.rgba.data(), cur->img.w * 4);
@@ -687,6 +780,16 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         addAll(gp::kSitDown);
         addAll(gp::kSitAlt);
         addAll(gp::kEat);
+        addAll(gp::kBowlBite);
+        addAll(gp::kEatStyle);
+        addAll(gp::kActionStyle);
+        addAll(gp::kPositiveStyle);
+        if (sp == 2)
+            petIds.push_back(gp::kPandaFrameStyle);
+        addAll(gp::kBoredStyle);
+        addAll(gp::kBedGetIn);
+        addAll(gp::kSleepCycle);
+        addAll(gp::kBedGetOut);
         addAll(gp::kIdleBase);
         addAll(gp::kIdleSide);
         addAll(gp::kIdleStyle);
@@ -709,19 +812,33 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         for (int id : gp::reactIdsForTier(sp))
             petIds.push_back(id);
 
+        for (int level = 1; level <= 3; ++level) // the tricks (trick_showcase.hpp)
+            for (int id : {gp::TrickShowcase::introAnim(level, sp), gp::TrickShowcase::mainAnim(level, sp), gp::TrickShowcase::closingAnim(level, sp)})
+                if (id >= 0)
+                    petIds.push_back(id);
+        if (sp == 2)
+            for (int n : {2, 3, 4})
+                petIds.push_back(gp::TrickShowcase::reactionAnim(n));
+        petIds.push_back(gp::TrickShowcase::turnAroundAnim(sp));
+        petIds.push_back(gp::TrickShowcase::directionalAnim(sp));
+        petIds.push_back(gp::TrickShowcase::actorReactionAnim(sp));
         std::sort(petIds.begin(), petIds.end());
         petIds.erase(std::unique(petIds.begin(), petIds.end()), petIds.end());
-        for (int id : petIds)
+        auto importPetAnims = [&] // under the current petPal; again after a wash changes the colour
         {
-            try
+            for (int id : petIds)
             {
-                gp::importAnim(rom, db, id, petPal);
+                try
+                {
+                    gp::importAnim(rom, db, id, petPal);
+                }
+                catch (const std::exception &e)
+                {
+                    // std::printf("pet anim %d: %s\n", id, e.what());
+                }
             }
-            catch (const std::exception &e)
-            {
-                // std::printf("pet anim %d: %s\n", id, e.what());
-            }
-        }
+        };
+        importPetAnims();
 
         auto petAnimId = [&](int n) -> gp::Id
         {
@@ -785,6 +902,28 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         loadNpcs();
         auto animRefById = [&](const gp::Id &id) -> AnimRef
         { return sprites.animRef(id); };
+        // The three special stuffed animals (items 0x5d..0x5f) are drawn in the colour the pet started with (g_starterExtraField)
+        // wherever their record says 0x28c: icon, world and furnishing sprites. Imports that colour the first time it is needed.
+        auto uiIdP = [&](int sprite, int pal) -> gp::Id
+        {
+            if (pal == gp::kMenuPalette && !gp::isModSprite(sprite))
+                for (int i = 0x5d; i <= 0x5f; ++i)
+                    if (sprite == itemDefs[size_t(i)].iconSprite || sprite == itemDefs[size_t(i)].worldSprite || sprite == itemDefs[size_t(i)].decorSprite)
+                    {
+                        pal = player.baseColour;
+                        const gp::Id id = gp::uiSpriteId(sprite, pal);
+                        if (!db.anim(id))
+                            try
+                            {
+                                gp::importUiSprite(db, rom, sprite, pal);
+                            }
+                            catch (const std::exception &)
+                            {
+                            }
+                        return id;
+                    }
+            return gp::uiSpriteId(sprite, pal);
+        };
 
         auto reactAnimId = [](int id, int pal)
         {
@@ -803,6 +942,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 w = &n.def->turn180Anim;
             else if (key == 5)
                 w = &n.def->turn90Anim;
+            else if (key == 7)
+                w = &n.def->idleSideAnim;
+            else if (key == 8)
+                w = &n.def->sickIdleAnim;
+            else if (key == 9)
+                w = &n.def->sadIdleAnim;
             else if (key == 6)
                 return animRefById(n.forcedAnimId);
             return animRefById(w->empty() ? n.def->anim : *w);
@@ -811,9 +956,22 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         {
             const int key = n.animKey();
             const int frames = int(npcAnim(n, key).size());
-            n.setAnim(key, frames, 14, key < 4); // keys 4/5 are one-shots
+            // Keys 0..3, 7, 8 and 9 (idles and walks) loop; 4/5 (turns) and 6 (reactions) are one-shots. The sick and sad idles
+            // run at 7 fps (the dog's sick one at 14), like the pet's.
+            const int npcSp = n.def->speciesOrAnim == 0xfffe ? playerSpecies : n.def->speciesOrAnim;
+            const int rate = key == 6 ? n.forcedRate : key == 9 || (key == 8 && npcSp != 0) ? 7 : 14;
+            n.setAnim(key, frames, rate, key < 4 || key >= 7, key == 6 && n.forcedReverse);
             n.advanceAnim(frames);
         };
+        int stinkTicks = 0; // the stink cloud's animation clock (the pet's and the NPCs')
+        gp::StatNotice statNotice; // the panel that drops from the top right when money or a stat changes
+        player.pendingMoney = 0;   // what was set up before the world started (starting money, a load) is not news
+        itemHost.sink = [&](int counter, int amount)
+        { statNotice.add(counter, amount); };
+        int holdTicks = 0;                // a quest reward activity is holding the pet (sim steps left), 0 = none
+        gp::NpcActor *holdNpc = nullptr;  // the NPC held with it (SetAnimalEncounterLockFlag), released when the hold ends
+        std::function<void()> holdDone;   // what runs when the hold ends
+        gp::StinkTransfer stinkXfer; // how long the pet has stood beside a stinky NPC / been stinky beside a clean one
         auto drawNpc = [&](const gp::NpcActor &n, float camX, float camY)
         {
             const AnimRef A = npcAnim(n, std::max(n.anim.animId, 0));
@@ -822,9 +980,13 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             const int fr = std::min(n.anim.currentFrame, int(A.size()) - 1);
             const gp::SpriteFrame &s = A.anim->frames[fr];
             const int key = n.animKey();
+            // Key 7 (idle toward the pet): dog and monkey art faces left, panda art faces right (PlayIdleAnim_Scripted).
+            const int npcSp = n.def->speciesOrAnim == 0xfffe ? playerSpecies : n.def->speciesOrAnim;
+            const bool sideIdleFlip = n.body.facing == (npcSp == 2 ? gp::FaceLeft : gp::FaceRight);
             const bool flip = key == 3                 ? n.body.facing == gp::FaceLeft
                               : (key == 4 || key == 5) ? n.body.facing == gp::FaceRight
                               : key == 6               ? n.forcedFlip
+                              : key == 7               ? !n.def->idleSideAnim.empty() && sideIdleFlip
                                                        : false;
             const auto np = npcPosF(n);
             const float x = flip ? np.first - camX + s.anchorX - s.dx - s.w
@@ -832,6 +994,31 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             SDL_FRect r{x, np.second - camY - s.anchorY + s.dy + 1, float(s.w), float(s.h)};
             SDL_RenderCopyExF(ren, (*A.tex)[fr], nullptr, &r, 0, nullptr,
                               flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+            if (n.overheadTick >= 0 && n.def->stationary) // its own overhead animation, over the NPC
+            {
+                const AnimRef B = animRefById(reactAnimId(n.def->behaviorFlags, n.def->appearancePalette));
+                if (B.size())
+                {
+                    const int bf = std::min(n.overheadTick * gp::kOverheadFps / 30, int(B.size()) - 1);
+                    const gp::SpriteFrame &bs = B.anim->frames[size_t(bf)];
+                    SDL_FRect br{np.first - camX - bs.anchorX + bs.dx, np.second - camY - bs.anchorY + bs.dy + 1, float(bs.w), float(bs.h)};
+                    SDL_RenderCopyF(ren, (*B.tex)[size_t(bf)], nullptr, &br);
+                }
+            }
+            if (n.stinky && !n.def->stationary) // SpawnMessageBubble(6, ...): the stink cloud loops over a stinky NPC
+            {
+                const AnimRef K = animRefById("base:anim/" + std::to_string(gp::kStinkAnim) + "@28c");
+                if (K.size())
+                {
+                    const int dir = key == 3 ? (n.body.facing == gp::FaceLeft ? 0 : 1) : 2;
+                    const gp::BubbleOffset bo = gp::overheadOffset(std::clamp(npcSp, 0, 2), dir, 0);
+                    const int f = (stinkTicks * gp::kStinkFps / 30) % int(K.size());
+                    const gp::SpriteFrame &ks = K.anim->frames[size_t(f)];
+                    SDL_FRect kc{np.first - camX + bo.dx - ks.anchorX + ks.dx,
+                                 np.second - camY + bo.dy + gp::bubbleLower(std::clamp(npcSp, 0, 2)) - ks.anchorY + ks.dy, float(ks.w), float(ks.h)};
+                    SDL_RenderCopyF(ren, (*K.tex)[size_t(f)], nullptr, &kc);
+                }
+            }
         };
 
         for (int a = 0; a < 4; ++a)
@@ -873,26 +1060,103 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         gp::Dialogue dialogue;
         gp::QuestRuntime quests;
         uint32_t &gameTicks = S.world.gameTicks; // the game's tick counter: +2 per 30 Hz tick
+        gp::QuestNudge nudge;           // "Go see Mayor Peter!" (quest_nudge.hpp)
+        nudge.restart(long(gameTicks));
+        const gp::NpcDef *mayorDef = nullptr; // NPC 0x42, set once the NPCs are indexed
         TextDrawer signText(ren, db.font(gp::fontId(1, 0x11f))); // sign text: font 1, palette 0x11f
         TextDrawer text(ren, db.font(gp::fontId(0)));            // dialogue text: font 0
         TextDrawer numbers(ren, db.font(gp::fontId(2)));         // stat numbers: font 2
         TextDrawer badge(ren, db.font(gp::fontId(7)));
         std::unique_ptr<gp::EncounterSequence> &enc = S.world.enc;
         gp::NpcActor *&encNpc = S.world.encNpc;
+        // The Trick Teacher shows the trick off before offering the lesson (trick_showcase.hpp). The world keeps running;
+        // the pet is held and talking is off until it is over.
+        gp::TrickShowcase showcase;
+        gp::NpcActor *showNpc = nullptr;
+        bool showStarted = false; // false while the teacher is still settling into place
+        int showLevel = 1;
+        std::function<void()> showDone;
+        // A player home or hotel (game/room_scene.hpp): while this exists the world is frozen and the room is shown. The
+        // pet is drawn with the indoor ("style") art and only walks left and right along the floor.
+        struct RoomView
+        {
+            enum class Phase
+            {
+                Entering, // from the door, down and across to the floor line
+                Idle,
+                Walking,
+                Settling, // stopped: the walk keeps playing for 0.15 s
+                Turning,  // the 90 degree turn back to the front
+                Leaving,  // along the floor, then up and across to the door
+                Placing,  // choosing where a furnishing goes (the pet isn't shown)
+                Placed,   // the item is down: the room stays up for a moment, then fades back to the item screen
+                Eating    // at the food bowl (see eatStep)
+            };
+            int location = 0;
+            SDL_Texture *tex = nullptr;
+            int x = gp::kRoomDoorX, y = gp::kRoomDoorY; // the pet, in room coordinates
+            int scroll = 0;
+            int px = gp::kRoomDoorX, py = gp::kRoomDoorY, pscroll = 0; // x, y and scroll before the latest tick (smooth mode)
+            int pcurX = 0, pcurY = 0;                                   // the placing cursor before the latest tick
+            Phase phase = Phase::Entering;
+            bool faceLeft = false;
+            int walkTicks = 0, settleTicks = 0, animTicks = 0;
+            // Another save slot's home: its pet sits in the room (hasVisitor), or the slot is unused (forRent).
+            bool hasVisitor = false, forRent = false;
+            int visitSpecies = 0, visitPal = 0, visitTicks = 0;
+            std::vector<gp::RoomDecoration> table; // the room's fixed pieces: door 0, bed 1, food bowl 4, ...
+            int nearby = -1;                       // the table entry the pet is next to (g_nearbyDecorationIndex)
+            gp::SlotItems slots{};   // the 32 furnishing slots this room shows
+            gp::RoomSprites sprites; // door, bed, furniture, wall pieces and the equipped items, in layers
+            // Placing a furnishing (room_scene.hpp): the item, the slot the cursor is on, the cursor's position, and whether
+            // Z has been pressed (the item is put down once the cursor arrives).
+            int placeItem = 0, placeSlot = 0, curX = 0, curY = 0;
+            bool placeConfirmed = false;
+            // Eating at the bowl. Steps follow Pet_RepeatedTrickWithDialogue: 6 walk along the floor, 7 up the diagonal, 8 the
+            // panda's intro, 9 lean in for a bite, 10 chew, 11 pause, 12 back down, 13 turn to the front, 14 happy.
+            int eatStep = 0, eatRepeat = 0, eatChews = 0, eatPause = 0, eatHappy = 0, eatSX = 0, eatAnim = -1;
+            bool eatFlip = false, eatLoop = false;
+            bool eatGivesHappy = true;      // the bowl's +6 Happiness at the end; not for a cure
+            bool eatWash = false;           // a wash or a sleep: the +10 Happiness top-up at the end (step 20 is the bubble)
+            bool sleepQuit = false;         // sleeping to quit the game: no stat changes, and no waking up
+            int eatFps = 14;                // the frame rate of eatAnim (the yawn and the sleep run slower)
+            bool eatReverse = false;        // eatAnim plays last frame to first (the panda's outro)
+            int tutorialEvent = -1;         // a first-time message in progress (steps 40 turn to the front, 41 wait, then show it)
+            // Sleeping, steps 30 yawn, 31 along the floor, 32 up the diagonal to the bed, 33 get in, 34 sleep cycles, 35 get out
+            // (then 12, 13, 14 as after the bowl).
+            int overId = -1, overTicks = 0; // the animation over the pet (the cure's rainbow bubbles), -1 = none
+            RoomView() = default;
+            RoomView(const RoomView &) = delete;
+            RoomView &operator=(const RoomView &) = delete;
+            ~RoomView()
+            {
+                if (tex)
+                    SDL_DestroyTexture(tex);
+            }
+        };
+        std::unique_ptr<RoomView> room;
+        std::function<bool(int)> roomActivity; // the house bar's activities that are built for rooms (assigned below)
+        std::function<void(int)> goHome;       // the outdoor bar's last button: to the door of this save's house (assigned below)
+        std::function<void()> roomQuit;        // the quit button's Yes while in a room: sleep, then leave the game
+        int roomMenuCategory = 0;              // the item screen's tab when a furnishing was chosen, to come back to it
+        // FindEligibleNPCForEncounter (0x03d27a): an NPC can be talked to when it is on screen and the pet is inside the
+        // box around it: strictly less than 0x3c (60) px away on BOTH axes, so a 120 x 120 square, not a circle.
+        // When several qualify the LAST one in instance order wins (the ROM keeps overwriting its selection).
         auto nearestNpc = [&]() -> gp::NpcActor *
         {
-            gp::NpcActor *bestNpc = nullptr;
-            long bd = 28L * 28L;
+            constexpr int kTalkBox = 0x3c;
+            const float camXl = clampCamF(float(pos.x) - W / 2, cur->img.w, W);
+            const float camYl = clampCamF(float(pos.y) - kCamY, cur->img.h, H);
+            gp::NpcActor *pick = nullptr;
             for (gp::NpcActor &n : npcs)
             {
-                const long dx = n.x() - pos.x, dy = n.y() - pos.y, d = dx * dx + dy * dy;
-                if (d <= bd)
-                {
-                    bd = d;
-                    bestNpc = &n;
-                }
+                const float sx = float(n.x()) - camXl, sy = float(n.y()) - camYl;
+                if (sx < 0 || sx >= W || sy <= 0 || sy > H) // not on screen: the ROM skips it entirely
+                    continue;
+                if (std::abs(n.x() - pos.x) < kTalkBox && std::abs(n.y() - pos.y) < kTalkBox)
+                    pick = &n;
             }
-            return bestNpc;
+            return pick;
         };
         // The 12 signs the original builds at runtime with SprintF. Tried before the table lookup.
 
@@ -934,6 +1198,15 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             SDL_RenderCopy(ren, (*A.tex)[0], nullptr, &r);
         };
 
+        auto drawUiF = [&](int spriteId, float x, float y, int pal = gp::kDialoguePalette) // drawUi at a sub-pixel position
+        {
+            const AnimRef A = animRefById(gp::uiSpriteId(spriteId, pal));
+            if (A.size() == 0)
+                return;
+            const gp::SpriteFrame &s = A.anim->frames[0];
+            SDL_FRect r{x + s.dx, y + s.dy, float(s.w), float(s.h)};
+            SDL_RenderCopyF(ren, (*A.tex)[0], nullptr, &r);
+        };
         auto drawUiId = [&](const gp::Id &id, int x, int y)
         {
             const AnimRef A = animRefById(id);
@@ -974,6 +1247,14 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             const int indent = b.portrait.empty() ? 0 : 0x36;
             const int indentH = b.portrait.empty() ? 0 : 0x28;
 
+            if (b.kind == gp::BoxKind::Picture) // the island map (RenderActiveDialogueWindow, type 6)
+            {
+                // Colour 0 of the map is see-through; behind it is the screen's backdrop, not the world.
+                gp::clearFrame(ren); // the whole screen: the border around the picture in 16:9
+                drawUi(gp::kMapTile, 0, 0, gp::kMapPalette);
+                drawUi(gp::kMapMarkerTile, b.markX, b.markY, gp::kMapMarkerPalette);
+                return;
+            }
             if (b.kind == gp::BoxKind::Sign) // <-- the block goes here, inside the lambda
             {
                 drawUi(0x17, 0, 0, 0x11f);
@@ -985,6 +1266,34 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             drawUi(L.frame, L.x, L.y);
             if (!b.portrait.empty())
                 drawUiId(b.portrait, L.x + 0x14, L.y + 0x14);
+
+            if (b.kind == gp::BoxKind::Quest) // DrawQuestObjectiveScreen: everything at fixed screen positions
+            {
+                auto str = [&](const char *k)
+                { return db.textOr(std::string("base:str/quest/") + k); };
+                int y = 0x32;
+                text.draw(b.questHeading, 100, y, 0xfa, gp::Align::Left);
+                y += 0x10;
+                for (const auto &row : b.questRows)
+                {
+                    numbers.draw(std::to_string(row.first), 0x6e, y, 0x14, gp::Align::Left);
+                    numbers.draw(row.second, 0x7d, y, 0xaf, gp::Align::Left);
+                    y += 0xc;
+                }
+                y += 8;
+                text.draw(str("objective_bring"), 100, y, 0xfa, gp::Align::Left);
+                y += 0x10;
+                numbers.draw(b.questBringTo, 0x6e, y, 0xaf, gp::Align::Left);
+                y += numbers.layout(b.questBringTo, 0x6e, y, 0xaf, gp::Align::Left).height + 3;
+                if (!b.questLookIn.empty())
+                {
+                    text.draw(str("objective_look"), 100, y, 0xfa, gp::Align::Left);
+                    y += 0x10;
+                    numbers.draw(b.questLookIn, 0x6e, y, 0xaf, gp::Align::Left);
+                }
+                drawUi(0x27, L.x + L.btnX, L.y + L.btnY);
+                return;
+            }
 
             if (!stats)
             {
@@ -1057,8 +1366,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 else
                     std::printf("bar: SwitchGameState(0x%x)\n", s);
             }
+            std::function<bool(int, int, int, int)> onActivity; // true = handled (0x27: wash)
             void startPetActivity(int id, int prm, int x, int y) override
             {
+                if (onActivity && onActivity(id, prm, x, y))
+                    return;
                 std::printf("bar: StartPetActivity(0x%x, %d) at (%d,%d)\n", id, prm, x, y);
             }
             int rollPetPrizeId(int kind) override
@@ -1070,12 +1382,25 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             void setLoopState(int v) override { std::printf("bar: loopState=%d\n", v); }
             void setItemMenuMode(int) override {}
             void setItemMenuCategory(int c) override { category = c; }
-            void startDialogue(int id) override { std::printf("bar: dialogue 0x%x\n", id); }
-            void openTricksPanel() override { std::printf("bar: tricks panel (not ported)\n"); }
+            std::function<void(int)> onDialogue;
+            void startDialogue(int id) override
+            {
+                if (onDialogue)
+                    onDialogue(id);
+                else
+                    std::printf("bar: dialogue 0x%x\n", id);
+            }
+            std::function<void()> onTricks;
+            void openTricksPanel() override
+            {
+                if (onTricks)
+                    onTricks();
+            }
             int currentSaveSlot() override { return slot; }
             void requestRedraw() override {}
             void startCloseAnim() override { play(inHouse ? 1 : 3); } // CloseMenuBar()
             void playOpenAnim(int) override {}
+            void playSound(int id, int vol) override { gp::audio().playSfx(id, vol); }
             void moveCursor(int ev, int &sel, int count) override // still a guess
             {
                 sel = (sel + (ev == 1 ? 1 : count - 1)) % count;
@@ -1126,7 +1451,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         // Shared services for the free functions in walk_npc_talk.hpp / walk_script_bindings.hpp.
         WalkServices svc{db, scripts, player, dialogue, quests, S, events, refreshBits, saveGame,
                          [&]
-                         { return cur->def->legacyId; }};
+                         { return cur->def->legacyId; },
+                         {}, {}, {}, {}, {}, {}, {}, {}}; // dropGift, startRandomGame, startTrickShowcase, startTrickGame, enterRoom, startColorMachine, showMap, startSell: assigned later
 
         gp::FixedSpawnEnv spawnEnv = gp::playerSpawnEnv(player);
         spawnEnv.itemNumber = [&](const gp::Id &id) // db lookup, so mod items work
@@ -1136,6 +1462,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
         auto enterAreaEvents = [&](const gp::AreaDef &a, bool newZone)
         {
+            gp::audio().stopSfx(); // ExitCurrentArea: Sound_StopAllChannels
+            if (gp::QuestNudge::applies(player.questsCompleted, quests.q.phase))
+                nudge.restart(long(gameTicks)); // Game_ProcessTick: an area change restarts the reminder
+            if (const int song = gp::rau::zoneSong(a.legacyId); song >= 0)
+                gp::audio().playMusic(song); // Sound_LookupAndStart via RemapZoneIndexToAudioId; other areas keep the current song
             if (gp::shopRowForArea(a.legacyId) >= 0)
                 return; // shops use the old PendingList
             if (newZone)
@@ -1149,8 +1480,21 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
         auto randIn = [&](int lo, int hi)
         { return std::uniform_int_distribution<int>(lo, hi)(digGen); };
-        auto sfx = [](int id)
-        { std::printf("sfx 0x%x\n", id); }; // no sound system yet
+        auto sfx = [](int id, int vol = 255)
+        { gp::audio().playSfx(id, vol); };
+        // UpdateStatChangeNotification: the world's loop and the rooms' loop both call it every tick
+        auto tickStatNotice = [&]
+        {
+            if (player.pendingMoney != 0)
+            {
+                statNotice.add(0, player.pendingMoney);
+                player.pendingMoney = 0;
+            }
+            if (const int snd = statNotice.tick([&](int i) -> long
+                                                { return i == 0 ? player.money : player.personality[size_t(i - 1)]; });
+                snd >= 0)
+                sfx(snd);
+        }; // engine/audio.hpp: audio/sfx/<id>.wav, silent if it is missing
 
         auto isSpecialItem = [](int i)
         { return (i >= 2 && i <= 17) || (i >= 0x109 && i <= 0x10b); };
@@ -1173,13 +1517,13 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             {
                 player.adjustMoney(randIn(5, 11));
                 if (sound)
-                    sfx(0x14);
+                    sfx(0x14, 200);
             }
             else if (id == 0x10a)
             {
                 player.adjustMoney(randIn(20, 51));
                 if (sound)
-                    sfx(0x14);
+                    sfx(0x14, 200);
             }
             else if (id == 0x10b) // mystery bag
             {
@@ -1190,12 +1534,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     {
                         player.adjustMoney(randIn(30, 61));
                         if (sound)
-                            sfx(0x14);
+                            sfx(0x14, 200);
                     }
                     else // r = 2..5 -> stat 0..3
                         personalityDelta(r - 2, randIn(1, 10));
                     if (sound)
-                        sfx(0x53);
+                        sfx(0x53, 200);
                 }
                 else
                 {
@@ -1219,7 +1563,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         break;
                     }
                     if (sound)
-                        sfx(1);
+                        sfx(1, 200);
                 }
             }
             else // ids 2..17
@@ -1230,10 +1574,32 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                                                     : 50;
                 personalityDelta(stat, amt);
                 if (sound)
-                    sfx(0x53);
+                    sfx(0x53, 200);
             }
             return true;
         };
+
+        // The first-time messages in the overworld (settings.hpp). tutStep: 0 none, 1 the pet turns to the front, 2 it waits
+        // 0.25 s, then the message opens. afterPickup asks for the "see all your STUFF" message (15) once the pet is free.
+        int tutStep = 0, tutEvent = -1, tutTicks = 0;
+        bool tutNudge = false; // the "Go see Mayor Peter!" reminder instead of a tutorial message
+        bool afterPickup = false;
+        gp::ThoughtTimer hungerTimer, tiredTimer{-gp::kThoughtRetryTicks, gp::kTiredLimit}; // the hungry and tired bubbles (thought_bubble.hpp)
+        gp::ThoughtTimer sickTimer{-gp::kThoughtRetryTicks, gp::kSickLimit}, moodTimer{-gp::kThoughtRetryTicks, gp::kMoodLimit};
+        int barkStep = 0; // X while standing: activity 0xc, TickActor_EncounterReactionSequence
+        std::unique_ptr<gp::ReactionSeq> barkSeq;
+        // the tricks panel (trick_panel.hpp): barBusy 5 = opening, 4 = open; the pet then performs the trick or wonders
+        int trickStep = 0, trickLevel = 0, questionStep = 0, questionTicks = 0, questionBubble = 0;
+        gp::TrickShowcase petTrick;
+        gp::CameraShake cameraShake; // the panda's belly flop
+        int shakeDy = 0;
+        BarAnim panelAnim;
+        bool panelClosing = false;
+        int potionStep = 0, exclaimTicks = -1; // a colour potion's reaction; the exclamation bubble's clock (-1 = none)
+        int colorStep = 0, colorIdx = 0, colorDir = 0, colorTicks = 0; // the spaceship colour machine
+        std::unique_ptr<gp::ReactionSeq> potionSeq;
+        long tiredDecayAccum = 0, hungerDecayAccum = 0; // the stat decay counts (thought_bubble.hpp)
+        int thoughtIcon = -1, thoughtTicks = 0; // the bubble up over the pet (icon tile), -1 = none
 
         auto tryPickup = [&](int idx)
         {
@@ -1249,6 +1615,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 {
                     if (i >= 0 && i < int(itemDefs.size()))
                         player.addItem(itemDefs[size_t(i)].id, 1);
+                    sfx(0x53, 200); // GrantItemOrEvent: PlaySoundEffect(0x53, 200) when the pickup asks for a sound
                     gp::onItemGranted(events, area, i, db.fixedSpotsIn(area), spawnEnv);
                 }
             };
@@ -1265,15 +1632,16 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         break;
                     }
             }
+            if (o.result == gp::PickupResult::Granted)
+                afterPickup = true; // ProcessStoryModeObjectInteraction: IsFirstTimeEvent(0xf) right after the item is granted
             if (o.result == gp::PickupResult::NeedItem)
                 dialogue.show(gp::messageBox("You need " + itemName(o.needItem) + " first.")); // placeholder text
             else if (o.result == gp::PickupResult::AtCapacity)
                 dialogue.show(gp::messageBox("You can't carry any more.")); // placeholder text
         };
 
-        // Marker/flower anims run at 18 fps like InitMapMarkerQueue. Which id is which is a GUESS.
+        // The map-marker arrows (anims 0x10 / 0x11 / 0x12, 18 fps) are in icon_selector.hpp.
         constexpr int kEvPal = 0x28c, kFlowerSprite = 0x9c1, kHoleSprite = 0x9c2;
-        constexpr int kPromptArrowAnim = 0x11; // GUESS: try 0x10 / 0x11 / 0x12
 
         auto drawWorldSprite = [&](const gp::Id &id, int wx, int wy, float camX, float camY)
         {
@@ -1366,7 +1734,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         {
             if (item < 0 || item >= int(itemDefs.size()))
                 return;
-            const AnimRef A = animRefById(gp::uiSpriteId(itemDefs[item].worldSprite, gp::kMenuPalette));
+            const AnimRef A = animRefById(uiIdP(itemDefs[item].worldSprite, gp::kMenuPalette));
             if (A.size())
                 drawShadow(A.anim->frames[0].w, wx, wy, false, camX, camY);
         };
@@ -1396,7 +1764,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (e.state == gp::EventState::BuriedRandom) // kind 5: flower
                 drawWorldSprite(gp::uiSpriteId(kFlowerSprite, kEvPal), e.x, e.y, camX, camY);
             else if (e.state == gp::EventState::Visible && e.item < int(itemDefs.size())) // kind 2: the item itself
-                drawWorldSprite(gp::uiSpriteId(itemDefs[e.item].worldSprite, gp::kMenuPalette), e.x, e.y, camX, camY);
+                drawWorldSprite(uiIdP(itemDefs[e.item].worldSprite, gp::kMenuPalette), e.x, e.y, camX, camY);
         };
 
         auto categoryMatches = [](const gp::ItemDef &d, int category) -> bool
@@ -1405,26 +1773,47 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             {
             case 0: // all
                 return true;
+            // Item_BuildFilteredList's category tests: food is type 9, medicine 10, "quest" items 12, 14 and 15, and the room
+            // tab is everything the other tabs don't take (types 9..12, 14..17 are left out).
             case 1: // food
-                return d.type == 9 || d.type == 3;
+                return d.type == 9;
             case 2: // medicine
                 return d.type == 10;
             case 3: // quest items
-                return d.type == 11 || d.type == 12 || d.type == 15;
+                return d.type == 12 || d.type == 14 || d.type == 15;
             case 4: // room items
-                return d.type == 8 || d.type == 6 || d.type == 5 || d.type == 4 ||
-                       d.type == 1 || d.type == 2;
+                return !(d.type == 9 || d.type == 10 || d.type == 11 || d.type == 12 || (d.type >= 14 && d.type <= 17));
             default:
                 return false;
             }
         };
 
+        // Giving items to the pet whose home you are visiting (the item screen's mode 2, game/room_scene.hpp): the list only
+        // holds what they have room for, and giveTheirs is how many of each they have (read from their save on entering).
+        bool sellMode = false; // the item screen opened by Jeremy (mode 1): choosing an item sells it (game/sale.hpp)
+        bool giveMode = false;
+        int giveLocation = 0;
+        std::map<int, int> giveTheirs;
+
         auto buildFiltered = [&](int category)
         {
             std::vector<int> out;
             for (const gp::ItemDef &d : itemDefs)
-                if (ownedCount(d.index) > 0 && categoryMatches(d, category))
-                    out.push_back(d.index);
+            {
+                if (ownedCount(d.index) <= 0 || !categoryMatches(d, category))
+                    continue;
+                if (sellMode && gp::sellExcludedType(d.type)) // mode 1 hides maps, quest and special items, potions
+                    continue;
+                if (giveMode)
+                {
+                    bool placed = false; // Inventory_FindSlotByItemId: is it one of my room's furnishings?
+                    for (const auto &[s, item] : player.equip)
+                        placed = placed || item == d.index;
+                    if (!gp::canGiveItem(d, placed, giveTheirs.count(d.index) ? giveTheirs.at(d.index) : 0))
+                        continue;
+                }
+                out.push_back(d.index);
+            }
             return out;
         };
 
@@ -1491,9 +1880,21 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             }
             if (barBusy != 0 || dialogue.open() || enc || im.open || pendingExit)
                 return;
+            // Not while the pet is busy with something: feeding, digging, a swift-pick drop, or a wash.
+            if (S.pet.feedStep != 0 || S.pet.digStep != 0 || S.pet.swiftDropStep != 0 || S.pet.washStep != 0 || showNpc || tutStep != 0 || potionStep != 0 || barkStep != 0 || trickStep != 0 || questionStep != 0 || colorStep != 0 || holdTicks > 0)
+                return;
+            if (room) // in a room it is always the house bar, and not while the pet is walking in or out or the item is placed
+            {
+                using P = RoomView::Phase;
+                if (room->phase == P::Entering || room->phase == P::Leaving || room->phase == P::Placing || room->phase == P::Placed ||
+                    room->phase == P::Eating)
+                    return;
+                house = true;
+            }
             barBusy = 1;
             barInHouse = house;
             bar.open(house);
+            gp::audio().playSfx(menubar::kSfxOpen, menubar::kSfxOpenVol); // OpenMenuBar: PlaySoundEffect(0x59, 0xbe)
             playBarAnim(house ? 0 : 2);
         };
 
@@ -1503,6 +1904,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             {
                 requestScreen([&]
                               { statsOpen = true; });
+                return;
+            }
+            if (s >= 0xb && s <= 0xd && goHome) // MapLocationToGameState(slot): Go Home
+            {
+                goHome(s - 0xb);
                 return;
             }
             if (s != 0xe)
@@ -1531,12 +1937,20 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         itemGfx.tile = [&](int sprite, int pal, int x, int y, int layer)
         {
             static std::set<gp::Id> warned;
-            const gp::Id uid = gp::uiSpriteId(sprite, pal);
+            const gp::Id uid = uiIdP(sprite, pal);
+            if (!animRefById(uid).size() && !gp::isModSprite(sprite)) // a palette not seen yet (potion, wash, player-colour plush)
+                try
+                {
+                    gp::importUiSprite(db, rom, sprite, pal);
+                }
+                catch (const std::exception &)
+                {
+                }
             if (!animRefById(uid).size() && warned.insert(uid).second)
                 std::printf("item menu tile missing: %s (at %d,%d layer %x)\n", uid.c_str(), x, y, layer);
             menuCmds.push_back({layer, [=, &animRefById]
                                 {
-                                    const AnimRef A = animRefById(gp::uiSpriteId(sprite, pal));
+                                    const AnimRef A = animRefById(uiIdP(sprite, pal));
                                     if (!A.size())
                                         return;
                                     const gp::SpriteFrame &s = A.anim->frames[0];
@@ -1583,6 +1997,21 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
         // mgEnv.startItemDrop is set where startItemDrop is defined (below).
         Minigames minigames(mgEnv);
+        svc.startTrickGame = [&](const gp::NpcDef &d, int level, const std::string &trickName, std::function<void(bool)> done)
+        {
+            minigames.openTrick({level, trickName, d.portraitSprite, d.portraitPalette}, std::move(done));
+        };
+        svc.startTrickShowcase = [&](gp::NpcActor &n, int level, std::function<void()> done)
+        {
+            if (n.walking()) // the same hold the befriend encounter puts on an NPC (host.npcLock)
+                n.startActivity(gp::kActivityTalkedTo, npcRng);
+            n.locked = true;
+            n.body.facing = n.x() < pos.x ? gp::FaceRight : gp::FaceLeft;
+            showNpc = &n;
+            showStarted = false;
+            showLevel = level;
+            showDone = std::move(done);
+        };
 
         int &facing = S.pet.facing;        // start facing down
         bool &faceLeft = S.pet.faceLeft; // the game's facing word: 0 = left, 1 = right (2 = up, 3 = down); persists while turning
@@ -1609,6 +2038,16 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         int &overId = S.pet.overId, &overTicks = S.pet.overTicks; // overhead medicine animation (-1 = none)
         bool &feedFood = S.pet.feedFood; // the +6 Happiness bonus is food only
 
+        // The standing idle by how the pet is (TickPlayerActorIdleBehavior): sick -> FlagB, unhappy -> FlagA, else the base one.
+        auto restIdleId = [&]
+        {
+            return !player.isHealthy()                                    ? gp::kIdleFlagB[sp]
+                   : player.care[gp::Happiness] < gp::kUnhappyBelow ? gp::kIdleFlagA[sp]
+                                                                       : gp::kIdleBase[sp];
+        };
+        auto restIdleRate = [&] { return restIdleId() == gp::kIdleBase[sp] || (restIdleId() == gp::kIdleFlagB[sp] && sp == 0) ? 14 : 7; };
+        auto isRestIdle = [&](int aid) { return aid == gp::kIdleBase[sp] || aid == gp::kIdleFlagA[sp] || aid == gp::kIdleFlagB[sp]; };
+
         auto playAnim = [&](int aid, bool loop, int rate, Pose p,
                             std::vector<AnimStep> next = {})
         {
@@ -1622,7 +2061,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             animDone = false;
             pose = p;
             queue = std::move(next);
-            if (aid == gp::kIdleBase[sp] && p == Pose::Idle)
+            if (isRestIdle(aid) && p == Pose::Idle)
             {
                 idleTicks = 0;
                 idleThreshold = 90 + std::rand() % 91; // RandRange(30,60) / 10 seconds at 30 ticks/sec
@@ -1691,10 +2130,16 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             player.markFriended(encNpc->def->id);
             return int(player.friended.size());
         };
-        host.event = [](const char *k, int v)
+        host.event = [&](const char *k, int v)
         {
             std::printf("event %s 0x%x\n", k, v);
+            if (std::strcmp(k, "sound") == 0)
+                sfx(v); // PlaySoundEffect(0x54, 200) when a friend is made
         };
+        host.petY = [&]
+        { return pos.y; };
+        host.spawnItem = [&](int item, int x, int y) // SpawnPendingEvent: visible, not persistent, category-flagged
+        { events.placeAt(cur->def->legacyId, item, x, y, false); };
 
         host.pet.play = [&](gp::ReactAnim a, int v)
         {
@@ -1707,7 +2152,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (n == 0)
                 return false;
             playAnim(id, false, a == gp::ReactAnim::Bored ? 7 : 14, Pose::Special);
-            animReverse = a == gp::ReactAnim::NegOutro || a == gp::ReactAnim::Outro;
+            animReverse = gp::playsReversed(a);
             if (animReverse)
                 animFrame = n - 1;
             return true;
@@ -1715,12 +2160,17 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
         host.pet.busy = [&]
         { return !animLoop && !animDone; };
-        host.pet.sound = [](int c, int id)
-        { std::printf("sound cat %d id 0x%x\n", c, id); };
-        host.pet.bubble = [](int id)
-        { std::printf("bubble 0x%x\n", id); };
+        host.pet.sound = [&](int c, int vol)
+        { gp::audio().playSfx(gp::petVoiceId(playerSpecies, c), vol < 0x20 ? 0xbe : vol); }; // PlaySoundFromCategory(species, c, vol); see host.npc.sound for vol 4
+        host.pet.bubble = [&](int id)
+        {
+            if (id == gp::kExclaimIntroAnim) // the exclamation over the head (SpawnMessageBubble 0xb, phase 4)
+                exclaimTicks = 0;
+            else
+                std::printf("bubble 0x%x\n", id);
+        };
         host.pet.rand = [&](int lo, int hi)
-        { return lo + std::rand() % (hi - lo + 1); };
+        { return hi <= lo ? lo : lo + std::rand() % (hi - lo); }; // RandRange: hi exclusive
 
         int &settlePhase = S.pet.settlePhase; // TickActor_SettleFacing: no 0.15 s wait, ends facing down
         host.pet.settle = [&]() -> bool
@@ -1732,14 +2182,14 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 if (facing == 0)
                 {
                     faceLeft = (std::rand() % 3) == 0;
-                    playAnim(gp::kTurn180[sp], false, 14, Pose::Settle, {{gp::kTurn90[sp], false, 14}, {gp::kIdleBase[sp], true, 14}});
+                    playAnim(gp::kTurn180[sp], false, 14, Pose::Settle, {{gp::kTurn90[sp], false, 14}, {restIdleId(), true, restIdleRate()}});
                 }
                 else
-                    playAnim(gp::kTurn90[sp], false, 14, Pose::Settle, {{gp::kIdleBase[sp], true, 14}});
+                    playAnim(gp::kTurn90[sp], false, 14, Pose::Settle, {{restIdleId(), true, restIdleRate()}});
                 settlePhase = 1;
                 return false;
             }
-            if (pose == Pose::Idle && animId == gp::kIdleBase[sp])
+            if (pose == Pose::Idle && isRestIdle(animId))
             {
                 facing = 1;
                 settlePhase = 0;
@@ -1750,7 +2200,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         host.petIdle = [&]
         {
             if (facing == 1)
-                playAnim(gp::kIdleBase[sp], true, 14, Pose::Idle);
+                playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
             else if (facing == 2)
                 playAnim(gp::kIdleSide[sp], true, 14, Pose::Idle); // kIdleSide[0]
             else
@@ -1779,9 +2229,17 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             encNpc->body.facing = encNpc->x() < pos.x ? gp::FaceRight : gp::FaceLeft;
         };
         host.npc.rand = [](int lo, int hi)
-        { return lo + std::rand() % (hi - lo + 1); };
-        host.npc.sound = [](int c, int id)
-        { std::printf("npc sound cat %d id 0x%x\n", c, id); };
+        { return hi <= lo ? lo : lo + std::rand() % (hi - lo); }; // RandRange: hi exclusive
+        bool npcMute = false; // an idle NPC off screen makes no sound
+        host.npc.sound = [&](int c, int vol)
+        {
+            if (npcMute)
+                return;
+            const int s = encNpc->def->speciesOrAnim == 0xfffe ? playerSpecies : encNpc->def->speciesOrAnim;
+            // The idle noise's one odd call passes 4 where the others pass 0xbe; at volume 4 it is inaudible and the first
+            // sound of a meeting sometimes vanished, so it plays at the usual level (GUESS: 4 isn't a volume).
+            gp::audio().playSfx(gp::petVoiceId(s <= 2 ? s : playerSpecies, c), vol < 0x20 ? 0xbe : vol);
+        };
         host.npc.bubble = [](int id)
         { std::printf("npc bubble 0x%x\n", id); };
         host.npc.settle = [&]
@@ -1807,6 +2265,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (animRefById(full).size() == 0)
                 return false;
             encNpc->forceAnim(full); // change forceAnim/forcedAnim to store an Id (std::string)
+            // Outros play last frame to first, same as the pet's (host.pet.play); the ROM shares one routine for both.
+            encNpc->forcedReverse = gp::playsReversed(a);
             const bool neg = a == gp::ReactAnim::Negative || a == gp::ReactAnim::NegIntro ||
                              a == gp::ReactAnim::NegOutro;
             const bool panda = sp == 2;
@@ -1815,16 +2275,22 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             else
                 encNpc->forcedFlip = side && gp::reactMirror(sp, f == gp::FaceRight);
 
-            std::printf("npc play %d (tier %d, idle %d)\n", id, tier, idle);
             return true;
         };
 
+        // PlaySoundFromCategory(species, category, volume): the pet's own voice (pet_voice.hpp)
+        auto petSound = [&](int category, int vol)
+        { gp::audio().playSfx(gp::petVoiceId(sp, category), vol); };
         auto playFeedHappy = [&]
         {
             // (3, 2) in the original: 3 = repeat count, 2 = probably the variant. Try 0 if the art looks wrong.
+            petSound(4, 0xbe); // PlayPositiveReactionAnim: the happy panting
             if (!host.pet.play(gp::ReactAnim::Positive, 2))
                 animDone = true; // no art: let the sequence move on
         };
+        // TickActor_RepeatAnimThenPause: each time the eating animation starts, category 6, or 5 one time in three, at 0xbe
+        auto chewSound = [&]
+        { petSound(std::rand() % 3 == 0 ? 5 : 6, 0xbe); };
 
         auto startFeed = [&]
         {
@@ -1837,6 +2303,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
         auto startMedicine = [&](int curedIllness)
         {
+            petSound(0xa, 0xff); // HandleCureIllnessEncounter: the gulp
             facing = 1;
             walkTicks = 0;
             feedFood = false;
@@ -1857,11 +2324,15 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 feedCount = 1;
                 feedStep = 2;
                 playAnim(gp::kEat[sp], false, 14, Pose::Special);
+                chewSound();
             }
             else if (feedStep == 2)
             {
                 if (++feedCount <= feedRepeats)
+                {
                     playAnim(gp::kEat[sp], false, 14, Pose::Special);
+                    chewSound();
+                }
                 else
                 {
                     feedStep = 3;
@@ -1879,7 +2350,1392 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         player.adjustCare(gp::Happiness, 6);
                     feedStep = 0;
                     overId = -1;
-                    playAnim(gp::kIdleBase[sp], true, 14, Pose::Idle);
+                    playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
+                }
+            }
+        };
+
+        // ---- first-time messages (TickFirstNPCEncounterSequence, activity 0x26); see settings.hpp ----
+        auto startWorldTutorial = [&](int event)
+        {
+            tutEvent = event;
+            tutStep = 1;
+            settlePhase = 0;
+            walkTicks = 0;
+        };
+        auto tickWorldTutorial = [&]
+        {
+            if (tutStep == 1) // the pet turns to face the front (TickActor_SettleFacing)
+            {
+                if (!host.pet.settle())
+                    return;
+                if (!tutNudge)
+                {
+                    player.tutorialsShown = gp::markShown(player.tutorialsShown, tutEvent); // marked shown as it begins
+                    saveGame();
+                }
+                // HandleNPCInteractionInput: the idle that fits how the pet is (sick, unhappy, or ordinary)
+                facing = 1;
+                walkTicks = 0;
+                if (!player.isHealthy())
+                    playAnim(gp::kIdleFlagB[sp], true, sp == 0 ? 14 : 7, Pose::Idle);
+                else if (player.care[gp::Happiness] < gp::kUnhappyBelow)
+                    playAnim(gp::kIdleFlagA[sp], true, 7, Pose::Idle);
+                else
+                    playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
+                tutTicks = 0;
+                tutStep = 2;
+            }
+            else if (tutStep == 2 && ++tutTicks >= gp::kTutorialWaitTicks) // 0.25 s, then the message
+            {
+                tutStep = 0;
+                if (tutNudge) // ShowOneTimeEventMessage(-1): the message with the Mayor's portrait
+                {
+                    tutNudge = false;
+                    gp::DialogueBox nb = gp::messageBox(readRomString(rom, gp::kNudgeMessageAddr));
+                    if (mayorDef)
+                        nb.portrait = gp::uiSpriteId(mayorDef->portraitSprite, mayorDef->portraitPalette);
+                    dialogue.show(std::move(nb));
+                }
+                else
+                    dialogue.show(gp::messageBox(db.textOr("base:text/" + std::to_string(gp::tutorialText(tutEvent)))));
+                tutEvent = -1;
+            }
+        };
+
+        // ---- the hungry / tired bubble (TickCareStatWatchdog conditions 4 and 6); see thought_bubble.hpp ----
+        auto tickThoughtBubble = [&]
+        {
+            const bool walking = pose == Pose::Move;
+            const bool calm = tutStep == 0 && !enc && !dialogue.open();
+            ++stinkTicks;
+            // the stats wear down (conditions 1 and 2)
+            if (gp::decayStep(tiredDecayAccum, gp::kTiredDecayLimit, player.questsCompleted))
+            {
+                player.adjustCare(gp::Tiredness, -gp::tiredDecayAmount(sp));
+                tiredTimer.accum = tiredTimer.limit - gp::kThoughtRetryTicks;
+            }
+            if (gp::decayStep(hungerDecayAccum, gp::kHungerDecayLimit, player.questsCompleted))
+            {
+                const int before = player.care[gp::Hunger];
+                player.adjustCare(gp::Hunger, -gp::hungerDecayAmount(sp));
+                if (gp::crossedHungry(before, player.care[gp::Hunger]))
+                    hungerTimer.accum = hungerTimer.limit - gp::kThoughtRetryTicks;
+            }
+            if (thoughtIcon < 0)
+            {
+                if (gp::hungerBubbleStep(hungerTimer, player.care[gp::Hunger], walking, false))
+                    thoughtIcon = gp::kThoughtHungerIcon;
+                else if (gp::sickBubbleStep(sickTimer, !player.isHealthy(), walking, false))
+                    thoughtIcon = gp::kThoughtSickIcon;
+                else if (gp::tiredBubbleStep(tiredTimer, player.care[gp::Tiredness], walking, false))
+                    thoughtIcon = gp::kThoughtTiredIcon;
+                else if (gp::moodBubbleStep(moodTimer, player.care[gp::Happiness], walking, false))
+                    thoughtIcon = gp::kThoughtMoodIcon;
+                thoughtTicks = 0;
+                return;
+            }
+            ++thoughtTicks;
+            // the timers keep counting while a bubble is up, but cannot add another
+            gp::hungerBubbleStep(hungerTimer, player.care[gp::Hunger], walking, true);
+            gp::tiredBubbleStep(tiredTimer, player.care[gp::Tiredness], walking, true);
+            gp::sickBubbleStep(sickTimer, !player.isHealthy(), walking, true);
+            gp::moodBubbleStep(moodTimer, player.care[gp::Happiness], walking, true);
+            if (thoughtTicks < gp::kThoughtShowTicks)
+                return;
+            const AnimRef G = animRefById("base:anim/" + std::to_string(gp::kThoughtAnimGrow) + "@28c");
+            const AnimRef H = animRefById("base:anim/" + std::to_string(gp::kThoughtAnimHold) + "@28c");
+            if (!gp::thoughtView(thoughtTicks, int(G.size()), int(H.size())).done)
+                return;
+            const int event = calm ? gp::thoughtTutorial(settings.tutorials, player.tutorialsShown, thoughtIcon, pose == Pose::Idle) : -1;
+            thoughtIcon = -1;
+            if (event >= 0)
+                startWorldTutorial(event);
+        };
+
+        // ---- a colour potion's reaction (activity 0x13, TickActor_ShockedEncounterSequence); see potion.hpp ----
+        // Step 1: turn to face front. Step 2: the emote reaction with the exclamation bubble over the pet, then the shocked one.
+        auto startPotionReaction = [&]
+        {
+            potionStep = 1;
+            settlePhase = 0;
+            walkTicks = 0;
+            potionSeq = std::make_unique<gp::ReactionSeq>(gp::ReactionSeq::Kind::Emote);
+        };
+        auto tickPotion = [&]
+        {
+            if (exclaimTicks >= 0)
+                ++exclaimTicks;
+            if (potionStep == 1)
+            {
+                if (host.pet.settle())
+                    potionStep = 2;
+            }
+            else if (potionStep == 2 && potionSeq && potionSeq->tick(host.pet))
+            {
+                potionSeq.reset();
+                potionStep = 0;
+                playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
+            }
+        };
+
+        // ---- X in the overworld (HandlePetStageEvents event 5) ----
+        // Standing still: activity 0xc settles the pet to face front, then TickActor_IdleRandomSound with a count of 1, the
+        // species' call (category 1 or 2). Walking: just category 3 at full volume, unless it is already sounding.
+        auto pressCancelInWorld = [&]
+        {
+            if (pose == Pose::Idle)
+            {
+                barkStep = 1;
+                settlePhase = 0;
+                walkTicks = 0;
+                barkSeq = std::make_unique<gp::ReactionSeq>(gp::ReactionSeq::Kind::Noise, 1);
+            }
+            else if (pose == Pose::Move && !gp::audio().sfxActive(gp::petVoiceId(sp, 3)))
+                petSound(3, 0xff);
+        };
+        auto tickBark = [&]
+        {
+            if (barkStep == 1)
+            {
+                if (host.pet.settle())
+                    barkStep = 2;
+            }
+            else if (barkStep == 2 && barkSeq && barkSeq->tick(host.pet))
+            {
+                barkSeq.reset();
+                barkStep = 0;
+                playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
+            }
+        };
+
+        // ---- the tricks panel (trick_panel.hpp) ----
+        barHost.onTricks = [&]
+        {
+            barBusy = 5; // HandleTrickAction: the bar closes (anim 3) and the panel opens (anim 4)
+            sfx(gp::kTrickClick, gp::kTrickClickVolume);
+            barAnim = {gp::kTrickBarCloseAnim, 0, 0, false, true};
+            panelAnim = {gp::kTrickPanelAnim, 0, 0, false, true};
+            panelClosing = false;
+        };
+        auto closeTrickPanel = [&] // Z, X or Enter: the panel just goes, with no closing animation, and the bar is not shown again
+        {
+            if (barBusy != 4)
+                return;
+            sfx(gp::kTrickClick, gp::kTrickClickVolume);
+            panelAnim.visible = false;
+            panelClosing = false;
+            barAnim.visible = false;
+            bar.forceClose();
+            barBusy = 0;
+        };
+        auto startQuestion = [&] // activity 0x14: bubble 10, half a second, bubble 9
+        {
+            questionStep = 1;
+            questionTicks = 0;
+            questionBubble = gp::kTrickQuestionBubble;
+        };
+        auto startTrick = [&](int level) // activity 0xd: TickActor_NPCEncounterSequence
+        {
+            trickStep = 1;
+            trickLevel = level;
+            settlePhase = 0;
+            walkTicks = 0;
+            petTrick.startWith(level, sp, gp::TrickShowcase::petRepeats(level, sp, player.personality[gp::Lightbulbs], [&](int lo, int hi)
+                                                                       { return lo + std::rand() % (hi - lo); })); // RandRange: hi exclusive
+        };
+        auto pickTrick = [&](int slot) // the panel and the bar go at once and the pet acts
+        {
+            panelAnim.visible = false;
+            panelClosing = false;
+            barAnim.visible = false;
+            bar.forceClose();
+            barBusy = 0;
+            if (player.tricksKnown <= slot)
+                startQuestion();
+            else
+                startTrick(slot + 1); // (the prize roll, RollPetPrizeId(3), isn't wired)
+        };
+        auto tickQuestion = [&]
+        {
+            if (!questionStep)
+                return;
+            const AnimRef A = animRefById("base:anim/" + std::to_string(questionBubble) + "@28c");
+            const int len = gp::exclaimSteps(int(A.size()));
+            ++questionTicks;
+            if (questionStep == 1 && questionTicks >= len)
+            {
+                questionStep = 2;
+                questionTicks = 0;
+            }
+            else if (questionStep == 2 && questionTicks >= int(gp::kTrickQuestionWait * 30))
+            {
+                questionStep = 3;
+                questionBubble = gp::kTrickAnswerBubble;
+                questionTicks = 0;
+            }
+            else if (questionStep == 3 && questionTicks >= len)
+            {
+                questionStep = 0;
+                questionBubble = 0;
+            }
+        };
+        auto tickTrick = [&]
+        {
+            if (!trickStep)
+                return;
+            if (trickStep == 1)
+            {
+                if (!host.pet.settle()) // TickActor_ReactionState: face the front first
+                    return;
+                trickStep = 2;
+            }
+            gp::TrickShowcase::Host th;
+            th.full = true;
+            th.play = [&](int id, int rate)
+            {
+                if (getAnim(id).size() == 0)
+                    return false;
+                playAnim(id, false, rate, Pose::Special);
+                return true;
+            };
+            th.playReverse = [&](int id, int rate, bool)
+            {
+                if (getAnim(id).size() == 0)
+                    return false;
+                playAnim(id, false, rate, Pose::Special);
+                animReverse = true;
+                return true;
+            };
+            th.cameraPan = [&]
+            { cameraShake.start(); };
+            th.setFacing = [&](bool faceRight) // the monkey's turn-around: the turn art is mirrored by faceLeft
+            {
+                faceLeft = !faceRight;
+                facing = 2;
+            };
+            th.busy = [&]
+            { return !animLoop && !animDone; };
+            th.anim = [&]
+            { return animId; };
+            th.frame = [&]
+            { return animFrame; };
+            th.sound = [&](int id, int vol)
+            { sfx(id, vol); };
+            th.soundActive = [&](int id)
+            { return gp::audio().sfxActive(id); };
+            th.stopSound = [&](int id)
+            { gp::audio().stopSfx(id); };
+            th.rand = [&](int lo, int hi)
+            { return lo + std::rand() % (hi - lo); }; // RandRange: hi exclusive
+            th.seconds = [&]
+            { return double(gameTicks) / 60.0; }; // gameTicks is +2 per 30 Hz step
+            if (petTrick.tick(th))
+            {
+                trickStep = 0;
+                playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
+            }
+        };
+
+        // ---- the island map (world_map.hpp): a full-screen picture box with a marker where the pet is ----
+        svc.showMap = [&]
+        {
+            const auto m = gp::mapMarker(cur->def->legacyId, pos.x, pos.y);
+            gp::DialogueBox b;
+            b.kind = gp::BoxKind::Picture;
+            b.markX = m ? m->x : 0; // an area off the map keeps the last marker in the ROM; there is none to keep here
+            b.markY = m ? m->y : 0;
+            dialogue.show(std::move(b));
+        };
+
+        // ---- the spaceship's colour machine (activity 0x29); see color_machine.hpp ----
+        // Step 1: turn to face front. Step 2: the colour cycles every 4 steps until Z; the new colour is the pet's base one.
+        svc.startColorMachine = [&]
+        {
+            colorStep = 1;
+            settlePhase = 0;
+            walkTicks = 0;
+        };
+        auto tickColorMachine = [&](bool zHeld)
+        {
+            if (colorStep == 1)
+            {
+                if (!host.pet.settle())
+                    return;
+                if (!zHeld) // the button was let go before the pet was facing front: nothing happens
+                {
+                    colorStep = 0;
+                    playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
+                    return;
+                }
+                if (const int i = gp::resyncIndex(sp, player.appearance); i >= 0)
+                    colorIdx = i;
+                colorDir = gp::nextDirection(colorDir);
+                colorTicks = 0;
+                colorStep = 2;
+                sfx(gp::kColorMachineSound);
+                return;
+            }
+            if (colorStep != 2)
+                return;
+            if (!zHeld) // letting go of the action button stops it on this colour
+            {
+                importPetAnims();
+                saveGame();
+                colorStep = 0;
+                playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
+                return;
+            }
+            if (colorTicks++ % gp::kColorStepTicks == 0)
+            {
+                colorIdx = gp::stepIndex(colorIdx, colorDir);
+                const int pal = gp::machinePalette(sp, colorIdx);
+                player.appearance = player.baseColour = petPal = pal;
+                try
+                {
+                    gp::importAnim(rom, db, restIdleId(), petPal); // only the idle on show; the rest follows when it stops
+                }
+                catch (const std::exception &)
+                {
+                }
+            }
+        };
+
+        // ---- washing the pet: bar button 4 starts activity 0x27 (HandlePetWashInteraction); see pet_wash.hpp ----
+        int &washStep = S.pet.washStep; // 0 = not washing; 1 get up and start the bubble, 2 the bubble plays, 3 the happy reaction
+        std::unique_ptr<gp::ReactionSeq> washSeq;
+
+        auto startWash = [&]
+        { washStep = 1; };
+
+        auto tickWash = [&]
+        {
+            switch (washStep)
+            {
+            case 0:
+                return;
+            case 1: // TickActor_ReactionState: a sitting pet gets up first, then the bubble starts
+            {
+                const gp::SitPhase ph = gp::sitPhase(sp, animId, pose == Pose::Idle, pose == Pose::Special, animDone);
+                if (ph == gp::SitPhase::Sitting)
+                {
+                    playAnim(gp::kSitAlt[sp], false, 14, Pose::Special);
+                    break;
+                }
+                if (ph != gp::SitPhase::None) // sitting down or getting up: wait
+                    break;
+                // Always front-on: after walking sideways the pet settles facing the front, but our `facing` stays
+                // "side" until something resets it, and the idle and the happy reaction would turn sideways.
+                facing = 1;
+                walkTicks = 0;
+                playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
+                overId = gp::kWashBubbleAnim;
+                overTicks = 0;
+                washStep = 2;
+                break;
+            }
+            case 2: // the bubble plays once at the pet
+            {
+                const int frames = int(animRefById(reactAnimId(gp::kWashBubbleAnim, 0x28c)).size());
+                if (overTicks < gp::bubbleTicks(frames))
+                    break;
+                overId = -1;
+                gp::applyWash(player); // +100 hygiene, original colour back
+                const int pal = gp::washedPalette(player, petPal);
+                if (pal != petPal) // the potion colour comes off
+                {
+                    petPal = pal;
+                    importPetAnims();
+                }
+                saveGame();
+                washSeq = std::make_unique<gp::ReactionSeq>(gp::ReactionSeq::Kind::Positive, gp::kWashHappyRepeats, gp::kWashHappyVariant);
+                washStep = 3;
+                break;
+            }
+            case 3: // PlayPositiveReactionAnim(pet, 3, 2), then the mood top-up
+                if (washSeq && washSeq->tick(host.pet))
+                {
+                    washSeq.reset();
+                    gp::applyWashMood(player);
+                    host.petIdle();
+                    washStep = 0;
+                    saveGame();
+                }
+                break;
+            }
+        };
+        barHost.onActivity = [&](int id, int, int, int)
+        {
+            if (room) // the house bar's buttons
+            {
+                if (roomActivity && roomActivity(id))
+                    return true;
+                if (id == 4) // go out: the pet walks to the door and leaves
+                {
+                    room->phase = RoomView::Phase::Leaving;
+                    room->walkTicks = 0;
+                }
+                else
+                    std::printf("bar: activity 0x%x (sleep) isn't built for rooms yet\n", id);
+                return true;
+            }
+            if (id != gp::kWashActivity)
+                return false;
+            startWash();
+            return true;
+        };
+        // The house bar's last button asks "Are you sure you want to quit the game?" (0x20b7). Yes sends the pet to bed
+        // (StartPetActivity(0x25) at the bed) and then quits; here it saves and goes straight back to the front-end menu.
+        barHost.onDialogue = [&](int id)
+        {
+            if (id != 0x20b7)
+            {
+                std::printf("bar: dialogue 0x%x\n", id);
+                return;
+            }
+            gp::DialogueBox b = gp::messageBox(db.textOr("base:str/quit_prompt", "Are you sure you want to quit the game?"));
+            b.kind = gp::BoxKind::Confirm;
+            b.onYes = [&]
+            {
+                if (room && roomQuit) // the pet goes to bed first
+                {
+                    roomQuit();
+                    return;
+                }
+                saveGame();
+                S.flow.backToMenu = true;
+                S.flow.running = false;
+            };
+            b.onNo = [] {};
+            dialogue.show(std::move(b));
+        };
+
+        // ---- player homes and hotels (EnterActivityAndRunLoop 0x04ab19); see room_scene.hpp ----
+        // Phase 1: the room's walls and floor, the pet walking in and out and along the floor with the indoor art, and the
+        // door back to the street. Furniture, the house bar and the room's activities come later.
+        // The 32 furnishing slots: a hotel's preset, the player's own equipment in their home, or another save slot's
+        // (an unused slot's house is empty: "FOR RENT").
+        auto roomSlots = [&](int location)
+        {
+            gp::SlotItems slots{};
+            if (gp::isHotel(location))
+                slots = gp::hotelSlotItems(rom, location);
+            else
+            {
+                std::map<int, int> equip;
+                if (location == slot)
+                    equip = player.equip;
+                else if (gp::SaveData other; gp::loadFromFile(gp::slotPath(location), other) && gp::peekSlot(location).full)
+                    equip = other.has("equip") ? other.getMap("equip") : gp::starterEquip(other.getInt("species"));
+                for (const auto &[s, item] : equip)
+                    if (s >= 0 && s < gp::kInventorySlots)
+                        slots[size_t(s)] = item;
+            }
+            return slots;
+        };
+        // Rebuilds what the room shows from its slots: the wall and floor themes (slots 0 and 1) and the sprite layers.
+        auto refreshRoom = [&](RoomView &r)
+        {
+            auto themeOf = [&](int s)
+            {
+                const int item = r.slots[size_t(s)];
+                return item > 0 && item < int(itemDefs.size()) ? itemDefs[size_t(item)].w9 : 0;
+            };
+            const gp::RoomTheme th = gp::roomTheme(rom, themeOf(gp::kInventoryWallSlot), themeOf(gp::kInventoryFloorSlot));
+            const gp::Image img = gp::renderRoom(rom, db, th);
+            if (r.tex)
+                SDL_DestroyTexture(r.tex);
+            r.tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, img.w, img.h);
+            SDL_UpdateTexture(r.tex, nullptr, img.rgba.data(), img.w * 4);
+            SDL_SetTextureBlendMode(r.tex, SDL_BLENDMODE_BLEND);
+            r.sprites = gp::roomSprites(rom, gp::roomDecorations(rom, r.location), r.slots, itemDefs);
+        };
+        auto beginRoom = [&](int location)
+        {
+            auto r = std::make_unique<RoomView>();
+            r->location = location;
+            r->slots = roomSlots(location);
+            r->table = gp::roomDecorations(rom, location);
+            // Entering a home that isn't yours: its pet, in the colour saved there, or "FOR RENT" when the slot is unused.
+            if (location >= 0 && location <= 2 && location != slot)
+            {
+                const gp::SlotInfo other = gp::peekSlot(location);
+                r->forRent = !other.full;
+                if (other.full)
+                {
+                    const gp::SpeciesDef *sd = db.speciesByLegacy(other.species);
+                    if (sd)
+                    {
+                        r->hasVisitor = true;
+                        r->visitSpecies = other.species;
+                        r->visitPal = other.appearance >= 0 ? other.appearance : sd->defaultPalette;
+                        try
+                        {
+                            gp::importAnim(rom, db, gp::kSettledStyle[other.species], r->visitPal);
+                        }
+                        catch (const std::exception &)
+                        {
+                        }
+                    }
+                }
+            }
+            refreshRoom(*r);
+            r->scroll = gp::roomScroll(0, r->x, gp::kRoomWidthTiles, W);
+            room = std::move(r);
+            std::printf("room: location %d\n", location);
+        };
+        svc.enterRoom = [&](int location)
+        {
+            if (!gp::isRoomLocation(location) || room)
+                return;
+            sfx(gp::kRoomEnterSound); // PlaySoundEffect(0x13, 200)
+            requestScreen([&, location]
+                          { beginRoom(location); });
+        };
+
+        auto leaveRoom = [&]
+        {
+            const gp::RoomExitPoint p = gp::roomReturnPoint(room->location); // back at the door, by return state
+            room.reset();
+            pos = {p.x, p.y};
+            prevPos = pos;
+            facing = 1;
+            walkTicks = 0;
+            playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
+        };
+
+        // ---- eating at the food bowl: see the comment in room_scene.hpp ----
+        // The food in the bowl is table entry 3's sprite; it changes while the pet eats.
+        auto setBowl = [&](RoomView &r, int sprite)
+        {
+            if (sprite < 0 || int(r.table.size()) <= gp::kBowlEntry || r.table[gp::kBowlEntry].sprite == sprite)
+                return;
+            r.table[gp::kBowlEntry].sprite = sprite;
+            r.sprites = gp::roomSprites(rom, r.table, r.slots, itemDefs);
+        };
+        // fromBowl: Z at the bowl, which gives item 0x1c's effect. From the item screen the chosen food has already had its
+        // own effect (the ROM's menu result 2), and the bowl is filled and eaten from all the same.
+        auto startEating = [&](RoomView &r, bool fromBowl)
+        {
+            if (fromBowl)
+                gp::applyFoodEffect(player, itemDefs[gp::kBowlFoodItem], itemHost); // ApplyItemCategoryEffect(0x1c), at once
+            setBowl(r, gp::kBowlFull);
+            r.phase = RoomView::Phase::Eating;
+            r.eatStep = 6;
+            r.eatSX = gp::bowlApproachX(sp, r.y);
+            r.eatGivesHappy = true;
+            r.eatWash = false;
+            r.animTicks = 0;
+        };
+        // Washing (HandlePetWashInteraction, pet_wash.hpp) in a room: the bubble at the pet, then +100 cleanliness and the
+        // original colour back, then the indoor happy hop three times and the mood top-up.
+        auto startRoomWash = [&](RoomView &r)
+        {
+            r.phase = RoomView::Phase::Eating;
+            r.eatStep = 20;
+            r.eatGivesHappy = false;
+            r.eatWash = true;
+            r.eatAnim = gp::kIdleStyle[sp]; // front-on, any facing
+            r.eatFlip = false;
+            r.eatLoop = true;
+            r.animTicks = 0;
+            r.overId = gp::kWashBubbleAnim;
+            r.overTicks = 0;
+        };
+        // Sleeping (activity 5 from the bed or the bar; activity 0x25 when quitting): see room_scene.hpp.
+        auto startSleep = [&](RoomView &r, bool quitting)
+        {
+            r.phase = RoomView::Phase::Eating;
+            r.eatStep = 30;
+            r.eatGivesHappy = false;
+            r.eatWash = false;
+            r.sleepQuit = quitting;
+            r.eatAnim = gp::kBoredStyle[sp];
+            r.eatFlip = false;
+            r.eatLoop = false;
+            r.eatFps = 7; // PlayBoredReactionAnim plays at 7
+            r.animTicks = 0;
+            petSound(8, 0xa0); // the yawn: the bored reaction's sound
+        };
+        roomQuit = [&]
+        { startSleep(*room, true); };
+        roomActivity = [&](int id)
+        {
+            if (id == 5) // the bar's sleep button
+            {
+                startSleep(*room, false);
+                return true;
+            }
+            if (id != gp::kWashActivity)
+                return false;
+            startRoomWash(*room);
+            return true;
+        };
+        // A cure (HandleCureIllnessEncounter 0x015ed8, activity 0x28): where the pet stands, the bubbles over it and the
+        // indoor happy hop three times. The Happiness bonus is the bowl's only. A medicine that doesn't match does nothing.
+        auto startRoomMedicine = [&](RoomView &r, int curedIllness)
+        {
+            r.phase = RoomView::Phase::Eating;
+            r.eatStep = 17; // the hop, with the panda's intro and outro
+            r.eatGivesHappy = false;
+            r.eatWash = false;
+            r.eatAnim = gp::kIdleStyle[sp]; // held for the one step before the hop starts
+            r.eatFlip = false;
+            r.eatLoop = true;
+            r.eatFps = 14;
+            r.eatReverse = false;
+            r.animTicks = 0;
+            r.overId = 137 + (curedIllness % 13); // the same bubble animation as outdoors
+            r.overTicks = 0;
+        };
+        // The first-time messages (settings.hpp). Standing next to the bed or the bowl is enough: the pet stops, the event is
+        // marked shown (saved with the player), and 0.25 s later the message opens.
+        auto tutorialBegin = [&](RoomView &r)
+        {
+            player.tutorialsShown = gp::markShown(player.tutorialsShown, r.tutorialEvent);
+            saveGame();
+            r.eatAnim = gp::kIdleStyle[sp]; // front-on
+            r.eatFlip = false;
+            r.eatLoop = true;
+            r.eatFps = 14;
+            r.eatReverse = false;
+            r.animTicks = 0;
+            r.eatStep = 41;
+        };
+        auto startTutorial = [&](RoomView &r, int event)
+        {
+            const bool turn = r.phase == RoomView::Phase::Walking || r.phase == RoomView::Phase::Settling;
+            r.phase = RoomView::Phase::Eating;
+            r.tutorialEvent = event;
+            r.eatGivesHappy = false;
+            r.eatWash = false;
+            r.sleepQuit = false;
+            r.overId = -1;
+            if (turn) // it was walking: it settles to face the front first
+            {
+                r.eatAnim = gp::kTurn90Style[sp];
+                r.eatFlip = !r.faceLeft; // the art faces left
+                r.eatLoop = false;
+                r.eatFps = 14;
+                r.eatReverse = false;
+                r.animTicks = 0;
+                r.eatStep = 40;
+            }
+            else
+                tutorialBegin(r);
+        };
+        // Called every tick the pet is free: HandlePetStageEvents starts the message the first time it is by the bed or bowl.
+        auto roomTutorial = [&]
+        {
+            RoomView &r = *room;
+            using P = RoomView::Phase;
+            if (r.phase != P::Idle && r.phase != P::Walking && r.phase != P::Settling && r.phase != P::Turning)
+                return;
+            const int event = r.nearby == gp::kDecorBed ? gp::kTutorialBed : r.nearby == gp::kDecorBowl ? gp::kTutorialBowl : -1;
+            if (event >= 0 && gp::isFirstTime(settings.tutorials, player.tutorialsShown, event))
+                startTutorial(r, event);
+        };
+
+        auto tickEat = [&](RoomView &r)
+        {
+            const gp::BowlTarget t = gp::bowlTarget(sp);
+            auto done = [&](int id) // a one-shot animation has played to its end
+            {
+                const int n = int(getAnim(id).size());
+                return n == 0 || r.animTicks * r.eatFps / 30 >= n;
+            };
+            auto play = [&](int id, bool flip, bool loop, int fps = 14) // 14 is kFrameRate
+            {
+                r.eatAnim = id;
+                r.eatFlip = flip;
+                r.eatLoop = loop;
+                r.eatFps = fps;
+                r.eatReverse = false;
+                r.animTicks = 0;
+            };
+            // The end of every happy hop (bowl, cure, wash, bed): the Happiness top-ups, save, and back to normal.
+            auto finishHappy = [&]
+            {
+                if (r.eatGivesHappy && player.care[gp::Happiness] < gp::kHappinessCap)
+                    player.adjustCare(gp::Happiness, gp::kBowlHappiness);
+                if (r.eatWash)
+                    gp::applyWashMood(player);
+                saveGame();
+                r.phase = RoomView::Phase::Idle;
+                r.eatStep = 0;
+                r.animTicks = 0;
+                r.overId = -1;
+            };
+            auto walk = [&] // the sideways walk, mirrored for left
+            {
+                if (r.eatAnim != gp::kWalkSideStyle[sp] || r.eatFlip != r.faceLeft)
+                    play(gp::kWalkSideStyle[sp], r.faceLeft, true);
+            };
+            // The bite, chew and action art is played unmirrored: the dog's and monkey's faces left (the bowl is on their left)
+            // and the panda's faces right (it stands to the bowl's left).
+            auto bite = [&]
+            {
+                play(gp::kBowlBite[sp], false, false);
+                r.eatStep = 9;
+            };
+            ++r.animTicks;
+            switch (r.eatStep)
+            {
+            case 6: // along the floor to the foot of the diagonal
+                if (r.x == r.eatSX)
+                {
+                    r.eatStep = 7;
+                    break;
+                }
+                r.faceLeft = r.eatSX < r.x;
+                walk();
+                r.x += std::clamp(r.eatSX - r.x, -gp::kRoomStepPx, gp::kRoomStepPx);
+                break;
+            case 7: // up the diagonal to the bowl
+                if (r.y > t.y)
+                {
+                    r.faceLeft = t.x < r.x;
+                    walk();
+                    r.x += std::clamp(t.x - r.x, -gp::kRoomStepPx, gp::kRoomStepPx);
+                    r.y -= 1;
+                    break;
+                }
+                r.x = t.x;
+                r.y = t.y;
+                r.faceLeft = sp != 2; // the bowl is to the left of everyone but the panda
+                r.eatRepeat = 2 + std::rand() % 2; // RandRange(2,4): 2 or 3 bites
+                if (sp == 2) // the panda starts with an action animation
+                {
+                    play(gp::kActionStyle[sp], false, false);
+                    r.eatStep = 8;
+                }
+                else
+                    bite();
+                break;
+            case 8:
+                if (done(gp::kActionStyle[sp]))
+                    bite();
+                break;
+            case 9: // lean in; the food drops as the bites go
+                setBowl(r, gp::bowlSpriteForBites(r.eatRepeat));
+                if (done(gp::kBowlBite[sp]))
+                {
+                    --r.eatRepeat;
+                    r.eatChews = 2 + std::rand() % 3; // RandRange(2,5): 2..4 chews
+                    play(gp::kEatStyle[sp], false, false);
+                    chewSound(); // GUESS: the bowl's chews sound like the outdoor ones
+                    r.eatStep = 10;
+                }
+                break;
+            case 10: // chew, then a short pause holding the last frame
+                if (done(gp::kEatStyle[sp]))
+                {
+                    if (--r.eatChews > 0)
+                    {
+                        play(gp::kEatStyle[sp], false, false);
+                        chewSound();
+                    }
+                    else
+                    {
+                        r.eatPause = gp::bowlPauseTicks(1 + std::rand() % 3); // RandRange(1,4) / 20 seconds
+                        r.eatStep = 11;
+                    }
+                }
+                break;
+            case 11:
+                if (--r.eatPause > 0)
+                    break;
+                if (r.eatRepeat < 1)
+                {
+                    r.eatSX = (gp::kRoomFloorY - r.y) * (sp == 2 ? -2 : 2) + r.x; // back to the floor
+                    r.eatStep = 12;
+                }
+                else
+                    bite();
+                break;
+            case 12: // down the diagonal
+                if (r.y < gp::kRoomFloorY)
+                {
+                    r.faceLeft = r.eatSX < r.x;
+                    walk();
+                    r.x += std::clamp(r.eatSX - r.x, -gp::kRoomStepPx, gp::kRoomStepPx);
+                    r.y += 1;
+                    break;
+                }
+                r.x = r.eatSX;
+                r.y = gp::kRoomFloorY;
+                play(gp::kTurn90Style[sp], !r.faceLeft, false); // art faces left, so mirrored for right
+                r.eatStep = 13;
+                break;
+            case 13: // turn to the front
+                if (done(gp::kTurn90Style[sp]))
+                    r.eatStep = 17;
+                break;
+            case 40: // a first-time message: the pet turns to the front first (TickActor_SettleFacing)
+                if (done(gp::kTurn90Style[sp]))
+                    tutorialBegin(r);
+                break;
+            case 41: // marked shown and idle: after 0.25 s the message opens (TickFirstNPCEncounterSequence)
+                if (r.animTicks >= gp::kTutorialWaitTicks)
+                {
+                    const int event = r.tutorialEvent;
+                    r.phase = RoomView::Phase::Idle;
+                    r.eatStep = 0;
+                    r.animTicks = 0;
+                    r.tutorialEvent = -1;
+                    dialogue.show(gp::messageBox(db.textOr("base:text/" + std::to_string(gp::tutorialText(event)))));
+                }
+                break;
+            case 30: // the yawn (the bored reaction), then off to the bed
+                if (done(gp::kBoredStyle[sp]))
+                {
+                    r.eatSX = gp::bedApproachX(r.y);
+                    r.eatStep = 31;
+                }
+                break;
+            case 31: // along the floor to the foot of the diagonal
+                if (r.x == r.eatSX)
+                {
+                    r.eatStep = 32;
+                    break;
+                }
+                r.faceLeft = r.eatSX < r.x;
+                walk();
+                r.x += std::clamp(r.eatSX - r.x, -gp::kRoomStepPx, gp::kRoomStepPx);
+                break;
+            case 32: // up the diagonal to the bed
+                if (r.y > gp::kBedY)
+                {
+                    r.faceLeft = gp::kBedX < r.x;
+                    walk();
+                    r.x += std::clamp(gp::kBedX - r.x, -gp::kRoomStepPx, gp::kRoomStepPx);
+                    r.y -= 1;
+                    break;
+                }
+                r.x = gp::kBedX;
+                r.y = gp::kBedY;
+                play(gp::kBedGetIn[sp], false, false);
+                r.eatStep = 33;
+                break;
+            case 33:
+                if (done(gp::kBedGetIn[sp]))
+                {
+                    r.eatRepeat = gp::kSleepCycles;
+                    play(gp::kSleepCycle[sp], false, false, gp::sleepCycleFps(sp));
+                    sfx(6, 0xbe); // the sleeping sound: sound 6 (browser #11); GUESS: once per cycle
+                    r.eatStep = 34;
+                }
+                break;
+            case 34: // sleep cycles: +10 Tiredness each (not when quitting), on until 3 are done and the pet is rested
+                if (done(gp::kSleepCycle[sp]))
+                {
+                    if (!r.sleepQuit)
+                        player.adjustCare(gp::Tiredness, gp::kSleepTiredness);
+                    --r.eatRepeat;
+                    if (!gp::sleepOver(r.eatRepeat, player.care[gp::Tiredness], r.sleepQuit))
+                    {
+                        play(gp::kSleepCycle[sp], false, false, gp::sleepCycleFps(sp));
+                        sfx(6, 0xbe);
+                    }
+                    else if (r.sleepQuit) // the ROM halts here; the game saves and goes back to the menu
+                    {
+                        saveGame();
+                        S.flow.backToMenu = true;
+                        S.flow.running = false;
+                    }
+                    else
+                    {
+                        play(gp::kBedGetOut[sp], false, false);
+                        r.eatStep = 35;
+                    }
+                }
+                break;
+            case 35: // out of bed, back down the diagonal (step 12), turn to the front (13) and the happy hop (14)
+                if (done(gp::kBedGetOut[sp]))
+                {
+                    r.eatSX = (gp::kRoomFloorY - r.y) * -2 + r.x;
+                    r.eatWash = true; // the same +10 Happiness top-up as after a wash
+                    r.eatStep = 12;
+                }
+                break;
+            case 20: // the wash bubble plays once at the pet; then the wash itself
+            {
+                const int frames = int(animRefById(reactAnimId(gp::kWashBubbleAnim, 0x28c)).size());
+                if (r.overTicks < gp::bubbleTicks(frames))
+                    break;
+                r.overId = -1;
+                gp::applyWash(player); // +100 hygiene, original colour back
+                const int pal = gp::washedPalette(player, petPal);
+                if (pal != petPal) // the potion colour comes off
+                {
+                    petPal = pal;
+                    importPetAnims();
+                }
+                saveGame();
+                r.eatStep = 17;
+                break;
+            }
+            case 17: // PlayPositiveReactionAnim(pet, 3, 2) begins: the panda's intro first, the others go straight to the hop
+                r.eatHappy = 0;
+                if (sp == 2)
+                {
+                    play(gp::kPandaFrameStyle, false, false);
+                    r.eatStep = 15;
+                }
+                else
+                {
+                    play(gp::kPositiveStyle[sp], false, false), petSound(4, 0xbe); // PlayPositiveReactionAnim: the happy panting
+                    r.eatStep = 14;
+                }
+                break;
+            case 15: // the panda's intro is over
+                if (done(gp::kPandaFrameStyle))
+                {
+                    play(gp::kPositiveStyle[sp], false, false), petSound(4, 0xbe); // PlayPositiveReactionAnim: the happy panting
+                    r.eatStep = 14;
+                }
+                break;
+            case 14: // the hop, three times
+                if (done(r.eatAnim))
+                {
+                    if (++r.eatHappy < 3)
+                        play(r.eatAnim, false, false), petSound(4, 0xbe);
+                    else if (sp == 2) // then the panda's outro: its intro played last frame to first
+                    {
+                        play(gp::kPandaFrameStyle, false, false);
+                        r.eatReverse = true;
+                        r.eatStep = 16;
+                    }
+                    else
+                        finishHappy();
+                }
+                break;
+            case 16:
+                if (done(gp::kPandaFrameStyle))
+                    finishHappy();
+                break;
+            }
+        };
+
+        // Put the item in the slot (SetInventorySlot) and show the room with it. Only the player's own home has equipment to
+        // change; it is saved with the player.
+        auto equipSlot = [&](RoomView &r, int s, int item)
+        {
+            r.slots[size_t(s)] = item;
+            if (item)
+                player.equip[s] = item;
+            else
+                player.equip.erase(s);
+            saveGame();
+            refreshRoom(r);
+        };
+
+        // Back to the item screen, on the tab it was left on (while the screen is black, from requestScreen).
+        // How many of each item the pet in this home has (LoadHeldItemQuantitiesFromSave(slot, 1)).
+        auto loadTheirItems = [&](int location)
+        {
+            giveTheirs.clear();
+            gp::SaveData s;
+            if (!gp::loadFromFile(gp::slotPath(location), s))
+                return;
+            if (s.has("itemIds"))
+            {
+                const std::map<std::string, int> ids = s.getIdMap("itemIds");
+                for (const gp::ItemDef &d : itemDefs)
+                    if (auto it = ids.find(d.id); it != ids.end())
+                        giveTheirs[d.index] = it->second;
+            }
+            else
+                for (const auto &[n, c] : s.getMap("inventory"))
+                    giveTheirs[n] = c;
+        };
+        // Z on the visiting pet: the item screen in give mode (HandlePetStageEvents sets the item menu mode to 2).
+        auto startGive = [&](RoomView &r)
+        {
+            giveMode = true;
+            giveLocation = r.location;
+            loadTheirItems(r.location);
+            requestScreen([&]
+                          {
+                im = {};
+                im.open = true;
+                im.category = barHost.category;
+                im.filtered = buildFiltered(im.category);
+                std::printf("give: %zu items they have room for\n", im.filtered.size()); });
+        };
+
+        // The room stays in its placing view until the screen is black, so the pet never shows during the fade out.
+        auto reopenItemScreen = [&]
+        {
+            if (room)
+            {
+                room->phase = RoomView::Phase::Idle;
+                room->animTicks = 0;
+            }
+            im = {};
+            im.open = true;
+            im.category = roomMenuCategory;
+            im.filtered = buildFiltered(im.category);
+        };
+
+        auto tickRoom = [&](uint8_t dirs, uint8_t newly, bool zPressed, bool xPressed)
+        {
+            RoomView &r = *room;
+            using P = RoomView::Phase;
+            constexpr int kSettleTicks = 5; // the walk keeps playing for 0.15 s after the keys are released
+            // The diagonal in and out of the door meets the floor line here (StartPetActivity(3) and Pet_WalkOutAndBack).
+            const int floorX = gp::kRoomDoorX + (gp::kRoomFloorY - gp::kRoomDoorY) * 2;
+            ++r.visitTicks; // the visiting pet's idle keeps playing whatever the player is doing
+            if (r.phase == P::Placed) // the item is down: hold the room, then fade back to the inventory
+            {
+                if (++r.animTicks >= gp::kPlacedHoldTicks)
+                    requestScreen(reopenItemScreen); // the phase goes back to Idle once the screen is black
+                return;
+            }
+            if (r.phase == P::Placing) // UpdatePetWalkToItem / HandleMapNavigationInput
+            {
+                if (xPressed) // cancel: the ROM switches state straight back to the item screen
+                {
+                    requestScreen(reopenItemScreen);
+                    return;
+                }
+                if (!r.placeConfirmed)
+                {
+                    int to = r.placeSlot;
+                    if (newly & gp::DirLeft)
+                        to = gp::neighbourSlot(rom, to, gp::SlotDir::Left);
+                    else if (newly & gp::DirRight)
+                        to = gp::neighbourSlot(rom, to, gp::SlotDir::Right);
+                    else if (newly & gp::DirUp)
+                        to = gp::neighbourSlot(rom, to, gp::SlotDir::Up);
+                    else if (newly & gp::DirDown)
+                        to = gp::neighbourSlot(rom, to, gp::SlotDir::Down);
+                    r.placeSlot = to >= 0 && to < gp::kInventorySlots ? to : r.placeSlot;
+                    if (zPressed)
+                    {
+                        sfx(gp::kPlaceSound);
+                        r.placeConfirmed = true;
+                    }
+                }
+                // The marker flies to the slot at 4 px per tick on each axis.
+                const gp::SlotPos g = gp::slotPosition(rom, r.placeSlot);
+                r.curX += std::clamp(g.x - r.curX, -gp::kPlaceFlightStep, gp::kPlaceFlightStep);
+                r.curY += std::clamp(g.y - r.curY, -gp::kPlaceFlightStep, gp::kPlaceFlightStep);
+                // The background scrolls to keep the marker near the middle of the screen.
+                const int wantScroll = std::clamp(r.curX - 0x9f - (W - 320) / 2, 0, gp::kRoomWidthTiles * gp::kRoomTilePx - W);
+                r.scroll += std::clamp(wantScroll - r.scroll, -gp::kPlaceFlightStep, gp::kPlaceFlightStep);
+                if (r.placeConfirmed && r.curX == g.x && r.curY == g.y)
+                {
+                    equipSlot(r, r.placeSlot, r.placeItem);
+                    r.phase = P::Placed; // SetInventorySlot, then back to the item screen after a moment
+                    r.animTicks = 0;
+                }
+                return;
+            }
+            if (r.phase == P::Eating)
+            {
+                if (r.overId >= 0)
+                    ++r.overTicks;
+                tickEat(r);
+                r.nearby = -1;
+                r.scroll = gp::roomScroll(r.scroll, r.x, gp::kRoomWidthTiles, W);
+                return;
+            }
+            if (r.phase == P::Entering)
+            {
+                r.faceLeft = false;
+                ++r.walkTicks;
+                r.x += gp::kRoomStepPx;
+                r.y += 1;
+                if (r.y >= gp::kRoomFloorY)
+                {
+                    r.x = floorX;
+                    r.y = gp::kRoomFloorY;
+                    r.phase = P::Idle;
+                    r.animTicks = 0;
+                }
+            }
+            else if (r.phase == P::Leaving)
+            {
+                ++r.walkTicks;
+                if (r.y == gp::kRoomFloorY && r.x != floorX) // along the floor to the foot of the diagonal
+                {
+                    const int d = floorX - r.x;
+                    r.faceLeft = d < 0;
+                    r.x += std::clamp(d, -gp::kRoomStepPx, gp::kRoomStepPx);
+                }
+                else // then up and across to the door
+                {
+                    r.faceLeft = true;
+                    r.x -= gp::kRoomStepPx;
+                    r.y -= 1;
+                    if (r.y <= gp::kRoomDoorY)
+                    {
+                        r.x = gp::kRoomDoorX;
+                        r.y = gp::kRoomDoorY;
+                        sfx(gp::kRoomEnterSound);
+                        requestScreen(leaveRoom);
+                    }
+                }
+            }
+            else
+            {
+                const bool left = (dirs & gp::DirLeft) != 0, right = (dirs & gp::DirRight) != 0;
+                if (left || right) // up and down do nothing here; left wins when both are held
+                {
+                    r.faceLeft = left;
+                    r.x = gp::roomClampX(r.x + (left ? -gp::kRoomStepPx : gp::kRoomStepPx));
+                    if (r.phase != P::Walking)
+                        r.walkTicks = 0; // a new walk starts on frame 0
+                    r.phase = P::Walking;
+                    ++r.walkTicks;
+                }
+                else if (r.phase == P::Walking)
+                {
+                    r.phase = P::Settling;
+                    r.settleTicks = 0;
+                }
+                if (r.phase == P::Settling)
+                {
+                    ++r.walkTicks;
+                    if (++r.settleTicks >= kSettleTicks)
+                    {
+                        r.phase = P::Turning;
+                        r.animTicks = 0;
+                    }
+                }
+                else if (r.phase == P::Turning)
+                {
+                    const int n = int(getAnim(gp::kTurn90Style[sp]).size());
+                    if (n == 0 || ++r.animTicks * kFrameRate / 30 >= n)
+                    {
+                        r.phase = P::Idle;
+                        r.animTicks = 0;
+                    }
+                }
+                else if (r.phase == P::Idle)
+                    ++r.animTicks;
+                // Z at the door walks the pet out (HandlePetStageEvents: the nearest decoration is the door -> activity 4).
+                if (zPressed && r.phase != P::Walking && r.nearby == gp::kDecorDoor)
+                {
+                    r.phase = P::Leaving;
+                    r.walkTicks = 0;
+                }
+                // Z at the food bowl: eat (ApplyItemCategoryEffect(0x1c), then activity 6).
+                else if (zPressed && r.phase != P::Walking && r.nearby == gp::kDecorBowl)
+                {
+                    startEating(r, true);
+                    return;
+                }
+                // Z on the visiting pet opens the item screen in mode 2 to give it items (not built yet).
+                else if (zPressed && r.phase != P::Walking && r.nearby == gp::kDecorVisitor)
+                {
+                    startGive(r);
+                    return;
+                }
+                // Z at the bed: sleep (activity 5).
+                else if (zPressed && r.phase != P::Walking && r.nearby == gp::kDecorBed)
+                {
+                    startSleep(r, false);
+                    return;
+                }
+            }
+            // The decoration next to the pet, for the selector arrow and for Z (FindDecorationNearPetX). Only while the pet is
+            // free to act: not walking in or out, and not while something else has the buttons.
+            const bool free = r.phase == P::Idle || r.phase == P::Walking || r.phase == P::Settling || r.phase == P::Turning;
+            r.nearby = free ? gp::nearbyDecoration(r.table, r.x,
+                                                   [&](const gp::RoomDecoration &e)
+                                                   {
+                                                       const AnimRef D = animRefById(uiIdP(e.sprite, e.palette));
+                                                       return D.size() ? D.anim->frames[0].anchorX - D.anim->frames[0].dx : 0;
+                                                   })
+                           : -1;
+            if (free)
+                r.nearby = gp::visitRules(r.nearby, r.x, r.hasVisitor, r.forRent); // the visiting pet; a house for rent has only the door
+            r.scroll = gp::roomScroll(r.scroll, r.x, gp::kRoomWidthTiles, W);
+        };
+
+        // The room, then the pet in it (the indoor "style" art: no up or down walk, the front idle for any facing).
+        auto drawRoom = [&]
+        {
+            RoomView &r = *room;
+            using P = RoomView::Phase;
+            // smooth mode glides the panning and the pet's walk between the 30 Hz steps (a jump of more than 16 px never glides)
+            const float scrollF = smoothAt(r.pscroll, r.scroll), rx = smoothAt(r.px, r.x), ry = smoothAt(r.py, r.y);
+            gp::clearFrame(ren);
+            const SDL_FRect dst{-scrollF, 0.f, float(gp::kRoomWidthTiles * gp::kRoomTilePx),
+                                float(gp::kRoomHeightTiles * gp::kRoomTilePx)};
+            SDL_RenderCopyF(ren, r.tex, nullptr, &dst);
+            auto drawLayer = [&](const std::vector<gp::RoomSprite> &layer)
+            {
+                for (const gp::RoomSprite &d : layer)
+                {
+                    const AnimRef D = animRefById(uiIdP(d.sprite, d.palette));
+                    if (D.size() == 0)
+                        continue;
+                    const gp::SpriteFrame &s = D.anim->frames[0];
+                    SDL_FRect rc{float(d.x) - scrollF - s.anchorX + s.dx, float(d.y) - s.anchorY + s.dy + 1, float(s.w), float(s.h)};
+                    SDL_RenderCopyF(ren, (*D.tex)[0], nullptr, &rc);
+                }
+            };
+            drawLayer(r.sprites.behind); // the order EnterActivityAndRunLoop draws in
+            drawLayer(r.sprites.items);
+            // The flag-0 pieces are split by the pet's y every frame: those at or above its feet go behind it, those below
+            // are drawn over it (the panda stands at y 0xa1, above the bowl food at 0xad, so the bowl is in front of it).
+            auto petSide = [&](bool inFront)
+            {
+                std::vector<gp::RoomSprite> v;
+                for (const gp::RoomSprite &s : r.sprites.beforePet)
+                    if ((s.y > r.y) == inFront)
+                        v.push_back(s);
+                return v;
+            };
+            if (r.phase == P::Placing || r.phase == P::Placed)
+                drawLayer(r.sprites.beforePet);
+            else
+                drawLayer(petSide(false));
+
+            if (r.phase == P::Placed) // the finished room, no pet and no markers
+            {
+                drawLayer(r.sprites.afterPet);
+                return;
+            }
+            if (r.phase == P::Placing) // RenderPetWalkToItem: a marker on every slot that takes the item, and the cursor
+            {
+                drawLayer(r.sprites.afterPet);
+                const int type = r.placeItem > 0 && r.placeItem < int(itemDefs.size()) ? itemDefs[size_t(r.placeItem)].type : 0;
+                const int markerSprite = type == 6 ? 0x319 : type == 5 ? 0x3b0 : 0x33d;
+                const int dy = type == 6 ? 0x14 : 0;
+                for (int s = 0; s < gp::kInventorySlots; ++s)
+                    if (gp::slotCategory(rom, s) == type)
+                    {
+                        const gp::SlotPos p = gp::slotPosition(rom, s);
+                        drawLayer({{p.x, p.y + dy, markerSprite, 0x28c}});
+                    }
+                if (const AnimRef C = animRefById(reactAnimId(gp::kMarkerIndoorItemAnim, gp::kMarkerPalette)); C.size() > 0)
+                {
+                    const gp::SpriteFrame &s = C.anim->frames[size_t(gp::markerFrame(gameTicks, int(C.size())))];
+                    SDL_FRect rc{smoothAt(r.pcurX, r.curX) - scrollF - s.anchorX + s.dx, smoothAt(r.pcurY, r.curY) + float(dy) - s.anchorY + s.dy + 1, float(s.w),
+                                 float(s.h)};
+                    SDL_RenderCopyF(ren, (*C.tex)[size_t(gp::markerFrame(gameTicks, int(C.size())))], nullptr, &rc);
+                }
+                return;
+            }
+
+            // The pet whose home this is, in its settled-idle pose (drawn just before the player's pet, like the ROM does).
+            if (r.hasVisitor)
+            {
+                const gp::AnimChoice ac = gp::settledIdle(r.visitSpecies, true);
+                const AnimRef V = animRefById(reactAnimId(ac.id, r.visitPal));
+                if (V.size() > 0)
+                {
+                    const int f = (r.visitTicks * ac.rate / 30) % int(V.size());
+                    const gp::SpriteFrame &s = V.anim->frames[size_t(f)];
+                    drawShadow(s.w, float(gp::kVisitorX), float(gp::kVisitorY), r.visitSpecies == 2, scrollF, 0.f);
+                    SDL_FRect rc{float(gp::kVisitorX) - scrollF - s.anchorX + s.dx + offX, float(gp::kVisitorY) - s.anchorY + s.dy + offY,
+                                 float(s.w), float(s.h)};
+                    SDL_RenderCopyF(ren, (*V.tex)[size_t(f)], nullptr, &rc);
+                }
+            }
+
+            const bool walking = r.phase == P::Entering || r.phase == P::Walking || r.phase == P::Settling || r.phase == P::Leaving;
+            int id = gp::kIdleStyle[sp];
+            bool flip = false;
+            int frame = 0;
+            auto frameOf = [&](int anim, int ticks, bool loop, int rate = 14) // 14 is kFrameRate
+            {
+                const int n = int(getAnim(anim).size());
+                if (n <= 0)
+                    return 0;
+                const int k = ticks * rate / 30;
+                return loop ? k % n : std::min(k, n - 1);
+            };
+            if (walking)
+            {
+                id = gp::kWalkSideStyle[sp]; // art faces right: mirrored for left
+                flip = r.faceLeft;
+                frame = frameOf(id, r.walkTicks, true);
+            }
+            else if (r.phase == P::Turning)
+            {
+                id = gp::kTurn90Style[sp]; // art faces left: mirrored for right
+                flip = !r.faceLeft;
+                frame = frameOf(id, r.animTicks, false);
+            }
+            else if (r.phase == P::Eating && r.eatAnim >= 0)
+            {
+                id = r.eatAnim;
+                flip = r.eatFlip;
+                frame = frameOf(id, r.animTicks, r.eatLoop, r.eatFps);
+                if (r.eatReverse) // last frame to first
+                    frame = std::max(0, int(getAnim(id).size()) - 1 - frame);
+            }
+            else
+                frame = frameOf(id, r.animTicks, true);
+            if (const AnimRef A = getAnim(id); A.size() > 0)
+            {
+                const int n = int(A.size());
+                const int f = std::min(frame, n - 1);
+                const gp::SpriteFrame &s = A.anim->frames[size_t(f)];
+                drawShadow(s.w, rx, ry, sp == 2, scrollF, 0.f);
+                const float px = rx - scrollF;
+                float x = flip ? px + s.anchorX - s.dx - s.w : px - s.anchorX + s.dx;
+                float y = ry - s.anchorY + s.dy;
+                x += offX;
+                y += offY;
+                SDL_FRect rc{x, y, float(s.w), float(s.h)};
+                SDL_RenderCopyExF(ren, (*A.tex)[size_t(f)], nullptr, &rc, 0, nullptr, flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+            }
+            if (r.overId >= 0) // the cure's bubbles over the pet
+            {
+                const AnimRef A = animRefById("base:anim/" + std::to_string(r.overId) + "@28c");
+                if (A.size())
+                {
+                    const int fps = r.overId == gp::kWashBubbleAnim ? gp::kWashBubbleFps : kBubbleFps;
+                    const int f = std::min(r.overTicks * fps / 30, int(A.size()) - 1);
+                    const gp::SpriteFrame &s = A.anim->frames[size_t(f)];
+                    SDL_FRect rc{rx - scrollF - s.anchorX + s.dx, ry - s.anchorY + s.dy, float(s.w), float(s.h)};
+                    SDL_RenderCopyF(ren, (*A.tex)[size_t(f)], nullptr, &rc);
+                }
+            }
+            drawLayer(petSide(true));
+            drawLayer(r.sprites.afterPet);
+
+            // The selector arrow over the decoration the pet is next to (anim 0x11 at 18 fps, as for objects outside), hidden
+            // while the bar or a box has the buttons.
+            if (r.nearby >= 0 && barBusy == 0 && !dialogue.open())
+            {
+                // The arrow goes over the sprite it marks: a table piece, or the visiting pet (index 5).
+                bool have = false;
+                gp::SelectorPos mp{0, 0};
+                if (r.nearby == gp::kDecorVisitor && r.hasVisitor)
+                {
+                    const gp::AnimChoice ac = gp::settledIdle(r.visitSpecies, true);
+                    const AnimRef V = animRefById(reactAnimId(ac.id, r.visitPal));
+                    if (V.size() > 0)
+                    {
+                        const int f = (r.visitTicks * ac.rate / 30) % int(V.size());
+                        mp = gp::selectorPosition({gp::kVisitorX, gp::kVisitorY, 0, 0, 0, 0}, V.anim->frames[size_t(f)].h);
+                        have = true;
+                    }
+                }
+                else if (r.nearby < int(r.table.size()))
+                {
+                    const gp::RoomDecoration &e = r.table[size_t(r.nearby)];
+                    const AnimRef D = animRefById(uiIdP(e.sprite, e.palette));
+                    if (D.size() > 0)
+                    {
+                        mp = gp::selectorPosition(e, D.anim->frames[0].h);
+                        have = true;
+                    }
+                }
+                const AnimRef M = animRefById(reactAnimId(gp::kMarkerArrowAnim, gp::kMarkerPalette));
+                if (have && M.size() > 0)
+                {
+                    const int f = gp::markerFrame(gameTicks, int(M.size()));
+                    const gp::SpriteFrame &s = M.anim->frames[size_t(f)];
+                    SDL_FRect rc{float(mp.x) - scrollF - s.anchorX + s.dx, float(mp.y) - s.anchorY + s.dy + 1, float(s.w), float(s.h)};
+                    SDL_RenderCopyF(ren, (*M.tex)[size_t(f)], nullptr, &rc);
                 }
             }
         };
@@ -1889,6 +3745,26 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         int &digStep = S.pet.digStep, &digTicks = S.pet.digTicks;
         constexpr int kDigAnimId[3] = {0x1c, 0x80, 0xe9}; // PlayTaskAnimationVariant table, by species
         constexpr int kDigTicks = 30;                     // placeholder: length of sound 0xbe (SFX category 9)
+
+        // The oldest hole filling in when a sixth is dug (UpdateDigHoleVisuals 0x03fa5f): the dig animation (bubble 0x16) played
+        // backwards, at 28 fps, where that hole was.
+        struct HoleFill
+        {
+            int x, y, ticks;
+        };
+        std::vector<HoleFill> holeFills;
+        constexpr int kHoleFillFps = 0x1c;
+        auto tickHoleFills = [&]
+        {
+            if (holeFills.empty())
+                return;
+            const int frames = int(animRefById("base:anim/22@28c").size());
+            for (HoleFill &f : holeFills)
+                ++f.ticks;
+            holeFills.erase(std::remove_if(holeFills.begin(), holeFills.end(), [&](const HoleFill &f)
+                                           { return f.ticks * kHoleFillFps / 30 >= frames; }),
+                            holeFills.end());
+        };
 
         auto startDig = [&]
         { digStep = 1; digTicks = 0; settlePhase = 0; walkTicks = 0; };
@@ -1909,11 +3785,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 player.adjustCare(gp::Cleanliness, sp == 1 ? -2 : -1);
                 player.adjustCare(gp::Tiredness, -1); // check this direction in-game
                 playAnim(kDigAnimId[sp], true, 14, Pose::Special);
+                sfx(9, 0xbe); // RunSoundedAnimationTask: PlaySoundEffect(9, 0xbe)
                 digTicks = 0;
                 digStep = 3;
                 break;
-            case 3: // wait for sound 9 to end
-                if (++digTicks >= kDigTicks)
+            case 3: // wait for sound 9 to end (IsSoundIdActive); without an audio device, a fixed time
+                if (++digTicks >= (gp::audio().ready() ? 1 : kDigTicks) && !gp::audio().sfxActive(9))
                     digStep = 4;
                 break;
             case 4:
@@ -1930,6 +3807,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         bits |= 1u << n;
 
                 const gp::DigResult r = events.dig(cur->def->legacyId, pos.x, pos.y, bits, rnd);
+                if (r.filledHole && r.filledHole->area == cur->def->legacyId) // the oldest hole fills in
+                    holeFills.push_back({r.filledHole->x, r.filledHole->y, 0});
 
                 for (int n = 0; n < 32; ++n) // bits -> player flags (only new ones matter)
                     if (bits >> n & 1u)
@@ -1949,7 +3828,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 if (animDone)
                 {
                     digStep = 0;
-                    playAnim(gp::kIdleBase[sp], true, 14, Pose::Idle);
+                    playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
                 }
                 break;
             }
@@ -1969,6 +3848,16 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             walkTicks = 0;
         };
         mgEnv.startItemDrop = startItemDrop;
+        // A friend's gift and random game: both target the pet's position, 10 px lower (PlayRandomMinigame and
+        // ReceiveCureGiftFromFriend pass GetCameraScrollX() and GetCameraScrollY() + 10, which is the pet).
+        svc.dropGift = [&](int item)
+        {
+            minigames.petX = pos.x;
+            minigames.petY = pos.y + 10;
+            startItemDrop({item});
+        };
+        svc.startRandomGame = [&]
+        { minigames.openRandomGame(pos.x, pos.y + 10); };
         auto tickSwiftDrop = [&]
         {
             if (!swiftDropStep || minigames.active() || pendingScreen) // activity runs once the world is back
@@ -1994,8 +3883,191 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
                 sfx(0x54);
                 swiftDropStep = 0;
-                playAnim(gp::kIdleBase[sp], true, 14, Pose::Idle);
+                playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
             }
+        };
+
+        // ItemMenuScreen, furnishings (confirmed in MAME): "Display this in your room?" for an item that isn't in the room
+        // (Yes starts placing it), "Remove this item from your room?" for one that is (Yes clears every slot holding it),
+        // and a furniture or bed that is already shown can only be replaced. Nothing changes how many you own.
+        auto useFurnishing = [&](const gp::ItemDef &d)
+        {
+            using P = RoomView::Phase;
+            if (!room || room->location != slot) // only in your own home
+                return;
+            RoomView &r = *room;
+            if (r.phase == P::Entering || r.phase == P::Leaving || r.phase == P::Placing || r.phase == P::Placed || r.phase == P::Eating)
+                return;
+            int held = 0;
+            for (int s : r.slots)
+                held += s == d.index;
+            // As many copies as you own (up to the item's max quantity) can be out, if there are slots for them.
+            const int owned = d.maxQty > 0 ? std::min(player.itemCount(d.id), d.maxQty) : player.itemCount(d.id);
+            sfx(gp::kPlaceSound);
+            // The item screen stays up behind the box and only closes when placing starts.
+            auto ask = [&](const char *key, std::function<void()> yes)
+            {
+                gp::DialogueBox b = gp::messageBox(db.textOr(std::string("base:str/") + key));
+                b.kind = gp::BoxKind::Confirm;
+                b.onYes = std::move(yes);
+                b.onNo = [] {};
+                dialogue.show(std::move(b));
+            };
+            const int item = d.index, type = d.type;
+            switch (gp::furnishingPrompt(type, held, owned, gp::slotsForType(rom, type)))
+            {
+            case gp::FurnishingPrompt::Display:
+                ask("room_display_prompt", [&, item, type]
+                    {
+                        if (!room)
+                            return;
+                        const int s = gp::defaultSlotForType(rom, type);
+                        if (s < 0)
+                            return;
+                        roomMenuCategory = im.category;
+                        im.open = false; // Yes: the item screen fades out and the room comes back to place it
+                        barBusy = 0;
+                        barAnim.visible = false;
+                        RoomView &rv = *room;
+                        const gp::SlotPos p = gp::slotPosition(rom, s);
+                        rv.placeItem = item;
+                        rv.placeSlot = s;
+                        rv.curX = p.x;
+                        rv.curY = p.y;
+                        rv.placeConfirmed = gp::placesImmediately(type); // wall, floor, furniture, bed: no choice to make
+                        if (rv.placeConfirmed)
+                            sfx(gp::kPlaceSound);
+                        rv.phase = P::Placing; });
+                break;
+            case gp::FurnishingPrompt::Remove:
+                ask("room_remove_prompt", [&, item]
+                    {
+                        if (!room)
+                            return;
+                        for (int s = 0; s < gp::kInventorySlots; ++s)
+                            if (room->slots[size_t(s)] == item)
+                                equipSlot(*room, s, 0);
+                        dialogue.show(gp::messageBox(db.textOr("base:str/room_removed"))); });
+                break;
+            case gp::FurnishingPrompt::AlreadyShown:
+                dialogue.show(gp::messageBox(db.textOr("base:str/room_already_shown")));
+                break;
+            }
+        };
+
+        // An item chosen in give mode: the picker ("How many do you want to give?"), then GiveItemToOtherSave: their count goes
+        // up (never past the item's most) and is written to their save, and mine goes down.
+        auto giveSelected = [&](const gp::ItemDef &d)
+        {
+            bool placed = false;
+            for (const auto &[s, item] : player.equip)
+                placed = placed || item == d.index;
+            if (placed && (d.type == 3 || d.type == 4)) // the list hides these; the ROM has the wording anyway
+            {
+                dialogue.show(gp::messageBox(db.textOr(d.type == 4 ? "base:str/give_no_bed" : "base:str/give_no_dish")));
+                return;
+            }
+            const int theirs = giveTheirs.count(d.index) ? giveTheirs.at(d.index) : 0;
+            const int most = gp::giveMax(player.itemCount(d.id), d.maxQty, theirs);
+            if (most < 1)
+                return;
+            gp::DialogueBox b = gp::messageBox(db.textOr("base:str/give_prompt"));
+            b.kind = gp::BoxKind::Quantity;
+            b.qty = 1;
+            b.qtyMax = most;
+            b.onQuantity = [&, idx = d.index](int qty)
+            {
+                const gp::ItemDef &g = itemDefs[size_t(idx)];
+                gp::SaveData s;
+                if (!gp::loadFromFile(gp::slotPath(giveLocation), s))
+                    return;
+                std::map<std::string, int> ids;
+                if (s.has("itemIds"))
+                    ids = s.getIdMap("itemIds");
+                else
+                    for (const auto &[n, c] : s.getMap("inventory"))
+                        if (n >= 0 && n < int(itemDefs.size()))
+                            ids[itemDefs[size_t(n)].id] = c;
+                const int now = gp::theirCountAfterGift(ids.count(g.id) ? ids.at(g.id) : 0, qty, g.maxQty);
+                ids[g.id] = now;
+                s.setIdMap("itemIds", ids);
+                gp::saveToFile(gp::slotPath(giveLocation), s);
+                giveTheirs[idx] = now;
+                player.removeItem(g.id, qty);
+                saveGame();
+                std::printf("gave %d of item %d (they have %d)\n", qty, idx, now);
+                // The list shrinks as things are given; keep the cursor on a real cell, or leave when nothing is left.
+                im.filtered = buildFiltered(im.category);
+                if (im.filtered.empty())
+                {
+                    im.open = false;
+                    barBusy = 0;
+                    barAnim.visible = false;
+                    return;
+                }
+                int i = std::min((im.selRow - 1) * 6 + im.selCol - 1, int(im.filtered.size()) - 1);
+                im.selRow = i / 6 + 1;
+                im.selCol = i % 6 + 1;
+                im.firstRow = std::max(1, std::min(im.firstRow, im.selRow));
+                if (im.selRow > im.firstRow + 2)
+                    im.firstRow = im.selRow - 2;
+            };
+            dialogue.show(std::move(b));
+        };
+
+        // ItemMenuScreen mode 1: the bed and food dish in your room can't be sold; otherwise ask how many (1 up to what you
+        // hold), then Item_ProcessSale: the items go and int(qty * price * 0.8) Bucks come in.
+        auto sellSelected = [&](const gp::ItemDef &d)
+        {
+            bool placed = false;
+            for (const auto &[s, item] : player.equip)
+                placed = placed || item == d.index;
+            if (placed && (d.type == 3 || d.type == 4))
+            {
+                dialogue.show(gp::messageBox(db.textOr(d.type == 4 ? "base:str/sell_no_bed" : "base:str/sell_no_dish")));
+                return;
+            }
+            const int held = player.itemCount(d.id);
+            if (held < 1)
+                return;
+            gp::DialogueBox b = gp::messageBox(db.textOr("base:str/sell_prompt"));
+            b.kind = gp::BoxKind::Quantity;
+            b.qty = 1;
+            b.qtyMax = held;
+            b.onQuantity = [&, idx = d.index](int qty)
+            {
+                const gp::ItemDef &g = itemDefs[size_t(idx)];
+                const int pay = gp::saleTotal(g.price, qty);
+                player.removeItem(g.id, qty);
+                player.adjustMoney(pay);
+                saveGame();
+                std::printf("sold %d of item %d for %d\n", qty, idx, pay);
+                im.filtered = buildFiltered(im.category); // the list shrinks; keep the cursor on a real cell, or leave when empty
+                if (im.filtered.empty())
+                {
+                    im.open = false;
+                    barBusy = 0;
+                    barAnim.visible = false;
+                    return;
+                }
+                int i = std::min((im.selRow - 1) * 6 + im.selCol - 1, int(im.filtered.size()) - 1);
+                im.selRow = i / 6 + 1;
+                im.selCol = i % 6 + 1;
+                im.firstRow = std::max(1, std::min(im.firstRow, im.selRow));
+                if (im.selRow > im.firstRow + 2)
+                    im.firstRow = im.selRow - 2;
+            };
+            dialogue.show(std::move(b));
+        };
+        svc.startSell = [&] // ShowSellMenu: the item screen on the first tab, in sell mode
+        {
+            requestScreen([&]
+                          {
+                sellMode = true; // set while the screen is black, once the item screen is really open
+                im = {};
+                im.open = true;
+                im.category = 0;
+                im.filtered = buildFiltered(0); });
         };
 
         auto useSelectedItem = [&]
@@ -2005,6 +4077,18 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 return;
             const gp::ItemDef &d = itemDefs[im.filtered[idx]];
 
+            if (sellMode) // Jeremy's item screen: choosing an item offers to sell it
+            {
+                sellSelected(d);
+                return;
+            }
+
+            if (giveMode) // the item screen opened from the pet in this home: choosing an item gives it, it isn't "used"
+            {
+                giveSelected(d);
+                return;
+            }
+
             // Item.hooks(id).onItemUse: a script that returns false takes the whole use over (no eating, no medicine,
             // nothing consumed unless the script takes it). The menu closes so it is rebuilt from the new inventory.
             if (scripts.fireItemUse(d.id).suppress)
@@ -2012,6 +4096,83 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 im.open = false;
                 barBusy = 0;
                 barAnim.visible = false;
+                return;
+            }
+
+            if (gp::isFurnishingType(d.type) || d.type == int(gp::ItemType::Food) || d.type == int(gp::ItemType::Medicine))
+                sfx(0x59, 0xbe); // ItemMenuScreen: PlaySoundEffect(0x59, 0xbe) for these
+
+            // Wall, floor, furniture, bed and decorations (types 1..8): asked about in the player's own home only, as in
+            // ItemMenuScreen (IsCurrentSaveSlot); nowhere else do they do anything.
+            if (gp::isFurnishingType(d.type))
+            {
+                useFurnishing(d);
+                return;
+            }
+            // Food from the item screen inside a room: its own stat changes as usual, then the pet goes to the bowl, which is
+            // filled, and eats (ItemMenuScreen result 2 -> EnterActivityAndRunLoop starts activity 6 at the bowl).
+            if (room && d.type == int(gp::ItemType::Food) && d.w9 != gp::kFoodForMiniPets)
+            {
+                gp::applyFoodEffect(player, d, itemHost);
+                std::printf("ate item %d (cat %d) at the bowl\n", d.index, d.w9);
+                player.removeItem(d.id, 1);
+                im.open = false;
+                barBusy = 0;
+                barAnim.visible = false;
+                startEating(*room, false);
+                return;
+            }
+            // Medicine inside a room: used up either way; a match cures the pet and plays the happy hop with the bubbles, a
+            // wrong one does nothing (HandleCureIllnessEncounter returns at once).
+            if (room && d.type == int(gp::ItemType::Medicine))
+            {
+                if (d.w9 == gp::kMedicineNoIllness)
+                    return;
+                const int illnessBefore = player.illnessId;
+                const bool cured = gp::applyMedicine(player, d);
+                player.removeItem(d.id, 1);
+                im.open = false;
+                barBusy = 0;
+                barAnim.visible = false;
+                if (cured)
+                    startRoomMedicine(*room, illnessBefore);
+                return;
+            }
+            // A treasure map (type 14): the item screen opens a plain text box with the item's text, id w9 (ItemMenuScreen,
+            // the 0xe branch). It stays on the item screen.
+            if (d.type == int(gp::ItemType::TreasureMap))
+            {
+                dialogue.show(gp::messageBox(db.textOr("base:text/" + std::to_string(d.w9))));
+                return;
+            }
+            // The island map (type 17): the picture over the item screen, which is still there after it.
+            if (d.type == int(gp::ItemType::IslandMap))
+            {
+                svc.showMap();
+                return;
+            }
+            // A colour potion (type 16): the pet takes the colour for its species at once and, in the world, is startled. It is not
+            // used up (see potion.hpp).
+            if (d.type == int(gp::ItemType::Potion))
+            {
+                const int pal = gp::potionPalette(sp, d.w9);
+                if (pal < 0)
+                    return;
+                player.appearance = pal;
+                petPal = pal;
+                importPetAnims();
+                saveGame();
+                std::printf("potion %d: palette 0x%x\n", d.index, pal);
+                im.open = false;
+                barBusy = 0;
+                barAnim.visible = false;
+                if (!room)
+                    startPotionReaction();
+                return;
+            }
+            if (room) // the rest animate the world pet, which isn't shown in a room
+            {
+                std::printf("item %d type %d: using it inside a room isn't built yet\n", d.index, d.type);
                 return;
             }
 
@@ -2105,10 +4266,50 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, cur->img.w, cur->img.h);
             SDL_UpdateTexture(tex, nullptr, cur->img.rgba.data(), cur->img.w * 4);
             cur->runtime->updateVisible(clampCam(pos.x - W / 2, cur->img.w, W),
-                                        clampCam(pos.y - kCamY, cur->img.h, H));
+                                        clampCam(pos.y - kCamY, cur->img.h, H), W, H);
             loadNpcs();
             exitsArmed = false;
             return true;
+        };
+        // The outdoor bar's Go Home (HandleMenuBarInput, button 6): the sounds stop, the area becomes area 0 (where the houses are) and
+        // the game state becomes the house's room state (MapLocationToGameState), the same state the door sends the pet to: the pet
+        // walks in from the door into its home. Leaving the room puts it back at the door in area 0. Unlike the door there is no
+        // door sound; the bar's click was the only one.
+        goHome = [&](int location)
+        {
+            requestScreen([&, location]
+                          {
+                const gp::RoomExitPoint p = gp::roomReturnPoint(location);
+                enc.reset();
+                encNpc = nullptr;
+                if (cur->def->legacyId != 0)
+                {
+                    const gp::AreaDef *home = db.areaByLegacy(0);
+                    auto next = home ? loadArea(db, home->id, showCollision) : nullptr;
+                    if (!next)
+                    {
+                        std::printf("go home: area 0 could not be loaded\n");
+                        return;
+                    }
+                    const int from = cur->def->legacyId;
+                    cur = std::move(next);
+                    if (gp::shopRowForArea(from) >= 0)
+                        pending.consumeUnflaggedForArea(from); // leaving a shop
+                    enterAreaEvents(*cur->def, true);
+                    refreshBits();
+                    saveGame();
+                    world = std::make_unique<AreaWorld>(*cur->ground, *cur->runtime, cur->room);
+                    SDL_DestroyTexture(tex);
+                    tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, cur->img.w, cur->img.h);
+                    SDL_UpdateTexture(tex, nullptr, cur->img.rgba.data(), cur->img.w * 4);
+                    loadNpcs();
+                }
+                pos = {p.x, p.y}; // (leaving the room puts it here again)
+                prevPos = pos;
+                cur->runtime->updateVisible(clampCam(pos.x - W / 2, cur->img.w, W), clampCam(pos.y - kCamY, cur->img.h, H), W, H);
+                exitsArmed = false;
+                if (!room)
+                    beginRoom(location); });
         };
         auto requestGoTo = [&](const gp::ExitDef &e)
         {
@@ -2162,7 +4363,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                                     { if (player.itemCount(itemDefs[size_t(id)].id) < itemDefs[size_t(id)].maxQty) player.addItem(itemDefs[size_t(id)].id, 1); }, // CheckQuestItemObjectivesComplete not ported
                                     [&](int)
                                     { pending.removeShopItem(area, item); });
-                money -= qty * itemDefs[item].price; // Item_ProcessPurchase: AdjustPlayerMoney(-qty * price)
+                player.adjustMoney(-qty * itemDefs[item].price); // Item_ProcessPurchase: AdjustPlayerMoney(-qty * price)
             };
             dialogue.show(std::move(b));
         };
@@ -2176,6 +4377,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     npcByIndex[size_t(d->index)] = d;
         auto npcAt = [&](int p) -> const gp::NpcDef *
         { return p >= 0 && p < 0x4e ? npcByIndex[size_t(p)] : nullptr; };
+        mayorDef = npcAt(gp::kNudgeMayorNpc);
 
         {
             std::set<std::pair<int, int>> done;
@@ -2189,6 +4391,53 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     {
                     }
         }
+
+        // The overhead animation of a stationary NPC (its record's last word): in its own palette.
+        for (const gp::NpcDef *d : npcByIndex)
+            if (d && d->stationary && d->behaviorFlags != gp::kNoOverheadAnim)
+                try
+                {
+                    gp::importAnim(rom, db, d->behaviorFlags, d->appearancePalette);
+                }
+                catch (const std::exception &)
+                {
+                }
+        // The art for the tricks idle NPCs perform (activity 0x13), in their own species and palette.
+        for (const gp::NpcDef *d : npcByIndex)
+            if (d && !d->stationary && (d->behaviorFlags & 0xe0) && d->speciesOrAnim <= 2)
+            {
+                const int s = d->speciesOrAnim;
+                std::vector<int> ids{gp::TrickShowcase::turnAroundAnim(s), gp::TrickShowcase::directionalAnim(s), gp::TrickShowcase::actorReactionAnim(s)};
+                for (int level = 1; level <= 3; ++level)
+                    for (int id : {gp::TrickShowcase::introAnim(level, s), gp::TrickShowcase::mainAnim(level, s), gp::TrickShowcase::closingAnim(level, s)})
+                        ids.push_back(id);
+                if (s == 2)
+                    for (int n : {2, 3, 4})
+                        ids.push_back(gp::TrickShowcase::reactionAnim(n));
+                for (int id : ids)
+                    if (id >= 0)
+                        try
+                        {
+                            gp::importAnim(rom, db, id, d->appearancePalette);
+                        }
+                        catch (const std::exception &)
+                        {
+                        }
+            }
+        // Trick showcase art: the teachers perform the trick of the player's species, coloured with their own palette.
+        for (const gp::NpcDef *d : npcByIndex)
+            if (d && d->index >= 0x30 && d->index <= 0x32)
+                for (int level = 1; level <= 3; ++level)
+                    for (int id : {gp::TrickShowcase::introAnim(level, sp), gp::TrickShowcase::mainAnim(level, sp)})
+                        if (id >= 0)
+                            try
+                            {
+                                gp::importAnim(rom, db, id, d->appearancePalette);
+                            }
+                            catch (const std::exception &e)
+                            {
+                                std::printf("trick showcase anim 0x%x import failed: %s\n", id, e.what());
+                            }
 
         quests.table = db.quests();          // scripted quests: imported by importRom, mods can replace or append
         quests.world.rom = db.questTables(); // generic-quest item weights and category distances: also from the db
@@ -2221,9 +4470,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             {
                 const bool needsOffer = !o.requiresOffered.empty();
                 const bool offered = needsOffer && player.hasFlag(gp::offeredKey(o.requiresOffered));
-                cur->runtime->setHidden(o.id, (needsOffer && !offered) || !o.availableAt(quests.counter));
+                const bool gone = !o.goneOnFlag.empty() && player.hasFlag(o.goneOnFlag);
+                cur->runtime->setHidden(o.id, (needsOffer && !offered) || !o.availableAt(quests.counter) || gone);
             }
-            cur->runtime->updateVisible(camNowX(), camNowY());
+            cur->runtime->updateVisible(camNowX(), camNowY(), W, H);
         };
 
         saveGame = [&]
@@ -2273,6 +4523,23 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         qh.clearFlagged = [&]
         { events.consumePersistent(); };
         qh.sfx = sfx;
+        qh.hold = [&](int ticks, std::function<void()> done) // a quest reward activity holds the pet
+        {
+            holdTicks = std::max(ticks, 1);
+            holdDone = std::move(done);
+            // TickActor_BefriendSuccessRewardSequence / RunNPCBefriendEncounter: the NPC is locked for the wait, so it stands
+            // still and does not wander off or start something new (UpdateNPCIdleActivity, SetAnimalEncounterLockFlag)
+            if (holdNpc)
+                holdNpc->locked = false;
+            holdNpc = nullptr;
+            const gp::NpcActor *near = nearestNpc();
+            for (gp::NpcActor &n : npcs)
+                if (&n == near && !n.locked && !n.def->stationary)
+                {
+                    n.locked = true;
+                    holdNpc = &n;
+                }
+        };
         qh.camX = [&]
         { return pos.x; };
         qh.camY = [&]
@@ -2291,12 +4558,29 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (const gp::NpcDef *d = npcAt(p))
                 b.portrait = gp::uiSpriteId(d->portraitSprite, d->portraitPalette);
         };
+        qh.onDecline = [&]
+        { nudge.restart(long(gameTicks)); }; // DeclineQuest: the 30 s reminder timer
         qh.onNextQuest = [&]
         {
             player.questsCompleted = quests.counter;
             loadNpcs(); // only ever runs from a dialogue callback, never inside talkToNpc's own NpcActor reference
             refreshBits();
             saveGame();
+        };
+        // Game.hooks().onQuestComplete: true = the script took the bonus rewards over (see QuestHooks::onComplete).
+        qh.onComplete = [&]
+        {
+            const gp::QuestDef &d = quests.q.def;
+            gp::QuestCompleteInfo info;
+            info.questId = d.generic ? gp::Id() : gp::legacyQuestId(d.id);
+            info.number = quests.counter;
+            info.generic = d.generic;
+            info.type = quests.world.type(d.typeMode).id;
+            if (const gp::NpcDef *g = npcAt(d.giver))
+                info.giverId = g->id;
+            if (const gp::NpcDef *r = npcAt(d.receiver))
+                info.receiverId = r->id;
+            return scripts.fireQuestComplete(info).suppress;
         };
 
         walk::bindScripts(svc); // world.drop, rand.* (and later player.* / flags): walk_script_bindings.hpp
@@ -2346,7 +4630,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     if (!dp)
                         continue;
                     const gp::ItemDef &d = *dp;
-                    const AnimRef A = animRefById(gp::uiSpriteId(d.worldSprite, gp::kMenuPalette)); // ROM uses item record word 7 as the palette
+                    const AnimRef A = animRefById(uiIdP(d.worldSprite, gp::kMenuPalette)); // ROM uses item record word 7 as the palette
                     if (A.size())
                     {
                         const gp::SpriteFrame &s = A.anim->frames[0];
@@ -2393,7 +4677,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
                 else if (e.type == SDL_KEYDOWN && !e.key.repeat)
                 {
-                    switch (e.key.keysym.sym)
+                    switch (gp::keys().canonical(e.key.keysym.scancode, e.key.keysym.sym)) // a rebound key acts as its action's default
                     {
                     case SDLK_1:
                         anchorMode = 0;
@@ -2474,7 +4758,6 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         break;
                     case SDLK_F5:
                         smoothCam = !smoothCam;
-                        SDL_RenderSetIntegerScale(ren, smoothCam ? SDL_TRUE : SDL_FALSE);
                         std::printf("smooth camera %s\n", smoothCam ? "on" : "off");
                         break;
                     case SDLK_F10: // back to the front-end menu
@@ -2482,10 +4765,14 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         running = false;
                         break;
                     case SDLK_RETURN:
-                        openBar(false);
+                        if (barBusy == 4)
+                            closeTrickPanel(); // event 6 closes the panel
+                        else if (barBusy != 5)
+                            openBar(false);
                         break;
                     case SDLK_TAB:
-                        openBar(true);
+                        if (barBusy != 4 && barBusy != 5)
+                            openBar(true);
                         break;
                     case SDLK_LEFTBRACKET:
                         statsBase -= 0x40;
@@ -2553,6 +4840,15 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 gameTicks += 2;
                 // remember where everything was before this tick, for the smooth renderer
                 prevPos = pos;
+                statNotice.prevOffset = statNotice.offset; // (so a tick that doesn't run it, a dialogue say, doesn't make it shake)
+                if (room) // the room before this tick, for the smooth renderer (every tick, so a paused room holds still)
+                {
+                    room->px = room->x;
+                    room->py = room->y;
+                    room->pscroll = room->scroll;
+                    room->pcurX = room->curX;
+                    room->pcurY = room->curY;
+                }
                 npcPrev.resize(npcs.size());
                 for (size_t ni = 0; ni < npcs.size(); ++ni)
                     npcPrev[ni] = {npcs[ni].x(), npcs[ni].y()};
@@ -2562,16 +4858,16 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     saveGame();
                 }
                 const Uint8 *k = SDL_GetKeyboardState(nullptr);
-                const uint8_t rawDirs = enc ? 0 : gp::pollHeld(k[SDL_SCANCODE_LEFT], k[SDL_SCANCODE_RIGHT], k[SDL_SCANCODE_UP], k[SDL_SCANCODE_DOWN]);
+                const uint8_t rawDirs = enc ? 0 : gp::pollHeld(gp::keys().held(k, gp::Action::Left), gp::keys().held(k, gp::Action::Right), gp::keys().held(k, gp::Action::Up), gp::keys().held(k, gp::Action::Down));
                 const uint8_t newlyPressed = uint8_t(rawDirs & ~prevDirs);
 
                 prevDirs = rawDirs;
 
                 // Z is read once per tick, as an edge. prevZ updates even while a box is open, so the press
                 // that opens a box can never also close it.
-                const bool zDown = k[SDL_SCANCODE_Z];
+                const bool zDown = gp::keys().held(k, gp::Action::Select);
                 const bool zPressed = zDown && !prevZ;
-                const bool xDown = k[SDL_SCANCODE_X];
+                const bool xDown = gp::keys().held(k, gp::Action::Cancel);
                 const bool xPressed = xDown && !prevX;
                 prevX = xDown;
                 prevZ = zDown;
@@ -2596,6 +4892,29 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         barAnim.visible = false;
                     }
                 }
+                if (panelAnim.visible) // the tricks panel (anim 4) and the hand-over from the bar (anim 3)
+                {
+                    const AnimRef P = barAnimRef(panelAnim.id);
+                    const int n = int(P.size());
+                    if (n == 0)
+                        panelAnim.done = true;
+                    else if (!panelAnim.done)
+                    {
+                        const int idx = ++panelAnim.ticks * kBarRate / 30;
+                        panelAnim.frame = panelClosing ? std::max(0, n - 1 - idx) : std::min(idx, n - 1);
+                        if (idx >= n)
+                            panelAnim.done = true;
+                    }
+                    if (panelClosing && panelAnim.done)
+                    {
+                        panelAnim.visible = false;
+                        panelClosing = false;
+                        bar.forceClose();
+                        barBusy = 0;
+                    }
+                }
+                if (barBusy == 5 && (!barAnim.visible || barAnim.done)) // AdvancePetBusyStateMachine: 5 -> 4 once the bar is gone
+                    barBusy = 4;
                 if (pendingExit || pendingScreen)
                     continue;
                 if (statsOpen)
@@ -2620,13 +4939,16 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     minigames.tick(in);
                     continue; // world frozen while a minigame is up
                 }
-                if (im.open)
+                if (!im.open)
+                    sellMode = false; // left with X (or nothing left to sell): sell mode is over
+                if (im.open && !dialogue.open()) // a box asked from the item screen is answered first
                 {
                     itemMenuTick(newlyPressed, xPressed);
                     if (zPressed && im.open)
                         useSelectedItem();
                     continue; // world frozen while the item screen is up
                 }
+                walk::showNextSay(svc); // text a script queued with say(), once nothing else is being said
                 if (dialogue.open())
                 {
                     gp::DialogueBox &b = *dialogue.box;
@@ -2650,12 +4972,59 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         else if (xPressed)
                             dialogue.choose(2); // cancel with X: a guess
                     }
-                    else if (zPressed)
+                    else if (zPressed || (b.kind == gp::BoxKind::Picture && xPressed)) // the map goes with any button
                         dialogue.choose(1);
                     continue;
                 }
+                if (room)
+                {
+                    if (!im.open) // the item screen is closed (it was left with X): give mode is over
+                        giveMode = false;
+                    if (bar.isOpen()) // the house bar: the same keys as outside
+                    {
+                        barHost.pressed = zDown;
+                        if (newlyPressed & gp::DirLeft)
+                            bar.handleEvent(0, true);
+                        if (newlyPressed & gp::DirRight)
+                            bar.handleEvent(1, true);
+                        if (zPressed)
+                            bar.handleEvent(4, true);
+                        else if (xPressed)
+                            bar.cancel(barBusy == 2);
+                    }
+                    // The pet stands still, and Z and X belong to the bar, while it is opening, open or closing.
+                    const bool barHasKeys = barBusy != 0 || bar.isOpen();
+                    if (!barHasKeys && !dialogue.open())
+                        roomTutorial(); // the first time by the bed or bowl: a message instead of whatever Z would have done
+                    tickRoom(barHasKeys ? 0 : rawDirs, barHasKeys ? 0 : newlyPressed, !barHasKeys && zPressed, !barHasKeys && xPressed);
+                    tickStatNotice(); // the panel works inside houses too
+                    continue;
+                }
 
-                if (bar.isOpen())
+                if (barBusy == 4 || barBusy == 5) // the tricks panel takes the keys (nothing while it opens or closes)
+                {
+                    if (barBusy == 4 && !panelClosing)
+                    {
+                        int ev = -1;
+                        if (newlyPressed & gp::DirLeft)
+                            ev = 0;
+                        else if (newlyPressed & gp::DirRight)
+                            ev = 1;
+                        else if (newlyPressed & gp::DirUp)
+                            ev = 2;
+                        else if (newlyPressed & gp::DirDown)
+                            ev = 3;
+                        if (zPressed)
+                            ev = 4;
+                        else if (xPressed)
+                            ev = 5;
+                        if (gp::trickClosesPanel(ev))
+                            closeTrickPanel();
+                        else if (const int slot = gp::trickSlotForEvent(ev); slot >= 0)
+                            pickTrick(slot);
+                    }
+                }
+                else if (bar.isOpen())
                 {
                     barHost.pressed = zDown;
                     if (newlyPressed & gp::DirLeft)
@@ -2669,8 +5038,56 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
                 // The pet can't be controlled while the bar is opening, open, or closing (g_isPetBusy != 0).
                 // The world keeps running.
-                const bool petLocked = barBusy != 0 || feedStep != 0 || digStep != 0 || swiftDropStep != 0;
+                const bool petBusyElsewhere = barBusy != 0 || feedStep != 0 || digStep != 0 || swiftDropStep != 0 || washStep != 0 || showNpc || tutStep != 0 || potionStep != 0 || barkStep != 0 || trickStep != 0 || questionStep != 0 || colorStep != 0 || holdTicks > 0;
+                // Sitting: a direction or the action button gets the pet up first (activity 8) instead of moving it; the
+                // action press is swallowed. Nothing is accepted while it sits down or gets up (see pet_sit.hpp).
+                auto sitNow = [&]
+                { return gp::sitPhase(sp, animId, pose == Pose::Idle, pose == Pose::Special, animDone); };
+                if (!petBusyElsewhere && gp::startsGetUp(sitNow(), rawDirs != 0, zPressed))
+                    playAnim(gp::kSitAlt[sp], false, 14, Pose::Special); // PlayActorReactionAnimation: one-shot at 14
+                const bool petLocked = petBusyElsewhere || gp::blocksInput(sitNow());
                 const uint8_t dirs = petLocked ? 0 : rawDirs;
+                if (xPressed && !petLocked && !bar.isOpen() && !dialogue.open() && !enc && !im.open && !pendingExit && !pendingScreen)
+                    pressCancelInWorld();
+                if (showNpc)
+                {
+                    gp::NpcActor &t = *showNpc;
+                    const int species = t.def->speciesOrAnim == 0xfffe || t.def->speciesOrAnim > 2 ? sp : t.def->speciesOrAnim;
+                    if (!showStarted)
+                    {
+                        if (t.settled()) // wait for any walk or turn it was in the middle of
+                        {
+                            showStarted = true;
+                            showcase.start(showLevel, species, sp);
+                        }
+                    }
+                    else
+                    {
+                        gp::TrickShowcase::Host sh;
+                        sh.play = [&](int id, int rate)
+                        {
+                            const gp::Id full = reactAnimId(id, t.def->appearancePalette);
+                            if (animRefById(full).size() == 0)
+                                return false;
+                            t.forceAnim(full);
+                            t.forcedRate = rate;
+                            t.forcedFlip = false; // trick art is drawn facing the camera
+                            return true;
+                        };
+                        sh.busy = [&]
+                        { return !t.forcedAnimId.empty() && t.animBusy(); };
+                        if (showcase.tick(sh))
+                        {
+                            t.locked = false;
+                            t.clearForced();
+                            showNpc = nullptr;
+                            std::function<void()> done = std::move(showDone);
+                            showDone = nullptr;
+                            if (done)
+                                done();
+                        }
+                    }
+                }
                 if (enc)
                 {
                     enc->tick(host);
@@ -2681,9 +5098,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         encNpc->locked = false;
                         enc.reset();
                         encNpc = nullptr;
-                        playAnim(gp::kIdleBase[sp], true, 14, Pose::Idle);
+                        playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
                         if (friend_ && gp::befriendRoll(npcRng, gp::befriendChance(d.befriendOdds, player.personality[gp::Stars], d.stars)))
-                            walk::grantFriendship(svc, false);
+                            walk::grantFriendship(svc, d, false);
                     }
                     if (enc && encNpc)
                     {
@@ -2694,10 +5111,145 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                                         encNpc->animKey(), encNpc->anim.currentFrame);
                     }
                 }
+                // TickAllPets: the NPC the pet can talk to (nearestNpc, the same test as pressing Z) stops and turns to
+                // face the pet; the pet's side is (npcX <= petX), as in the ROM.
+                const gp::NpcActor *talkNpc = nearestNpc();
+                // An idle NPC performing a trick (activity 0x13, TickPetNPCBehavior): the same sequence the pet and the teachers
+                // run, with the sounds only when the NPC is on screen.
+                auto tickNpcTrick = [&](gp::NpcActor &n)
+                {
+                    if (n.activity != gp::kActivityTrick)
+                        return;
+                    const int s = n.def->speciesOrAnim == 0xfffe ? sp : n.def->speciesOrAnim;
+                    if (n.locked || n.def->stationary || s < 0 || s > 2 || n.trickLevel < 1 || n.trickLevel > 3)
+                    {
+                        n.endTrick(npcRng);
+                        return;
+                    }
+                    if (!n.trickStarted)
+                    {
+                        n.trickStarted = true;
+                        n.body.facing = gp::FaceDown;
+                        n.trick.startWith(n.trickLevel, s, gp::trickRepeatCount(n.trickLevel, s, npcRng));
+                    }
+                    const bool seen = std::abs(n.x() - pos.x) < W / 2 + 40 && std::abs(n.y() - pos.y) < 150;
+                    auto start = [&](int id, int rate, bool reverse)
+                    {
+                        const gp::Id full = reactAnimId(id, n.def->appearancePalette);
+                        if (animRefById(full).size() == 0)
+                            return false;
+                        n.forceAnim(full);
+                        n.forcedRate = rate;
+                        n.forcedReverse = reverse;
+                        // the monkey's turn-around art faces left, so it is mirrored when it turns to its right
+                        n.forcedFlip = (id == gp::TrickShowcase::turnAroundAnim(s) || id == gp::TrickShowcase::directionalAnim(s)) && n.trickFlip;
+                        n.trickAnimId = id;
+                        return true;
+                    };
+                    gp::TrickShowcase::Host th;
+                    th.full = true;
+                    th.play = [&](int id, int rate)
+                    { return start(id, rate, false); };
+                    th.playReverse = [&](int id, int rate, bool)
+                    { return start(id, rate, true); };
+                    th.busy = [&]
+                    { return !n.forcedAnimId.empty() && n.animBusy(); };
+                    th.anim = [&]
+                    { return n.trickAnimId; };
+                    th.frame = [&]
+                    { return n.anim.currentFrame; };
+                    th.setFacing = [&](bool faceRight)
+                    { n.trickFlip = faceRight; };
+                    th.cameraPan = [&]
+                    {
+                        if (seen)
+                            cameraShake.start();
+                    };
+                    th.sound = [&](int id, int vol)
+                    {
+                        if (seen)
+                            sfx(id, vol);
+                    };
+                    th.soundActive = [&](int id)
+                    { return gp::audio().sfxActive(id); };
+                    th.stopSound = [&](int id)
+                    { gp::audio().stopSfx(id); };
+                    th.rand = [&](int lo, int hi)
+                    { return lo + std::rand() % (hi - lo); }; // RandRange: hi exclusive
+                    th.seconds = [&]
+                    { return double(gameTicks) / 60.0; };
+                    if (n.trick.tick(th))
+                        n.endTrick(npcRng);
+                };
+                // An idle NPC's call, happy hop or yawn (activities 1, 2 and 7): the same ReactionSeq the encounters use, run on
+                // this NPC by pointing the encounter NPC's hooks at it for the tick.
+                auto tickNpcReaction = [&](gp::NpcActor &n)
+                {
+                    if (n.activity != gp::kActivityNoise && n.activity != gp::kActivityHappy && n.activity != gp::kActivityBored)
+                        return;
+                    if (n.locked || n.def->stationary || n.def == (encNpc ? encNpc->def : nullptr))
+                    {
+                        n.endTrick(npcRng);
+                        return;
+                    }
+                    if (!n.react)
+                    {
+                        n.body.facing = gp::FaceDown;
+                        using K = gp::ReactionSeq::Kind;
+                        n.react.emplace(n.activity == gp::kActivityNoise ? K::Noise : n.activity == gp::kActivityHappy ? K::Positive : K::Bored,
+                                        n.reactCount, n.reactVariant);
+                    }
+                    gp::NpcActor *saved = encNpc;
+                    encNpc = &n;
+                    npcMute = !(std::abs(n.x() - pos.x) < W / 2 + 40 && std::abs(n.y() - pos.y) < 150);
+                    const bool done = n.react->tick(host.npc);
+                    npcMute = false;
+                    encNpc = saved;
+                    if (done)
+                        n.endTrick(npcRng);
+                };
                 for (gp::NpcActor &n : npcs)
                 {
+                    // A "sick NPC" quest (typeMode 2) makes its receiver sick for as long as it is accepted and not handed in.
+                    n.questSick = quests.q.def.typeMode == 2 && quests.q.phase != 0 && quests.q.def.receiver == n.def->index;
+                    n.selected = &n == talkNpc;
+                    n.petOnRight = n.x() <= pos.x;
                     n.tick(npcRng);
+                    if (n.def->stationary && n.def->behaviorFlags != gp::kNoOverheadAnim) // TickAllPets: the overhead animation
+                    {
+                        if (n.overheadTick >= 0)
+                        {
+                            const int frames = int(animRefById(reactAnimId(n.def->behaviorFlags, n.def->appearancePalette)).size());
+                            if (++n.overheadTick >= gp::overheadTicks(frames))
+                                n.overheadTick = -1;
+                        }
+                        else if (gp::overheadStarts(npcRng))
+                            n.overheadTick = 0;
+                    }
+                    tickNpcTrick(n);
+                    tickNpcReaction(n);
                     updateNpcAnim(n);
+                }
+                // The stink spreads to whoever the pet stands beside (npc_stink.hpp).
+                {
+                    gp::NpcActor *beside = nullptr;
+                    for (gp::NpcActor &n : npcs)
+                        if (&n == talkNpc)
+                            beside = &n;
+                    const bool roamer = beside && !beside->def->stationary; // a stationary NPC's flags are not moods
+                    switch (gp::stinkTransferStep(stinkXfer, quests.counter, player.care[gp::Cleanliness], roamer ? beside->def->index : -1,
+                                                  roamer && beside->stinky))
+                    {
+                    case gp::StinkEvent::NpcStinks:
+                        beside->stinky = true;
+                        break;
+                    case gp::StinkEvent::PetStinks:
+                        player.adjustCare(gp::Cleanliness, -gp::kStinkHygieneDrop);
+                        saveGame();
+                        break;
+                    case gp::StinkEvent::None:
+                        break;
+                    }
                 }
 
                 // ---- movement + facing + walk animation ----
@@ -2735,7 +5287,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 if (!dirs && pose == Pose::Move && !enc && !medStuck)
                 {
                     if (facing == 1)
-                        playAnim(gp::kIdleBase[sp], true, 14, Pose::Idle); // facing down: straight to the base idle, no wait, no turn
+                        playAnim(restIdleId(), true, restIdleRate(), Pose::Idle); // facing down: straight to the base idle, no wait, no turn
                     else
                     {
                         pose = Pose::Wait; // sideways / up: the walk loop keeps playing while the 0.15 s settle timer runs
@@ -2752,15 +5304,19 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         {
                             // the game picks the turn side at random: RandRange(1,3) == 1 -> left (1/3), otherwise right (2/3)
                             faceLeft = (std::rand() % 3) == 0;
-                            playAnim(gp::kTurn180[sp], false, 14, Pose::Settle, {{gp::kTurn90[sp], false, 14}, {gp::kIdleBase[sp], true, 14}});
+                            playAnim(gp::kTurn180[sp], false, 14, Pose::Settle, {{gp::kTurn90[sp], false, 14}, {restIdleId(), true, restIdleRate()}});
                         }
                         else
-                            playAnim(gp::kTurn90[sp], false, 14, Pose::Settle, {{gp::kIdleBase[sp], true, 14}});
+                            playAnim(gp::kTurn90[sp], false, 14, Pose::Settle, {{restIdleId(), true, restIdleRate()}});
                     }
                 }
 
+                // The idle follows how the pet is: it changes when the pet falls sick or unhappy, or gets better.
+                if (pose == Pose::Idle && isRestIdle(animId) && animId != restIdleId() && animLoop)
+                    playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
+
                 // ---- idle timer: after 3-6 s of base idle the pet sits (action 7: 46 once, then 45 looping) ----
-                if (pose == Pose::Idle && animId == gp::kIdleBase[sp] && !enc && !digStep && ++idleTicks >= idleThreshold)
+                if (pose == Pose::Idle && isRestIdle(animId) && !enc && !digStep && !washStep && ++idleTicks >= idleThreshold)
                     playAnim(gp::kSitDown[sp], false, 14, Pose::Special,
                              {{gp::kSettled[sp], true, sp == 0 ? 7 : 5}});
 
@@ -2793,31 +5349,92 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                             std::vector<AnimStep> rest(queue.begin() + 1, queue.end());
                             playAnim(s.id, s.loop, s.rate, rest.empty() ? Pose::Idle : Pose::Settle, rest);
                         }
-                        // don't drop to idle between steps
-                        else if (!enc && !feedStep && !digStep)
-                            playAnim(gp::kIdleBase[sp], true, 14, Pose::Idle);
+                        // don't drop to idle between steps (the wash's happy reaction restarts it itself)
+                        else if (!enc && !feedStep && !digStep && !washStep && !potionStep && !colorStep && !trickStep) // (a trick plays its own steps)
+                            playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
                     }
                 }
                 if (medStuck)
                 {
                     ++walkTicks; // keep the walk loop animating in place
                     if (++medStuckTicks >= medStuckLimit)
-                        playAnim(gp::kIdleBase[sp], true, 14, Pose::Idle); // playAnim clears medStuck
+                        playAnim(restIdleId(), true, restIdleRate(), Pose::Idle); // playAnim clears medStuck
                 }
                 if (overId >= 0)
                     ++overTicks;
                 tickFeed();
                 tickDig();
+                tickHoleFills();
+                tickWash();
                 tickSwiftDrop();
+                if (cur->def->legacyId == gp::kGateArea && gp::updateStatGates(player)) // CheckStatsAndMoneyGate
+                {
+                    refreshBits();
+                    saveGame();
+                }
+                if (holdTicks > 0 && (--holdTicks == 0 || zPressed)) // the reward activity's wait; Z skips it
+                {
+                    holdTicks = 0;
+                    if (holdNpc)
+                        holdNpc->locked = false;
+                    holdNpc = nullptr;
+                    std::function<void()> d = std::move(holdDone);
+                    holdDone = nullptr;
+                    if (d)
+                        d();
+                }
+                tickStatNotice();
+                tickWorldTutorial();
+                tickPotion();
+                tickBark();
+                tickTrick();
+                tickQuestion();
+                shakeDy = cameraShake.step(); // AdvanceScriptedCameraPanStep
+                tickColorMachine(zDown);
+                tickThoughtBubble();
                 quests.tick(int(gameTicks));
+                if (!petBusyElsewhere && !enc && !dialogue.open() && !im.open && !statsOpen && !pendingExit && !pendingScreen && !room && !showNpc)
+                {
+                    const gp::NpcActor *nb = nearestNpc();
+                    if (nudge.due(long(gameTicks), player.questsCompleted, quests.q.phase, nb ? nb->def->index : -1))
+                    {
+                        tutNudge = true; // activity 0x26 with event -1
+                        startWorldTutorial(-1);
+                    }
+                }
+
+                // ---- first-time messages: by an item, an object or a pet (HandlePetStageEvents), the first rest while sick,
+                // unhappy or dirty (TickPlayerActorIdleBehavior), and the first pickup (ProcessStoryModeObjectInteraction) ----
+                if (!petBusyElsewhere && !enc && !dialogue.open() && !pendingExit && !pendingScreen)
+                {
+                    const gp::ShopEvent *shopT = nearestShopItem();
+                    const int itemIdx = events.nearestPrompt(cur->def->legacyId, pos.x, pos.y);
+                    const gp::ObjectDef *objT = cur->runtime->nearestInteractable(pos.x, pos.y);
+                    const bool itemNear = shopT || itemIdx >= 0;
+                    const int item = shopT ? shopT->item : itemIdx >= 0 ? int(events.events()[size_t(itemIdx)].item) : -1;
+                    int event = gp::worldTutorial(settings.tutorials, player.tutorialsShown, itemNear, item, objT ? objT->legacySlot : -1,
+                                                  nearestNpc() != nullptr);
+                    if (event < 0 && pose == Pose::Idle && !afterPickup)
+                        event = gp::idleTutorial(settings.tutorials, player.tutorialsShown, !player.isHealthy(),
+                                                 player.care[gp::Happiness] < gp::kUnhappyBelow,
+                                                 player.care[gp::Cleanliness] <= gp::kDirtyAtMost);
+                    if (event < 0 && afterPickup)
+                    {
+                        afterPickup = false;
+                        if (gp::isFirstTime(settings.tutorials, player.tutorialsShown, gp::kTutorialStuff))
+                            event = gp::kTutorialStuff;
+                    }
+                    if (event >= 0)
+                        startWorldTutorial(event);
+                }
 
                 // ---- exit trigger / talk to NPC ----
                 const gp::ObjectDef *nearObj = cur->runtime->nearestInteractable(pos.x, pos.y);
-                const bool zWorld = zPressed && !petLocked;
+                const bool zWorld = zPressed && !petLocked && tutStep == 0;
                 const int curArea = cur->def->legacyId;
                 const gp::ShopEvent *shopItem = zWorld ? nearestShopItem() : nullptr;
                 const int pickIdx = (zWorld && !shopItem) ? events.nearestPrompt(curArea, pos.x, pos.y) : -1;
-                const gp::ExitDef *ie = (zPressed && nearObj && !shopItem && pickIdx < 0)
+                const gp::ExitDef *ie = (zWorld && nearObj && !shopItem && pickIdx < 0) // not while the pet is busy
                                             ? db.findExit(cur->def->id, nearObj->id, false)
                                             : nullptr;
                 const gp::ExitDef *ex = nearObj ? db.findExit(cur->def->id, nearObj->id, true) : nullptr;
@@ -2843,7 +5460,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
                 const bool outdoors = curArea <= 9; // GUESS for the ROM's 0x3c969(area) check; interiors/shops can't dig
 
-                if (zWorld && !ie && !enc)
+                if (zWorld && !ie && !enc && !showNpc)
                 {
                     if (shopItem)
                         buyFromShop(*shopItem);
@@ -2863,18 +5480,29 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             renderAlpha = smoothCam ? float(std::min(acc * kTickHz, 1.0)) : 1.f;
             const float petFX = smoothAt(prevPos.x, pos.x), petFY = smoothAt(prevPos.y, pos.y); // pet's drawn position
             const float camX = clampCamF(petFX - W / 2, cur->img.w, W);
-            const float camY = clampCamF(petFY - kCamY, cur->img.h, H);
-            cur->runtime->updateVisible(int(std::floor(camX)), int(std::floor(camY)));
+            const float camY = clampCamF(petFY - kCamY - shakeDy, cur->img.h, H); // the belly flop moves the camera's lead
+            cur->runtime->updateVisible(int(std::floor(camX)), int(std::floor(camY)), W, H);
 
             // ---- DRAW ----
-            SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-            SDL_RenderClear(ren);
+            gp::clearFrame(ren);
             SDL_FRect dst{-camX, -camY, float(cur->img.w), float(cur->img.h)};
             SDL_RenderCopyF(ren, tex, nullptr, &dst);
 
             for (const gp::Hole &h : events.holes())
                 if (h.area == cur->def->legacyId)
                     drawGroundSprite(gp::uiSpriteId(kHoleSprite, kEvPal), h.x, h.y, camX, camY);
+            if (!holeFills.empty()) // a hole filling in: the dig animation backwards
+            {
+                const AnimRef FA = animRefById("base:anim/22@28c");
+                for (const HoleFill &hf : holeFills)
+                    if (FA.size())
+                    {
+                        const int fi = std::max(0, int(FA.size()) - 1 - hf.ticks * kHoleFillFps / 30);
+                        const gp::SpriteFrame &fs = FA.anim->frames[size_t(fi)];
+                        SDL_FRect fr{hf.x - camX - fs.anchorX + fs.dx, hf.y - camY + digAnimDY - fs.anchorY + fs.dy, float(fs.w), float(fs.h)};
+                        SDL_RenderCopyF(ren, (*FA.tex)[size_t(fi)], nullptr, &fr);
+                    }
+            }
 
             // Shadows first, so they lie on the ground under every sprite (layer 0x4000 in the original).
             for (int idx : cur->runtime->visible())
@@ -2889,6 +5517,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             for (const gp::WorldItem &e : events.events())
                 if (e.area == cur->def->legacyId && e.state == gp::EventState::Visible)
                     drawItemShadow(e.item, e.x, e.y, camX, camY);
+            float headX = 0, headY = 0;
             auto drawPet = [&]()
             {
                 const bool faceRight = !(facing == 2 && faceLeft);
@@ -2898,10 +5527,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 const bool negClass = animId == gp::reactId(gp::ReactAnim::Negative, sp, 1, true) ||
                                       animId == gp::reactId(gp::ReactAnim::Negative, sp, 2, true) ||
                                       animId == gp::reactId(gp::ReactAnim::NegIntro, sp, 0, true);
+                // Includes the intro/outro art around the happy hop, which the ROM mirrors with the same rule.
                 const bool sideClass = animId == gp::kIdleSide[sp] || animId == gp::kCallSide[sp] ||
-                                       animId == gp::reactId(gp::ReactAnim::Positive, sp, 0, true) ||
-                                       animId == gp::reactId(gp::ReactAnim::Emote, sp, 0, true) ||
-                                       animId == gp::reactId(gp::ReactAnim::Shocked, sp, 0, true);
+                                       gp::isSideReactArt(sp, animId);
                 if (walking)
                     flip = facing == 2 && faceLeft;
                 else if (animId == gp::kTurn180[sp] || animId == gp::kTurn90[sp])
@@ -2938,6 +5566,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 SDL_FRect r{x, y, float(s.w), float(s.h)};
                 SDL_RenderCopyExF(ren, (*A.tex)[f], nullptr, &r, 0, nullptr,
                                   flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+                headX = x + s.w / 2; // top centre of the drawn frame: where the thought bubble hangs (an approximation)
+                headY = y;
 
                 // marker 1 (magenta): the pet's position
                 // SDL_SetRenderDrawColor(ren, 255, 0, 255, 255);
@@ -2975,6 +5605,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             }
             if (overId == 0x16)
                 items.push_back({pos.y - 1, 5, nullptr}); // just behind the pet, sorted against objects
+            else if (overId == gp::kWashBubbleAnim)
+                items.push_back({pos.y + 1, 5, nullptr}); // the wash bubble sits over the pet
             items.push_back({pos.y, 2, nullptr});
             std::stable_sort(items.begin(), items.end(), [](const Item &a, const Item &b)
                              { return a.y < b.y; });
@@ -2982,6 +5614,67 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             for (const gp::ShopEvent &e : pending.v)
                 if (e.type == 3 && e.area == cur->def->legacyId)
                     items.push_back({e.y, 3, &e});
+            // The pet's facing as the bubble offsets read it: 0 left, 1 right, 2 up or down.
+            // The ROM's facing flag follows the walk and snaps to "front" when the pet stops, so bubbles re-centre on the pet.
+            const int romDir = (pose == Pose::Move || pose == Pose::Wait) && facing == 2 ? (faceLeft ? 0 : 1) : 2;
+            // The stink cloud, the personality bubble, the potion's exclamation and the "?" hang over the pet at its depth: objects
+            // in front of the pet cover them (the thought bubbles further down are drawn over everything).
+            auto drawPetBubbles = [&]()
+            {
+                if (!enc && !showNpc)
+                {
+                    int anim = -1;
+                    int fps = gp::kStinkFps;
+                    if (player.care[gp::Cleanliness] < gp::kStinkBelow)
+                        anim = gp::kStinkAnim; // the stink cloud, looping over the pet
+                    else
+                    {
+                        anim = gp::personalityBubble(player.personality[gp::Halos], player.personality[gp::Pitchforks], player.personality[gp::Stars]);
+                        fps = gp::kPersonalityBubbleFps;
+                    }
+                    const AnimRef K = anim >= 0 ? animRefById("base:anim/" + std::to_string(anim) + "@28c") : AnimRef{};
+                    if (anim >= 0 && K.size())
+                    {
+                        const gp::BubbleOffset bo = gp::overheadOffset(sp, romDir, animId);
+                        const int f = (stinkTicks * fps / 30) % int(K.size());
+                        const gp::SpriteFrame &bs = K.anim->frames[size_t(f)];
+                        SDL_FRect rc{petFX - camX + bo.dx - bs.anchorX + bs.dx, petFY - camY + bo.dy + gp::bubbleLower(sp) - bs.anchorY + bs.dy, float(bs.w), float(bs.h)};
+                        SDL_RenderCopyF(ren, (*K.tex)[size_t(f)], nullptr, &rc);
+                    }
+                }
+                if (exclaimTicks >= 0) // the exclamation over the head after a potion (bubble 0xb, then 0xc)
+                {
+                    const AnimRef I = animRefById("base:anim/" + std::to_string(gp::kExclaimIntroAnim) + "@28c");
+                    const AnimRef O = animRefById("base:anim/" + std::to_string(gp::kExclaimOutroAnim) + "@28c");
+                    const gp::ExclaimView v = gp::exclaimView(exclaimTicks, int(I.size()), int(O.size()));
+                    if (v.done)
+                        exclaimTicks = -1;
+                    else
+                    {
+                        const AnimRef &A = v.anim == gp::kExclaimOutroAnim ? O : I;
+                        if (A.size())
+                        {
+                            const size_t f = size_t(std::min(v.frame, int(A.size()) - 1));
+                            const gp::SpriteFrame &s = A.anim->frames[f];
+                            const gp::BubbleOffset bo = gp::overheadOffset(sp, romDir, animId);
+                            SDL_FRect rc{petFX - camX + bo.dx - s.anchorX + s.dx, petFY - camY + bo.dy + gp::bubbleLower(sp) - s.anchorY + s.dy, float(s.w), float(s.h)};
+                            SDL_RenderCopyF(ren, (*A.tex)[f], nullptr, &rc);
+                        }
+                    }
+                }
+                if (questionStep) // the "?" over the pet when it has not learned the trick (activity 0x14)
+                {
+                    const AnimRef Q = animRefById("base:anim/" + std::to_string(questionBubble) + "@28c");
+                    if (Q.size())
+                    {
+                        const size_t f = questionStep == 2 ? Q.size() - 1 : size_t(std::min(questionTicks * gp::kExclaimFps / 30, int(Q.size()) - 1));
+                        const gp::SpriteFrame &s = Q.anim->frames[f];
+                        const gp::BubbleOffset bo = gp::overheadOffset(sp, romDir, animId);
+                        SDL_FRect rc{petFX - camX + bo.dx - s.anchorX + s.dx, petFY - camY + bo.dy + gp::bubbleLower(sp) - s.anchorY + s.dy, float(s.w), float(s.h)};
+                        SDL_RenderCopyF(ren, (*Q.tex)[f], nullptr, &rc);
+                    }
+                }
+            };
             for (const Item &it : items)
             {
                 if (it.kind == 0)
@@ -2992,7 +5685,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 else if (it.kind == 3)
                 {
                     const auto &e = *static_cast<const gp::ShopEvent *>(it.p);
-                    const AnimRef A = animRefById(gp::uiSpriteId(itemDefs[e.item].worldSprite, gp::kMenuPalette));
+                    const AnimRef A = animRefById(uiIdP(itemDefs[e.item].worldSprite, gp::kMenuPalette));
                     if (A.size())
                     {
                         const gp::SpriteFrame &s = A.anim->frames[0];
@@ -3007,7 +5700,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     const AnimRef A = animRefById("base:anim/" + std::to_string(overId) + "@28c");
                     if (A.size())
                     {
-                        const int f = std::min(overTicks * kBubbleFps / 30, int(A.size()) - 1);
+                        const int fps = overId == gp::kWashBubbleAnim ? gp::kWashBubbleFps : kBubbleFps;
+                        const int f = std::min(overTicks * fps / 30, int(A.size()) - 1);
                         const gp::SpriteFrame &s = A.anim->frames[f];
                         const float ox = petFX - camX, oy = petFY - camY + digAnimDY;
                         SDL_FRect r{ox - s.anchorX + s.dx, oy - s.anchorY + s.dy, float(s.w), float(s.h)};
@@ -3015,27 +5709,136 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     }
                 }
                 else
+                {
                     drawPet();
+                    drawPetBubbles();
+                }
             }
 
-            if (!dialogue.open() && !enc)
+            if (thoughtIcon >= 0) // the hungry / tired bubble over the pet (DrawActiveBubbles)
             {
-                const int pi = events.nearestPrompt(cur->def->legacyId, pos.x, pos.y);
-                if (pi >= 0)
+                const AnimRef G = animRefById("base:anim/" + std::to_string(gp::kThoughtAnimGrow) + "@28c");
+                const AnimRef H = animRefById("base:anim/" + std::to_string(gp::kThoughtAnimHold) + "@28c");
+                const gp::ThoughtView v = gp::thoughtView(thoughtTicks, int(G.size()), int(H.size()));
+                const AnimRef &A = v.anim == gp::kThoughtAnimHold ? H : G;
+                if (!v.done && A.size())
                 {
-                    const gp::WorldItem &e = events.events()[size_t(pi)];
-                    const AnimRef A = animRefById(reactAnimId(kPromptArrowAnim, kEvPal));
-                    if (A.size())
+                    const gp::SpriteFrame &s = A.anim->frames[size_t(std::min(v.frame, int(A.size()) - 1))];
+                    const gp::BubbleOffset bo = gp::thoughtOffset(sp, romDir, animId);
+                    const float bx = petFX - camX + bo.dx, by = petFY - camY + bo.dy + gp::bubbleLower(sp);
+                    SDL_FRect rc{bx - s.anchorX + s.dx, by - s.anchorY + s.dy, float(s.w), float(s.h)};
+                    SDL_Texture *bt = (*A.tex)[size_t(std::min(v.frame, int(A.size()) - 1))];
+                    SDL_SetTextureBlendMode(bt, SDL_BLENDMODE_BLEND);
+                    SDL_SetTextureAlphaMod(bt, 175); // spawned with layer 0x4000, the shadow layer, which is translucent (as the shadows are)
+                    SDL_RenderCopyF(ren, bt, nullptr, &rc);
+                    if (v.icon) // DrawTile(icon, 0x28c, x + 0x20, y - 0x23)
                     {
-                        const int f = int(SDL_GetTicks() * 18ull / 1000) % int(A.size());
-                        const gp::SpriteFrame &s = A.anim->frames[f];
-                        const float ax = e.x - camX, ay = e.y - camY - 24; // GUESS: height above the item
-                        SDL_FRect r{ax - s.anchorX + s.dx, ay - s.anchorY + s.dy, float(s.w), float(s.h)};
-                        SDL_RenderCopyF(ren, (*A.tex)[f], nullptr, &r);
+                        const AnimRef I = animRefById(gp::uiSpriteId(thoughtIcon, 0x28c));
+                        if (I.size())
+                        {
+                            const gp::SpriteFrame &t = I.anim->frames[0];
+                            // drawn like the sprites: from the tile's own anchor
+                            SDL_FRect ic{bx + gp::kThoughtIconDX - t.anchorX + t.dx, by + gp::kThoughtIconDY - t.anchorY + t.dy, float(t.w), float(t.h)};
+                            SDL_SetTextureBlendMode((*I.tex)[0], SDL_BLENDMODE_BLEND);
+                            SDL_RenderCopyF(ren, (*I.tex)[0], nullptr, &ic);
+                        }
                     }
                 }
             }
+
+            if (!dialogue.open() && !enc && !showNpc)
+            {
+                // The map marker (RenderRoomObjects, see selector_icon.hpp): one bobbing arrow or ring over what the action
+                // button would act on. A ground item first, else the nearest interactable object, else the selected NPC.
+                const int area = cur->def->legacyId;
+                const gp::ShopEvent *shopT = nearestShopItem();
+                const int itemIdx = events.nearestPrompt(area, pos.x, pos.y);
+                const gp::ObjectDef *objT = cur->runtime->nearestInteractable(pos.x, pos.y);
+                const gp::NpcActor *npcT = nearestNpc();
+                const gp::MarkerKind kind = gp::chooseMarker(shopT || itemIdx >= 0, objT != nullptr,
+                                                             objT ? objT->legacySlot : -1, area, npcT != nullptr);
+                auto spriteH = [&](const gp::Id &id) // GetSpriteHeight of a tile: its first frame
+                {
+                    const AnimRef S = animRefById(id);
+                    return S.size() ? S.anim->frames[0].h : 0;
+                };
+                int anim = -1;
+                gp::MarkerPos mp{0, 0};
+                if (kind == gp::MarkerKind::Item)
+                {
+                    const int item = shopT ? shopT->item : int(events.events()[size_t(itemIdx)].item);
+                    const int ix = shopT ? shopT->x : events.events()[size_t(itemIdx)].x;
+                    const int iy = shopT ? shopT->y : events.events()[size_t(itemIdx)].y;
+                    const int h = item >= 0 && item < int(itemDefs.size())
+                                      ? spriteH(uiIdP(itemDefs[size_t(item)].worldSprite, gp::kMenuPalette))
+                                      : 0;
+                    anim = gp::itemMarkerAnim(area);
+                    mp = gp::itemMarkerPos(area, int(ix - camX), int(iy - camY), h);
+                }
+                else if (kind == gp::MarkerKind::Npc)
+                {
+                    const gp::NpcActor &n = *npcT;
+                    const AnimRef A = npcAnim(n, std::max(n.anim.animId, 0));
+                    const int h = A.size() ? A.anim->frames[std::min(n.anim.currentFrame, int(A.size()) - 1)].h : 0;
+                    const auto np = npcPosF(n);
+                    anim = gp::kMarkerArrowAnim;
+                    mp = gp::npcMarkerPos(n.def->index, int(np.first - camX), int(np.second - camY), h);
+                }
+                else if (kind == gp::MarkerKind::Object)
+                {
+                    const gp::ObjectType *t = db.objectType(objT->type);
+                    const int w = t ? t->art.w : 0, h = t ? t->art.h : 0;
+                    const int left = int(objT->x - camX) - (t ? t->art.anchorX : 0) + (t ? t->art.dx : 0);
+                    const int top = int(objT->y - camY) - (t ? t->art.anchorY : 0) + (t ? t->art.dy : 0);
+                    mp = gp::objectMarkerPos(left, top, w, h);
+                    anim = gp::objectMarkerOnScreen(mp.y) ? gp::kMarkerObjectAnim : -1;
+                }
+                if (anim >= 0)
+                {
+                    const AnimRef A = animRefById(reactAnimId(anim, gp::kMarkerPalette));
+                    if (A.size())
+                    {
+                        const int f = gp::markerFrame(gameTicks, int(A.size()));
+                        const gp::SpriteFrame &s = A.anim->frames[size_t(f)];
+                        SDL_FRect r{float(mp.x) - s.anchorX + s.dx, float(mp.y) - s.anchorY + s.dy + 1, float(s.w), float(s.h)}; // DrawTile's +1
+                        SDL_RenderCopyF(ren, (*A.tex)[size_t(f)], nullptr, &r);
+                    }
+                }
+            }
+            if (W > 320) // 16:9: the 320 x 240 screens (and the HUD, dialogue and bar) sit in the middle of the wide world
+            {
+                if (room) // a house is a 1152 px room: it fills the whole wide screen and scrolls with the pet
+                    drawRoom();
+                gp::useUiScreen(ren);
+                const bool wholeBox = dialogue.open() && dialogue.box->kind == gp::BoxKind::Picture; // (a sign is drawn over the world)
+                if (im.open || statsOpen || minigames.active() || wholeBox) // full-screen screens: the world is not behind them
+                    gp::clearFrame(ren);
+            }
+            else if (room)
+                drawRoom();
             drawQuestHud(barBusy == 0 && feedStep == 0 && digStep == 0 && !im.open && !statsOpen, true);
+            if (statNotice.visible() && !im.open && !statsOpen) // DrawStatChangeNotification
+            {
+                const gp::StatNoticeSlot &sl = gp::kStatNoticeSlots[statNotice.idx];
+                const int shift = gp::statNoticeShift(statNotice.shown);
+                // The panel is drawn 1 px right and down of the ROM's numbers (seen against the real game); the number uses the
+                // dialogue font (font 0).
+                const float nOff = statNotice.offsetAt(smoothCam, renderAlpha); // glides between the 5 px steps in smooth mode
+                drawUiF(gp::kStatNoticeBg, float(gp::kStatNoticeBgX + 1), nOff + float(gp::kStatNoticeBgDY + 1), 0x28c);
+                // The icon's coordinates are its lower right corner (it then sits at the panel's left with the number at the
+                // right, as in the game); GUESS from "too low and too far right" with the anchor as the origin.
+                if (const AnimRef I = animRefById(gp::uiSpriteId(sl.tile, sl.palette)); I.size())
+                {
+                    const gp::SpriteFrame &f = I.anim->frames[0];
+                    SDL_FRect ir{float(gp::kStatNoticeIconX + shift - f.w + f.dx + gp::kStatNoticeIconNudgeX),
+                                 nOff - float(f.h) + float(f.dy + gp::kStatNoticeIconNudgeY), float(f.w), float(f.h)};
+                    SDL_RenderCopyF(ren, (*I.tex)[0], nullptr, &ir);
+                }
+                text.setYShift(nOff - float(statNotice.offset));
+                text.draw(std::to_string(statNotice.shown), 0, statNotice.offset + gp::kStatNoticeTextDY, gp::kStatNoticeTextRight - shift,
+                          gp::Align::Right);
+                text.setYShift(0.f);
+            }
             if (dialogue.open())
                 drawDialogue(*dialogue.box);
             minigames.draw(renderAlpha);
@@ -3079,6 +5882,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 SDL_RenderCopy(ren, bgTex, nullptr, nullptr);
                 menuCmds.clear();
                 gp::drawSlotScene(itemGfx, rom, itemSlot);
+                gp::drawMoney(itemGfx, player.money); // the money icon and amount, drawn before the grid like the ROM does
                 const std::vector<int> win = itemWindow();
                 gp::GridView v;
                 v.list = &win;
@@ -3094,11 +5898,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                                  { return a.layer < b.layer; });
                 for (Cmd &c : menuCmds)
                     c.draw();
+                if (dialogue.open()) // a question about the selected item, over the item screen
+                    drawDialogue(*dialogue.box);
             }
             if (statsOpen)
             {
-                SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-                SDL_RenderClear(ren);                                    // new: wipe the world drawing
+                gp::clearFrame(ren); // wipe the world drawing
                 SDL_SetTextureBlendMode(statsBgTex, SDL_BLENDMODE_NONE); // new: ignore the texture's alpha
                 SDL_RenderCopy(ren, statsBgTex, nullptr, nullptr);
                 menuCmds.clear();
@@ -3134,7 +5939,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 for (Cmd &c : menuCmds)
                     c.draw();
             }
-            if (barAnim.visible && !im.open && !statsOpen)
+            if (barAnim.visible && barBusy != 4 && !im.open && !statsOpen) // (the bar is gone once the panel is up)
             {
                 const AnimRef A = barAnimRef(barAnim.id);
                 if (A.size())
@@ -3145,6 +5950,23 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     SDL_RenderCopy(ren, (*A.tex)[f], nullptr, &r);
                 }
             }
+            if (panelAnim.visible && !im.open && !statsOpen)
+            {
+                const AnimRef P = barAnimRef(panelAnim.id);
+                if (P.size())
+                {
+                    const int f = std::min(panelAnim.frame, int(P.size()) - 1);
+                    const gp::SpriteFrame &s = P.anim->frames[f];
+                    SDL_Rect r{gp::kTrickPanelX - s.anchorX + s.dx, gp::kTrickPanelY - s.anchorY + s.dy, s.w, s.h};
+                    SDL_RenderCopy(ren, (*P.tex)[f], nullptr, &r);
+                }
+            }
+            if (barBusy == 4 && !panelClosing && !im.open && !statsOpen)
+                for (int slot = 0; slot < gp::kTrickSlots; ++slot)
+                {
+                    const gp::TrickIcon ic = gp::trickIcon(sp, slot, player.tricksKnown);
+                    barGfx.tile(ic.sprite, 0x28c, ic.x, ic.y);
+                }
             if (bar.isOpen() && barBusy == 2)
                 gp::drawBarCursor(barGfx, rom, barInHouse, bar.selected(), barHost.pressed);
             static bool prevFullUi = false; // or a local declared before the loop
@@ -3158,6 +5980,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     fade.go(0.0, 6.0 / 30);
                 }
             }
+            gp::useWholeScreen(ren); // the fade covers the whole window
             {
                 const Uint64 t = SDL_GetPerformanceCounter();
                 fade.step(std::min(double(t - fadeLast) / double(freq), 1.0 / 20)); // clamp so loadArea hitches don't skip the fade
@@ -3172,7 +5995,6 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             SDL_RenderPresent(ren);
         }
         saveGame();
-        SDL_RenderSetIntegerScale(ren, oldIntScale); // the renderer outlives this run: hand it back as we found it
         // the renderer outlives this run now, so free what we made
         SDL_DestroyTexture(tex);
         SDL_DestroyTexture(bgTex);

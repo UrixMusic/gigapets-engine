@@ -97,7 +97,11 @@ namespace menubar
         virtual void startCloseAnim() = 0;                        // CloseMenuBar()
         virtual void moveCursor(int ev, int &sel, int count) = 0; // TODO: see note
         virtual void playOpenAnim(int which) = 0;                 // TODO: anims 0 / 2
+        virtual void playSound(int /*id*/, int /*volume*/) {}     // PlaySoundEffect(id, volume, 0)
     };
+
+    // HandleMenuBarInput / OpenMenuBar / AdvancePetBusyStateTo3
+    constexpr int kSfxOpen = 0x59, kSfxOpenVol = 0xbe, kSfxMove = 0x2d, kSfxMoveVol = 0xaf, kSfxConfirm = 0x59, kSfxConfirmVol = 0xbe, kSfxCancel = 0x59, kSfxCancelVol = 0xbe;
 
     class MenuBar
     {
@@ -112,6 +116,7 @@ namespace menubar
             host_.requestRedraw();
         }
         bool isOpen() const { return open_; }
+        void forceClose() { open_ = false; } // the tricks panel took over and has finished with the bar
         int selected() const { return selected_; }
         int buttonCount() const { return inHouse_ ? 8 : 7; }
 
@@ -126,11 +131,13 @@ namespace menubar
             {
                 host_.moveCursor(ev, selected_, buttonCount());
                 host_.requestRedraw();
+                host_.playSound(kSfxMove, kSfxMoveVol);
             }
             else if (ev == 4)
             {
                 // AdvanceMenuCursorSelection(4,0) clears the pressed flag, then:
                 confirm();
+                host_.playSound(kSfxConfirm, kSfxConfirmVol);
             }
         }
 
@@ -142,6 +149,7 @@ namespace menubar
             host_.setPetBusy(3);
             host_.startCloseAnim(); // walk.cpp plays anim 1 (house) or 3 (outside)
             open_ = false;
+            host_.playSound(kSfxCancel, kSfxCancelVol);
         }
 
     private:

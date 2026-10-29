@@ -36,11 +36,24 @@ int main(int argc, char **argv)
     try
     {
         gp::AppHost host(argv[1], "gigapets");
+        {
+            const gp::Settings s = gp::loadSettings(); // the options screen's volume and music switch
+            gp::audio().open("audio");
+            gp::audio().setRom(*host.ctx.rom);
+            gp::audio().setVolume(s.volume);
+            gp::audio().setMusicVolume(s.musicVolume);
+            gp::audio().setSfxVolume(s.sfxVolume);
+            if (s.interpolate)
+                smoothCam = true; // (--smooth turns it on regardless)
+            gp::keys().load(s.keys);
+            gp::applyDisplay(host.ctx.win, host.ctx.ren, gp::DisplaySettings{s.scale, s.perfectScale, s.windowMode, s.aspect});
+        }
         bool skipBoot = false;
         for (;;)
         {
             if (slot < 0)
             {
+                gp::audio().playMusic(gp::rau::kMenuSong);
                 slot = runFrontEnd(host.ctx, /*launchGame*/ true, skipBoot, -1);
                 if (slot < 0)
                     break; // window closed in the front end

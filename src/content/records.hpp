@@ -18,6 +18,8 @@ namespace gp
 
     // The id the ROM import gives base item n. The only place that format is written.
     inline Id legacyItemId(int n) { return "base:item/" + std::to_string(n); }
+    // A scripted (table) quest's id for scripts: QuestDef::id is the quest's place in the chain. Generated quests have none.
+    inline Id legacyQuestId(int n) { return "base:quest/" + std::to_string(n); }
     // "base:item/107" -> 107. -1 for anything that isn't a base item id.
     inline int legacyItemNumber(const Id &id)
     {
@@ -91,6 +93,8 @@ namespace gp
         int index = 0;  // record number 0..77, the "pool entry" for the area-3 spawn rule
         Id walkAnim[3]; // up, down, sideways; empty = no walk art known, fall back to `anim`
         Id turn180Anim, turn90Anim;
+        Id idleSideAnim; // standing idle facing left/right: what the NPC plays when it turns to look at the pet
+        Id sickIdleAnim, sadIdleAnim; // the idles for behaviorFlags bit 1 (sick: PlayIdleAnim_FlagB) and bit 2 (sad: _FlagA)
         std::vector<Id> lines; // rotating dialogue for stationary NPCs: 3 text ids
         int portraitPalette = 0x28c;
     };
@@ -254,6 +258,9 @@ namespace gp
         Id thanksText;               // text record shown on hand-in
         int autoMarkAfterQuests = 0; // 0 = off; king: 0x11 (questCounter > 0x10)
         Id autoMarkItem;             // king: legacyItemId(0xaa)
+        // What the NPC gives back for a hand-in: item number [n], n = how many items were already handed over (ReturnItemToKing
+        // 0x01b922 reads RAM 0x1e36, GiveFlowerToGardenia 0x01b85a reads 0x1e2a). Empty / out of range = nothing.
+        std::vector<int> rewardItems;
     };
 
     // A bitmap font: glyph k is character 0x21 + k. Space and unknown characters advance by `space`.
@@ -320,6 +327,7 @@ namespace gp
         bool availableAt(int quests) const { return quests >= questMin && quests < questMax; }
         bool interactive() const { return interactId >= 0; }
         Id requiresOffered; // empty = no condition; object exists only once offeredKey(this id) is set
+        std::string goneOnFlag; // empty = no condition; the object disappears once this player flag is set (stat gates)
     };
 
     struct AreaDef

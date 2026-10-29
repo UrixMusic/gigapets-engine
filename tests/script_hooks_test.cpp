@@ -219,6 +219,68 @@ int main()
         const auto r = h.fireItemUse("m:x");
         CHECK(!r.ran && !r.suppress && h.errors().size() == 1);
     }
+    // --- Game.hooks().onQuestComplete: ctx.quest / giver / receiver / player; return false takes the rewards over ---
+    {
+        gp::ScriptHost h;
+        wire(h);
+        CHECK(h.runString("m",
+                          "seen = {}\n"
+                          "local G = Game.hooks()\n"
+                          "function G:onQuestComplete(ctx)\n"
+                          "  seen[#seen + 1] = tostring(ctx.quest.id) .. '|' .. ctx.quest.number .. '|' .. tostring(ctx.quest.generic) .. '|' ..\n"
+                          "    tostring(ctx.quest.type) .. '|' .. tostring(ctx.giver.id) .. '|' .. tostring(ctx.receiver.id) .. '|' .. ctx.player.name\n"
+                          "  if ctx.quest.number == 3 then return false end\n"
+                          "end\n"
+                          "assert(Game.hooks() == Game.hooks())\n")); // one shared table
+        gp::QuestCompleteInfo a;
+        a.questId = "base:quest/2";
+        a.number = 2;
+        a.type = "base:questtype/0";
+        a.giverId = "base:npc/1";
+        a.receiverId = "base:npc/2";
+        auto r = h.fireQuestComplete(a);
+        CHECK(r.ran && !r.suppress);
+        gp::QuestCompleteInfo b; // a generated quest, NPCs the db doesn't know: the ids are nil, not empty strings
+        b.number = 3;
+        b.generic = true;
+        r = h.fireQuestComplete(b);
+        CHECK(r.ran && r.suppress);
+        CHECK(h.runString("m",
+                          "assert(seen[1] == 'base:quest/2|2|false|base:questtype/0|base:npc/1|base:npc/2|Rex', seen[1])\n"
+                          "assert(seen[2] == 'nil|3|true|nil|nil|nil|Rex', seen[2])"));
+        CHECK(h.errors().empty());
+    }
+    // --- no hook registered: nothing runs; an error disables the hook and never takes the rewards over ---
+    {
+        gp::ScriptHost h;
+        auto r = h.fireQuestComplete({});
+        CHECK(!r.ran && !r.suppress);
+        CHECK(h.runString("m", "local G = Game.hooks(); function G:onQuestComplete(ctx) error('boom') end"));
+        r = h.fireQuestComplete({});
+        CHECK(!r.ran && !r.suppress && h.errors().size() == 1);
+        r = h.fireQuestComplete({});
+        CHECK(!r.ran && h.errors().size() == 1); // off for the session: no second error
+    }
+    // --- a quest hook can hand out its own reward and speak, like the other take-over hooks ---
+    {
+        gp::ScriptHost h;
+        int given = 0;
+        std::vector<std::string> said;
+        h.api().give = [&](const std::string &, int n) { given += n; return n; };
+        h.api().say = [&](const std::string &id, const gp::ScriptApi::SayVars &) { said.push_back(id); return true; };
+        CHECK(h.runString("m",
+                          "local G = Game.hooks()\n"
+                          "function G:onQuestComplete(ctx)\n"
+                          "  if ctx.quest.id ~= 'm:quest/pie' then return end\n"
+                          "  player.give('m:item/pie', 3); say('m:str/thanks'); return false\n"
+                          "end\n"));
+        gp::QuestCompleteInfo other;
+        other.questId = "base:quest/9";
+        CHECK(!h.fireQuestComplete(other).suppress && given == 0 && said.empty());
+        gp::QuestCompleteInfo mine;
+        mine.questId = "m:quest/pie";
+        CHECK(h.fireQuestComplete(mine).suppress && given == 3 && said.size() == 1);
+    }
     std::printf(fails ? "FAILED: %d check(s)\n" : "script_hooks_test: all passed\n", fails);
     return fails ? 1 : 0;
 }

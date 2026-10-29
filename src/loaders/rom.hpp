@@ -28,6 +28,7 @@ public:
         return uint16_t(data_[o] | (data_[o + 1] << 8));
     }
     int16_t s16(uint32_t wordAddr) const { return int16_t(u16(wordAddr)); }
+    const std::vector<uint8_t>& bytes() const { return data_; }
 
 private:
     std::vector<uint8_t> data_;

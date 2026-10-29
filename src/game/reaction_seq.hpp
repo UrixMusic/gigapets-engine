@@ -18,8 +18,16 @@ namespace gp
         Emote,
         Shocked,
         Bored,
-        Sad
+        Sad,
+        SadOutro, // the sad art played last frame to first (the ROM sets flags = 4 on its second play)
+        EmoteOutro // the emote art played last frame to first: seen in MAME after a colour potion (hold, then back out)
     };
+
+    // Which reactions play last frame to first (animation flag 4 in the ROM). One rule for the pet and for NPCs.
+    inline bool playsReversed(ReactAnim a)
+    {
+        return a == ReactAnim::Outro || a == ReactAnim::NegOutro || a == ReactAnim::SadOutro || a == ReactAnim::EmoteOutro;
+    }
 
     struct ActorIO
     {
@@ -212,7 +220,7 @@ namespace gp
             case 3:
                 if (--wait_ > 0)
                     break;
-                if (!io.play(ReactAnim::Shocked, 0))
+                if (!io.play(ReactAnim::EmoteOutro, 0))
                     return true;
                 step_ = 4;
                 break;
@@ -224,7 +232,10 @@ namespace gp
             return false;
         }
 
-        bool sad(ActorIO &io) // TickNPCReactionAnimationSequence: sad, 0.5 s, sad
+        // TickNPCReactionAnimationSequence (0x01e915): sad, hold 0.5 s, then the same animation again in REVERSE. The
+        // ROM starts the second play and then writes 4 into the animation's flags word (actor + 0xb), the reverse bit,
+        // so the pet looks sad and then relaxes back out of it instead of sagging a second time.
+        bool sad(ActorIO &io)
         {
             switch (step_)
             {
@@ -243,7 +254,7 @@ namespace gp
             case 3:
                 if (--wait_ > 0)
                     break;
-                io.play(ReactAnim::Sad, 0);
+                io.play(ReactAnim::SadOutro, 0);
                 step_ = 4;
                 break;
             case 4:

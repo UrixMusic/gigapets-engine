@@ -23,6 +23,9 @@ public:
     TextDrawer(const TextDrawer&) = delete;
     TextDrawer& operator=(const TextDrawer&) = delete;
 
+    // A sub-pixel vertical shift added to everything drawn next (smooth mode); 0 when done.
+    void setYShift(float f) const { yShift_ = f; }
+
     int lineHeight() const { return font_ ? font_->lineHeight : 12; }
 
     int advance(unsigned char c) const {
@@ -52,8 +55,8 @@ private:
             const int k = c - 0x21;
             if (font_ && k >= 0 && k < 0x5e && k < int(tex_.size()) && tex_[k]) {
                 const gp::SpriteFrame& g = font_->glyph[k];
-                SDL_Rect r{x + pen + g.dx, y + g.dy + 1, g.w, g.h};   // DrawTile's +1, same as tileF/tilePalF
-                SDL_RenderCopy(ren_, tex_[k], nullptr, &r);
+                SDL_FRect r{float(x + pen + g.dx), float(y + g.dy + 1) + yShift_, float(g.w), float(g.h)};   // DrawTile's +1, same as tileF/tilePalF
+                SDL_RenderCopyF(ren_, tex_[k], nullptr, &r);
             }
             pen += advance(c);
         }
@@ -61,4 +64,5 @@ private:
     SDL_Renderer* ren_;
     const gp::FontDef* font_;
     std::vector<SDL_Texture*> tex_;
+    mutable float yShift_ = 0.f;
 };

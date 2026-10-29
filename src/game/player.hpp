@@ -48,6 +48,17 @@ namespace gp
         std::array<int, kNumPersonality> personality{};
         std::array<int, kNumCare> care{};
         int tricksKnown = 0; // g_tricksKnownCount
+        // g_petTraits: the Trick Teacher's secret code, 5 values 0..3. Not rolled until the first lesson is offered.
+        std::array<int, 5> trickCode{};
+        bool trickCodeRolled = false;
+        // The reroll half of SetTricksKnownAndRerollTraits: RandRange(0, 4) five times. rr(lo, hi) has hi exclusive.
+        template <class Rr>
+        void rerollTrickCode(Rr &&rr)
+        {
+            for (int &c : trickCode)
+                c = rr(0, 4);
+            trickCodeRolled = true;
+        }
         int illnessId = kHealthy;
         int dialogueRotation = 0;       // DAT_000fff: one counter shared by all stationary NPCs
         std::string name = "Fluffypoo"; // GetPetName(): chosen at game start in the original; any default for now
@@ -61,6 +72,11 @@ namespace gp
         int questsCompleted = 0;
         std::map<std::string, int> inventory; // item id -> count
         std::set<std::string> flags;          // event / quest flags
+        // The furnishings of the player's home: inventory slot -> ROM item number (SetInventorySlot). Slot 0 is the
+        // wall, 1 the floor, 2..4 wall pieces, 0x1b furniture, 0x1c the bed, and so on (game/room_scene.hpp).
+        std::map<int, int> equip;
+        // Which first-time tutorial messages have been shown, one bit per event (g_oneTimeEventsShown, per save slot).
+        unsigned tutorialsShown = 0;
 
         // Befriending. NPC ids are strings like "base:npc/48".
         std::set<std::string> friended;    // g_npcFriendshipFlags (saved)
@@ -101,8 +117,10 @@ namespace gp
         {
             const int before = money;
             money = std::clamp(money + delta, 0, kMaxMoney);
+            pendingMoney += money - before; // AddToLifetimeEarnings: the stat-change panel reads and clears it (not saved)
             return money - before;
         }
+        int pendingMoney = 0;
 
         // Port of AdjustPersonalityStat (player part only). Changing halos or lightbulbs
         // clears "encountered" for every unfriended NPC, so they get a fresh intro.

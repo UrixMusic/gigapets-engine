@@ -91,6 +91,18 @@ namespace gp
         }
     }
 
+    // ---------------------------------------------------------------- money
+    // ItemMenuScreen draws this right after the slot scene, whenever g_itemMenuMode is not 3 or 4 (the mini-pet transfer
+    // modes): the money icon (tile 0xacb), then the amount printed with "%ld" (string at 0xb2dc) in font 2, left aligned,
+    // in a 0x32 px wide box. The amount is GetPlayerMoney(), a 32-bit value.
+    constexpr int kMoneyIconSprite = 0xacb, kMoneyIconX = 0x14, kMoneyIconY = 0x23;
+    constexpr int kMoneyTextFont = 2, kMoneyTextX = 0x20, kMoneyTextY = 0x14, kMoneyTextW = 0x32;
+    inline void drawMoney(Gfx &g, int money)
+    {
+        g.drawTile(kMoneyIconSprite, kMenuPalette, kMoneyIconX, kMoneyIconY, 0x1000);
+        g.drawTextBox(kMoneyTextFont, kMenuPalette, kMoneyTextX, kMoneyTextY, std::to_string(money), kMoneyTextW, 0, 0x1000);
+    }
+
     // ---------------------------------------------------------------- tab marker
     // Per tab: 3 records x 4 words (sprite, palette, x, y) starting at 0xb070:
     //   +0 normal, +4 focused, +8 pressed.   5 tabs -> 60 words, directly after the potion table.

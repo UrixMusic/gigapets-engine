@@ -70,6 +70,13 @@ int main()
     CHECK((tbl[1].completionText == std::vector<int>{0x21, -7}));
     std::puts("import ok");
 
+    // ---- fillTemplate / fillTemplateVars: placeholders from a run-time list
+    CHECK(fillTemplateVars("Got {n} {item}s, {unknown}!", {{"item", "pie"}, {"n", "3"}}) == "Got 3 pies, {unknown}!");
+    CHECK(fillTemplateVars("{a}{a}", {{"a", "{b}"}, {"b", "no"}}) == "{b}{b}");   // values are not scanned again
+    CHECK(fillTemplateVars("no vars {", {}) == "no vars {" && fillTemplateVars("{x", {{"x", "1"}}) == "{x");
+    CHECK(fillTemplate("{npc} in {area}", {{"npc", "Rex"}, {"area", "town"}}) == "Rex in town");   // the old form still works
+    std::puts("template ok");
+
     // ---- flow
     Dialogue dlg;
     QuestRuntime qr;
@@ -124,6 +131,68 @@ int main()
     // clamp
     qr.load(500);
     CHECK(qr.counter == 4);
+    // ---- onComplete: true skips the bonus rewards (the -2 / -7 activities); the quest still completes and advances
+    for (int skip = 0; skip < 2; ++skip)
+    {
+        Dialogue d2;
+        QuestRuntime r2;
+        r2.dlg = &d2;
+        r2.table = tbl;
+        int held5 = 2, placed2 = 0, sfxes = 0, completes = 0;
+        auto &k = r2.h;
+        k.text = [](int id) { return "t" + std::to_string(id); };
+        k.held = [&](const Id &it) { return it == legacyItemId(5) ? held5 : 0; };
+        k.remove = [&](const Id &it, int n) { if (it == legacyItemId(5)) held5 -= n; };
+        k.spawn = [](int, const Id &, int, bool) {};
+        k.place = [&](const Id &, int, int, bool) { ++placed2; };
+        k.randomEvent = [] {};
+        k.clearFlagged = [] {};
+        k.sfx = [&](int) { ++sfxes; };
+        k.camX = [] { return 100; };
+        k.camY = [] { return 200; };
+        k.receiverY = [] { return 150; };
+        k.nowTick = [] { return 5; };
+        k.rnd = rnd;
+        k.onComplete = [&] { ++completes; return skip == 1; };
+        r2.load(1);
+        CHECK(r2.talk(0x42));
+        d2.choose(1);                      // offer text -> the confirm box
+        d2.choose(1);                      // accept
+        CHECK(r2.q.phase == 1 && completes == 0);
+        CHECK(r2.talk(0x42) && d2.open()); // the hand-in
+        CHECK(completes == 1 && held5 == 0 && d2.box->body == "t18"); // fired once, objectives already taken, text still shown
+        d2.choose(1);                      // thank-you text -> the reward activity -> next quest
+        CHECK(completes == 1);
+        CHECK(placed2 == (skip ? 0 : 1) && sfxes == (skip ? 0 : 1)); // bonus items scattered only when not taken over
+        CHECK(r2.counter == 2 && r2.q.phase == 0);                   // the chain moved on either way
+    }
+    // no onComplete wired: rewards as before
+    {
+        Dialogue d3;
+        QuestRuntime r3;
+        r3.dlg = &d3;
+        r3.table = tbl;
+        int placed3 = 0;
+        auto &k = r3.h;
+        k.text = [](int id) { return "t" + std::to_string(id); };
+        k.held = [](const Id &) { return 9; };
+        k.remove = [](const Id &, int) {};
+        k.spawn = [](int, const Id &, int, bool) {};
+        k.place = [&](const Id &, int, int, bool) { ++placed3; };
+        k.randomEvent = [] {};
+        k.clearFlagged = [] {};
+        k.sfx = [](int) {};
+        k.camX = [] { return 100; };
+        k.camY = [] { return 200; };
+        k.receiverY = [] { return 150; };
+        k.nowTick = [] { return 5; };
+        k.rnd = rnd;
+        r3.load(1);
+        r3.talk(0x42); d3.choose(1); d3.choose(1);
+        r3.talk(0x42); d3.choose(1);
+        CHECK(placed3 == 1);
+    }
+    std::puts("quest complete ok");
     std::puts("flow ok");
     return 0;
 }

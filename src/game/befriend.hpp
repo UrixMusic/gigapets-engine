@@ -2,6 +2,8 @@
 // Pure rules from TryBefriendNPC / GrantFriendship / GetPersonalityStatDelta.
 // Only the confirmed pieces are here; the full TryBefriendNPC flow is not ported yet.
 #pragma once
+#include <array>
+#include <string>
 #include "npc_brain.hpp" // Rng (range(lo, hi) has hi EXCLUSIVE, like RandRange)
 
 namespace gp
@@ -66,5 +68,27 @@ namespace gp
     {
         return FriendGreeting(rng.range(1, 4));
     }
+
+    // The three greetings are followed by a handler once the player presses OK (dialogue reward ids 0xfa9d / 0xfa9b /
+    // 0xfab1, each a (page, offset) entry in the pointer table at 0xfa91):
+    //   Hello -> ShowFriendAdviceText (0x017ccf), Gift -> ReceiveCureGiftFromFriend (0x017d23),
+    //   Game (on Yes) -> PlayRandomMinigame (0x017d60).
+
+    // ReceiveCureGiftFromFriend: a sick pet gets the medicine for its illness; a healthy one gets RandRange(0, 0x27)
+    // into this 39-entry table of item numbers (words at 0xd84e). The gift is dropped like a minigame prize.
+    constexpr int kFriendGiftCount = 0x27;
+    inline constexpr std::array<int, kFriendGiftCount> kFriendGifts = {
+        0x17, 0x19, 0x1a, 0x1b, 0x1d, 0x1e, 0x1f, 0x20, 0x22, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31,
+        0x29, 0x2a, 0x2b, 0x109, 0x0b, 0x0f, 0x29, 0x2a, 0x2b, 0x109, 0x0b, 0x0f, 0x29, 0x2a, 0x2b, 0x109, 0x0b, 0x0f};
+    inline int rollFriendGift(Rng &rng) { return kFriendGifts[size_t(rng.range(0, kFriendGiftCount))]; }
+
+    // ShowFriendAdviceText: RandomizeAdviceText picks the word at 0xe018 + RandRange(0, 0x2f), i.e. text id 0x2e7..0x315.
+    constexpr int kFriendAdviceFirst = 0x2e7, kFriendAdviceCount = 0x2f;
+    inline std::string friendAdviceId(Rng &rng)
+    {
+        return "base:text/" + std::to_string(kFriendAdviceFirst + rng.range(0, kFriendAdviceCount));
+    }
+
+    // PlayRandomMinigame: RandRange(1, 4) picks 1 = Swift Pick, 2 = Three in a Row, 3 = Memory Match.
 
 } // namespace gp

@@ -243,6 +243,80 @@ int main()
         CHECK(!h.runString("m", "player.setIllness()"));
         CHECK(ill == 10);
     }
+    // --- say(textId [, vars]): the id and the {name} variables reach the game; strings and numbers are accepted ---
+    {
+        gp::ScriptHost h;
+        std::vector<std::pair<std::string, std::map<std::string, std::string>>> said;
+        h.api().say = [&](const std::string &id, const gp::ScriptApi::SayVars &vars)
+        {
+            std::map<std::string, std::string> m;
+            for (const auto &v : vars)
+                m[v.first] = v.second;
+            said.emplace_back(id, std::move(m));
+            return id != "m:str/missing"; // an unknown id comes back false
+        };
+        CHECK(h.runString("m",
+                          "assert(say('m:str/a') == true)\n"
+                          "assert(say('m:str/b', {item = 'pie', n = 3, price = 2.5, ['x_1'] = ''}) == true)\n"
+                          "assert(say('m:str/missing') == false)\n"
+                          "assert(say('m:str/c', nil) == true)\n"));
+        CHECK(said.size() == 4 && said[0].first == "m:str/a" && said[0].second.empty());
+        CHECK(said[1].first == "m:str/b" && said[1].second.size() == 4 && said[1].second["item"] == "pie" &&
+              said[1].second["n"] == "3" && said[1].second["price"] == "2.5" && said[1].second["x_1"] == "");
+        CHECK(h.errors().empty());
+        // the script's own table is untouched by reading it (numbers stay numbers)
+        CHECK(h.runString("m", "local t = {n = 3}; say('m:str/d', t); assert(math.type(t.n) == 'integer')"));
+    }
+    // --- say() mistakes are loud script errors and show nothing ---
+    {
+        const char *bad[] = {"say()",                                       // no text id
+                             "say('m:str/a', 5)",                           // vars must be a table
+                             "say('m:str/a', {'positional'})",              // names must be strings
+                             "say('m:str/a', {['bad name'] = 1})",          // name characters
+                             "say('m:str/a', {[''] = 1})",
+                             "say('m:str/a', {x = true})",                  // value types
+                             "say('m:str/a', {x = {}})",
+                             "say('m:str/a', {x = string.rep('a', 201)})",  // too long
+                             "local t = {} for i = 1, 17 do t['v' .. i] = i end say('m:str/a', t)"}; // too many
+        for (const char *code : bad)
+        {
+            gp::ScriptHost h;
+            int calls = 0;
+            h.api().say = [&](const std::string &, const gp::ScriptApi::SayVars &) { ++calls; return true; };
+            CHECK(!h.runString("m", code));
+            CHECK(h.errors().size() == 1 && calls == 0);
+        }
+        gp::ScriptHost h;
+        CHECK(!h.runString("m", "say('m:str/a', {x = {}})"));
+        CHECK(h.errors()[0].find("the value of 'x' must be a string or a number") != std::string::npos);
+        gp::ScriptHost ok; // exactly 16 variables is fine
+        int n = 0;
+        ok.api().say = [&](const std::string &, const gp::ScriptApi::SayVars &v) { n = int(v.size()); return true; };
+        CHECK(ok.runString("m", "local t = {} for i = 1, 16 do t['v' .. i] = i end say('m:str/a', t)") && n == 16);
+    }
+    // --- a game that has not wired say: it returns false, nothing breaks ---
+    {
+        gp::ScriptHost h;
+        CHECK(h.runString("m", "assert(say('m:str/a', {x = 1}) == false)"));
+    }
+    // --- a take-over item script can speak: use the item up and say so ---
+    {
+        gp::ScriptHost h;
+        Fake f;
+        f.wire(h.api());
+        f.inv["m:item/box"] = 1;
+        std::vector<std::string> said;
+        h.api().say = [&](const std::string &id, const gp::ScriptApi::SayVars &) { said.push_back(id); return true; };
+        CHECK(h.runString("m",
+                          "local B = Item.hooks('m:item/box')\n"
+                          "function B:onItemUse(ctx)\n"
+                          "  if player.take(ctx.item.id, 1) > 0 then say('m:str/used') say('m:str/done') end\n"
+                          "  return false\n"
+                          "end\n"));
+        CHECK(h.fireItemUse("m:item/box").suppress && f.inv["m:item/box"] == 0);
+        CHECK(said.size() == 2 && said[0] == "m:str/used" && said[1] == "m:str/done"); // in order
+        CHECK(h.fireItemUse("m:item/box").suppress && said.size() == 2);               // nothing left to use: no text
+    }
     // --- a game that has not wired the stats: reads and changes are 0, nothing breaks ---
     {
         gp::ScriptHost h;

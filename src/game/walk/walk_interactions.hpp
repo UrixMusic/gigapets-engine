@@ -101,6 +101,25 @@ private:
             if (const size_t p = s.find("%s"); p != std::string::npos)
                 s.replace(p, 2, left == 1 ? "" : "s");
             showSign(svc_, std::move(s)); });
+        // The spaceship's colour machine (color_machine.hpp).
+        registry_.add("color_machine", [this](const gp::InteractionDef &)
+                      {
+            if (svc_.startColorMachine)
+                svc_.startColorMachine(); });
+        // The island map sign (world_map.hpp).
+        registry_.add("map", [this](const gp::InteractionDef &)
+                      {
+            if (svc_.showMap)
+                svc_.showMap(); });
+        // A plain message box with a text record (the guards in area 5).
+        registry_.add("message", [this](const gp::InteractionDef &d)
+                      { svc_.dialogue.show(gp::messageBox(gp::fmtAll(svc_.db.textOr(d.str.at("text"), "(missing text)"), svc_.player.name))); });
+        // The player homes (area 0) and the hotels: the door takes you into a side-scrolling room. `location` is the ROM's
+        // location number (g_storyInteractionResultCode): 0..2 homes, 4..7 hotels (game/room_scene.hpp).
+        registry_.add("room", [this](const gp::InteractionDef &d)
+                      {
+            if (svc_.enterRoom)
+                svc_.enterRoom(d.num.at("location")); });
         registry_.add("minigame", [this](const gp::InteractionDef &d)
                       {
             const std::string &game = d.str.at("game");

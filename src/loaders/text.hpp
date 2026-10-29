@@ -100,6 +100,30 @@ constexpr WideStr kWideStrings[] = {
     {"game_again",            0xd8f7},
     {"fmt_name_and_line",     0xd954},   // unnamed format string: print it and see
     {"fmt_stats_first",       0xd968},   // unnamed format string: print it and see
+    // Trick teachers (AttemptTrickLevel1..3 and TickTrickLearnedSuccessSequence1..3). Names are per species 0, 1, 2.
+    {"trick_1_0", 0xd678}, {"trick_1_1", 0xd682}, {"trick_1_2", 0xd68e}, // Back Flip, Tail Spring, Somersault
+    {"trick_2_0", 0xd6c8}, {"trick_2_1", 0xd6d2}, {"trick_2_2", 0xd6dd}, // Play Dead, Hand Stand, Belly Flop
+    {"trick_3_0", 0xd71a}, {"trick_3_1", 0xd724}, {"trick_3_2", 0xd72f}, // Head Spin, Helicopter, Robot Dance
+    {"trick_learn_prompt",    0xd73b},   // "Would you like to learn this trick?"
+    {"trick_failed_1",        0xd699},   // "Good try! Come back another time to try again."
+    {"trick_failed_2",        0xd6e8},   // "Not too bad! Come back another time to try again."
+    {"trick_failed_3",        0xd699},
+    {"trick_learned_1",       0xd75f},   // "Excellent! You should be able to do this trick on your own now."
+    {"trick_learned_2",       0xd79f},   // "Great! ..."
+    {"trick_learned_3",       0xd7db},   // "Wow! ..."
+    // Using a furnishing from the item menu inside your own home (ItemMenuScreen 0x02c610).
+    {"room_display_prompt",   0xb0ac},   // "Display this in your room?"
+    {"room_already_shown",    0xb0c7},   // "This item is already displayed in your room." (furniture and beds can't be removed)
+    {"room_remove_prompt",    0xb0f4},   // "Remove this item from your room?"
+    {"give_prompt",           0xb25e},   // "How many do you want to give?" (the item screen's give mode)
+    {"give_no_bed",           0xb1e2},   // "You can't give away the bed that's currently in your room."
+    {"give_no_dish",          0xb21d},   // "You can't give away the food dish that's currently in your room."
+    {"sell_offer",            0xd622},   // Jeremy: "I like to buy all sorts of things. Do you have something that you would like to sell?"
+    {"sell_prompt",           0xb1c4},   // "How many do you want to sell?"
+    {"sell_no_bed",           0xb152},   // "You can't sell the bed that's currently in your room."
+    {"sell_no_dish",          0xb188},   // "You can't sell the food dish that's currently in your room."
+    {"room_removed",          0xb692},   // "This item has been removed from your room." (after a Yes to Remove)
+    {"quit_prompt",           0xf660},   // "Are you sure you want to quit the game?" (the house bar's last button)
 };
 
 inline void importWideStrings(ContentDB& db, const Rom& rom) {
