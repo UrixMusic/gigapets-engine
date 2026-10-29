@@ -8,6 +8,7 @@ build/
 # other
 mods/
 *.json
+*.html
 
 # game data: never commit the ROM
 *.rom
