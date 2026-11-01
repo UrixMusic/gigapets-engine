@@ -56,6 +56,7 @@ namespace gp
         std::function<void()> onNo;
         std::string portrait;    // UI sprite id (uiSpriteId(tile, palette)); empty = none
         int layout = 2;          // 0, 1 = small windows, 2 = stats window
+        bool autoLayout = false; // the layout was picked from the text length (messageBox); a portrait changes the limits
         bool yesSelected = true; // flag 0x12: cursor on Yes (the default is a guess)
         int qty = 1, qtyMax = 1;
         std::function<void(int)> onQuantity;
@@ -74,15 +75,29 @@ namespace gp
         const size_t n = body.size() + 1; // ASCII assumed
         b.layout = n <= 0x31 ? 0 : n <= 0x63 ? 1
                                              : 2;
+        b.autoLayout = true;
         b.body = std::move(body);
         return b;
+    }
+
+    // InitDialogueBoxWithSpeciesPortrait (0x047de8) picks the window the same way with smaller limits, since the portrait takes
+    // room: up to 0x27 characters (terminator included) the small window, up to 0x59 the middle one, else the large.
+    inline int portraitLayout(size_t bodySize)
+    {
+        const size_t n = bodySize + 1;
+        return n <= 0x27 ? 0 : n <= 0x59 ? 1 : 2;
     }
 
     struct Dialogue
     {
         std::optional<DialogueBox> box;
         bool open() const { return box.has_value(); }
-        void show(DialogueBox b) { box = std::move(b); }
+        void show(DialogueBox b)
+        {
+            if (b.autoLayout && !b.portrait.empty())
+                b.layout = portraitLayout(b.body.size());
+            box = std::move(b);
+        }
         // option 1 = yes/OK, 2 = no. Closes first, so a callback may open the next box.
         void choose(int option)
         {

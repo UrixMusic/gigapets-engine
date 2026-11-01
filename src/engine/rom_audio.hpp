@@ -77,6 +77,11 @@ namespace gp
         class RomAudio
         {
         public:
+            // The sound chip plays the samples with no interpolation (the game sets NOINT, bit 0x200, in the control register
+            // 0x340d: Sound_InitRegisters 0x04b887): every output frame takes the sample the phase is on. `nearest` does the same,
+            // for the crunchy sound of the original hardware; off, neighbouring samples are blended (smoother).
+            bool nearest = false;
+
             explicit RomAudio(const Rom &rom) : r_(rom.bytes())
             {
                 bl_ = w(0xfa5f);
@@ -365,6 +370,8 @@ namespace gp
                 if (i >= n)
                     return 0.f;
                 const float a = (float(b(base + i)) - 128.f) / 128.f;
+                if (nearest)
+                    return a;
                 const float c = i + 1 < n ? (float(b(base + i + 1)) - 128.f) / 128.f : a;
                 return a + (c - a) * float(pos - i);
             }

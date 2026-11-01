@@ -34,6 +34,7 @@
 #include "../game/save.hpp"
 #include "../game/save_player.hpp" // whatever the savePlayer header is called
 #include "../game/debug_mode.hpp"
+#include "../game/test_mode.hpp"
 #include "../game/settings.hpp"
 #include "../engine/audio.hpp"
 #include "../engine/display.hpp"
@@ -204,7 +205,7 @@ inline void drawLoad(Gfx &g, int cur, bool picked, const std::string (&names)[3]
 // tutorials, interpolation, scale, scale mode, window mode, Done (settings.hpp). The logo stays put and kOptVisible rows show
 // under it; the list scrolls as the selection goes past the ends. Music, master volume, tutorials and Done keep the ROM's
 // 3-state button art (normal, highlighted, pressed); the others are drawn as text, since there is no art for them.
-inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, int scroll, int capture)
+inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, int scroll, int capture, int rowCount = gp::kOptRows)
 {
     constexpr int L = 0x3000, BP = 0x4b8, kTop = 0x6f, kPitch = 24, kLabelX = 0x1e, kLabelW = 0x8c, kValueX = 0xaa, kValueW = 0x7c; // the value ends at x 0x126
     // The long words don't fit beside each other in the big font ("Window Mode" 190 px, "Borderless" 158 px of 320), so the rows
@@ -214,7 +215,7 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
         int s[3], x;
         const char *label;
     };
-    static const Row rows[gp::kOptRows] = { // sprites and x from the ROM's table at 0xf47c
+    static const Row rows[gp::kOptRowsDebug] = { // sprites and x from the ROM's table at 0xf47c
         {{0x9d8, 0x9de, 0x9de}, 0x1e, nullptr},
         {{-1, -1, -1}, 0x1e, "SFX"},
         {{0x9dc, 0x9e2, 0x9e2}, 0x1e, nullptr},
@@ -224,9 +225,11 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
         {{-1, -1, -1}, 0x1e, "Scale Mode"},
         {{-1, -1, -1}, 0x1e, "Window Mode"},
         {{-1, -1, -1}, 0x1e, "Aspect Ratio"},
+        {{-1, -1, -1}, 0x1e, "Retro Audio"},
         {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, // the key rows: named below
         {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""},
         {{0x9d7, 0x9dd, 0x9ed}, 0x82, nullptr},
+        {{-1, -1, -1}, 0x1e, "Test Mode"}, // debug mode only
     };
     static const char *const kWindowNames[gp::kWindowModeCount] = {"Windowed", "Fullscreen", "Borderless"};
     g.drawTile(0x9e6, 0x4c7, 0x5f, 8, L, 999);
@@ -242,7 +245,7 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
         const bool hot = sel == row;
         g.drawTile(on ? (hot ? 0x9e0 : 0x9da) : (hot ? 0x9df : 0x9d9), BP, 0xff, y, L, 999);
     };
-    const int last = std::min(gp::kOptRows, scroll + gp::kOptVisible);
+    const int last = std::min(rowCount, scroll + gp::kOptVisible);
     for (int i = scroll; i < last; ++i)
     {
         const int y = kTop + (i - scroll) * kPitch;
@@ -288,6 +291,9 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
         case gp::kOptAspect:
             value(i, y, o.aspect == 1 ? "16:9" : "4:3", true);
             break;
+        case gp::kOptRetro:
+            value(i, y, o.retroAudio ? "On" : "Off", true);
+            break;
         case gp::kOptWindowMode:
             value(i, y, kWindowNames[std::clamp(o.windowMode, 0, gp::kWindowModeCount - 1)], true);
             break;
@@ -299,7 +305,7 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
     }
     if (scroll > 0) // more above / below
         g.drawTextBox(4, 0x105, 0x12c, kTop - 6, "^", 0x10, 0, L);
-    if (last < gp::kOptRows)
+    if (last < rowCount)
         g.drawTextBox(4, 0x105, 0x12c, kTop + (gp::kOptVisible - 1) * kPitch + 10, "v", 0x10, 0, L);
 }
 
@@ -1376,8 +1382,74 @@ enum class Screen
     Load,
     Name,
     Browse,
-    Options
+    Options,
+    TestMode
 };
+
+// The ROM's test mode screens (game/test_mode.hpp). Coordinates and strings are from TestModeMenu (0x045d9d) and the loops it starts.
+enum class TmScreen
+{
+    Menu,
+    Button,
+    Sound,
+    Memory,
+    Video1,
+    Video2,
+    Carrier,
+    Handheld
+};
+
+inline void drawTestText(Gfx &g, int x, int y, const std::string &s, int w = 0x120, int mode = 0)
+{
+    g.drawTextBox(2, 0x28c, x, y, s, w, mode, 0x3000);
+}
+
+inline void drawTestMenu(Gfx &g, int sel)
+{
+    drawTestText(g, 0x10, 0x10, gp::testmode::kTitle);
+    drawTestText(g, 0x10, 0x10, gp::testmode::kSubtitle, 0x120, 2);
+    for (int i = 0; i < gp::testmode::kRows; ++i) // DrawNumberedSelectableList: the chosen row is in the big font
+    {
+        const int y = 0x30 + i * 0x10, style = i == sel ? 0 : 2;
+        g.drawTextBox(style, 0x28c, 0x4b, y, std::to_string(i + 1) + ".", 0x19, 0, 0x3000);
+        g.drawTextBox(style, 0x28c, 100, y, gp::testmode::kRowNames[i], 0x140, 0, 0x3000);
+    }
+    drawTestText(g, 0x10, 200, std::string("VERSION ") + gp::testmode::kVersion);
+    drawTestText(g, 0x10, 200, gp::testmode::kDate, 0x120, 2);
+}
+
+inline void drawSoundTest(Gfx &g, int id)
+{
+    static const char *const keys[5] = {"LEFT -", "RIGHT -", "DOWN -", "UP -", "CANCEL -"};
+    static const char *const what[5] = {"PLAY PREVIOUS SOUND", "PLAY NEXT SOUND", "PLAY ALL SOUNDS", "REPLAY CURRENT SOUND", "EXIT SOUND TEST"};
+    for (int i = 0; i < 5; ++i)
+    {
+        drawTestText(g, 0x10, 0x10 + i * 0x10, keys[i], 0x50, 2);
+        drawTestText(g, 0x68, 0x10 + i * 0x10, what[i], 200);
+    }
+    drawTestText(g, 0x10, 0x80, "CURRENT SOUND - " + std::to_string(id), 300);
+}
+
+inline void drawButtonTest(Gfx &g, const gp::testmode::ButtonTest &t)
+{
+    using namespace gp::testmode;
+    g.drawTile(kControllerSprite, kControllerPalette, kControllerX, kControllerY, 0x3000, 999);
+    if (t.lit >= 0)
+        g.drawTile(buttonIconSprite(t.lit), kControllerPalette, kControllerX + buttonIconX(t.lit), kControllerY + buttonIconY(t.lit), 0x3000, 999);
+    if (!t.done())
+    {
+        drawTestText(g, 0xa0, 0x10, std::string("PRESS THE ") + kButtonNames[t.step] + " BUTTON.", 0x8c);
+        if (t.verdict)
+            drawTestText(g, 0xa0, 0x60, t.verdict == 1 ? "SUCCESS" : "FAIL", 0x8c);
+    }
+    else
+    {
+        drawTestText(g, 0xa0, 0x10, "DONE WITH TEST.", 0x8c);
+        drawTestText(g, 0xa0, 0x20, "HOLD THE CANCEL BUTTON TO EXIT.", 0x8c);
+    }
+    if (t.failed)
+        g.drawTile(kFailSprite, kFailPalette, kFailX, kFailY, 0x3000, 999);
+}
 
 // Returns the save slot (0..2) to play, or -1 if the window was closed.
 // launchGame = false keeps the old demo behaviour (after New/Load it just returns to the menu).
@@ -1479,6 +1551,65 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         int optSel = 0, optScroll = 0;
         int optCapture = -1; // the key binding waiting for a key, -1 = none
         bool optPressed = false;
+
+        // The ROM's test mode (game/test_mode.hpp): the sequence on the logo, and the screens.
+        namespace tmn = gp::testmode;
+        tmn::EntrySequence testEntry;
+        TmScreen tmScreen = TmScreen::Menu;
+        tmn::MenuList tmMenu;
+        tmn::ButtonTest tmButton;
+        tmn::SoundTest tmSound;
+        int tmPress = -1, tmSongTicks = 0;
+        unsigned tmChecksum = 0;
+        auto tmEvent = [](SDL_Keycode k) -> int
+        {
+            switch (k)
+            {
+            case SDLK_LEFT:
+                return tmn::Left;
+            case SDLK_RIGHT:
+                return tmn::Right;
+            case SDLK_UP:
+                return tmn::Up;
+            case SDLK_DOWN:
+                return tmn::Down;
+            case SDLK_z:
+                return tmn::Select;
+            case SDLK_x:
+                return tmn::Cancel;
+            case SDLK_RETURN:
+                return tmn::Menu;
+            default:
+                return -1;
+            }
+        };
+        // SoundTestPlaySelected: every channel stops, then ids 0..0x5f play as effects at 0x7f and the rest are the nine songs.
+        auto tmPlay = [&]
+        {
+            gp::audio().stopSfx();
+            gp::audio().stopMusic();
+            tmSongTicks = 0;
+            tmSound.started();
+            if (tmSound.isSong())
+                gp::audio().playMusic(tmSound.songIndex());
+            else
+                gp::audio().playSfx(tmSound.id, tmn::kSoundVolume);
+        };
+        auto tmStart = [&]
+        {
+            tmScreen = TmScreen::Menu;
+            tmMenu = {};
+            tmButton = {};
+            tmSound = {};
+            tmPress = -1;
+        };
+        auto tmLeaveSound = [&]
+        {
+            gp::audio().stopSfx();
+            gp::audio().stopMusic();
+            gp::audio().playMusic(gp::rau::kMenuSong);
+            tmScreen = TmScreen::Menu;
+        };
         auto loadStart = [&]
         {
             loadCur = 3;
@@ -1677,7 +1808,10 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                     else if (k == SDLK_x)
                     {
                         if (screen == Screen::Boot)
-                            screen = Screen::Menu; // debug skip, as before
+                        {
+                            if (!testEntry.armed()) // (Cancel ends the test mode sequence)
+                                screen = Screen::Menu; // debug skip, as before
+                        }
                         else if (screen == Screen::Name || screen == Screen::Browse)
                             goMenu();
                         // the other screens handle Escape themselves below
@@ -1711,6 +1845,21 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                         app.clearCaches();
                         std::printf("layer transparency mode %d\n", app.transMode);
                     }
+                }
+                if (screen == Screen::Boot && down && !rep && bootPhase <= 1)
+                {
+                    const int ev = tmEvent(k);
+                    if (testEntry.armed()) // the chime has gone: Up, Down, Menu, Cancel
+                    {
+                        if (testEntry.press(ev) == tmn::EntrySequence::Result::Entered)
+                        {
+                            tmStart();
+                            setScreen(Screen::TestMode);
+                        }
+                        continue;
+                    }
+                    if (ev == tmn::Left || ev == tmn::Select) // the hold must not skip the logo
+                        continue;
                 }
                 if (screen == Screen::Boot && down && !rep && k != SDLK_F1 && k != SDLK_F2 && k != SDLK_F3)
                 {
@@ -1893,6 +2042,11 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                             opts.aspect = 1 - opts.aspect;
                             applyWindow();
                             break;
+                        case gp::kOptRetro:
+                            opts.retroAudio = !opts.retroAudio;
+                            gp::audio().setRetro(opts.retroAudio);
+                            feSound(gp::fe::kSfxConfirm, 0x7f); // hear the difference
+                            break;
                         default:
                             break;
                         }
@@ -1901,9 +2055,9 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                                                                             : optSel == gp::kOptSfx      ? &opts.sfxVolume
                                                                                                          : nullptr;
                     if (k == SDLK_UP && !rep)
-                        optSel = gp::optionsMove(optSel, false), feSound(gp::fe::kSfxMove, 0x7f);
+                        optSel = gp::optionsMove(optSel, false, gp::debugMode() ? gp::kOptRowsDebug : gp::kOptRows), feSound(gp::fe::kSfxMove, 0x7f);
                     else if (k == SDLK_DOWN && !rep)
-                        optSel = gp::optionsMove(optSel, true), feSound(gp::fe::kSfxMove, 0x7f);
+                        optSel = gp::optionsMove(optSel, true, gp::debugMode() ? gp::kOptRowsDebug : gp::kOptRows), feSound(gp::fe::kSfxMove, 0x7f);
                     else if (k == SDLK_x && !rep)
                         leave(false);
                     else if ((k == SDLK_LEFT || k == SDLK_RIGHT) && slider)
@@ -1926,13 +2080,99 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                         feSound(gp::fe::kSfxConfirm, 0x7f); // ShowOptionsMenuScreen
                         if (optSel == gp::kOptDone)
                             leave(true);
+                        else if (optSel == gp::kOptTestMode && gp::debugMode()) // the ROM's test mode, from the debug unlock
+                        {
+                            opts.keys = gp::keys().key;
+                            gp::saveSettings(opts);
+                            tmStart();
+                            setScreen(Screen::TestMode);
+                        }
                         else if (gp::isKeyRow(optSel))
                             optCapture = gp::keyRowAction(optSel); // the next key pressed is the new binding
                         else
                             change(true, true);
                     }
-                    optScroll = gp::optionsScroll(optSel, optScroll);
+                    optScroll = gp::optionsScroll(optSel, optScroll, gp::debugMode() ? gp::kOptRowsDebug : gp::kOptRows);
                     applyAudio();
+                }
+                else if (screen == Screen::TestMode && down && !rep)
+                {
+                    const int ev = tmEvent(k);
+                    switch (tmScreen)
+                    {
+                    case TmScreen::Menu:
+                        if (ev == tmn::Up)
+                            tmMenu.move(-1);
+                        else if (ev == tmn::Down)
+                            tmMenu.move(1);
+                        else if (ev == tmn::Select)
+                            switch (tmMenu.sel)
+                            {
+                            case tmn::RowButton:
+                                tmButton = {};
+                                tmPress = -1;
+                                tmScreen = TmScreen::Button;
+                                break;
+                            case tmn::RowSound:
+                                tmSound = {};
+                                tmScreen = TmScreen::Sound;
+                                tmPlay(); // SoundTestPlaySelected(0)
+                                break;
+                            case tmn::RowMemory:
+                            {
+                                unsigned sum = 0; // TestEeprom: the 16-bit sum of the ROM words from 0x4000 up
+                                for (uint32_t a = 0x4000; a < rom.sizeWords() && a < 0x400000u; ++a)
+                                    sum += rom.u16(a);
+                                tmChecksum = sum & 0xffff;
+                                tmScreen = TmScreen::Memory;
+                                break;
+                            }
+                            case tmn::RowVideo:
+                                tmScreen = TmScreen::Video1;
+                                break;
+                            case tmn::RowHandheld:
+                                tmScreen = TmScreen::Handheld;
+                                break;
+                            case tmn::RowCarrier:
+                                tmScreen = TmScreen::Carrier;
+                                break;
+                            default: // EXIT TEST MODE (the ROM powers down)
+                                goMenu();
+                                break;
+                            }
+                        break;
+                    case TmScreen::Button:
+                        if (tmPress < 0)
+                            tmPress = ev;
+                        break;
+                    case TmScreen::Sound:
+                        if (ev == tmn::Left)
+                            tmSound.prev(), tmSound.playAll = false, tmPlay();
+                        else if (ev == tmn::Right)
+                            tmSound.next(), tmSound.playAll = false, tmPlay();
+                        else if (ev == tmn::Up)
+                            tmSound.playAll = false, tmPlay();
+                        else if (ev == tmn::Down)
+                        {
+                            if (tmSound.togglePlayAll())
+                                tmPlay();
+                        }
+                        else if (ev == tmn::Cancel)
+                            tmLeaveSound();
+                        break;
+                    case TmScreen::Memory:
+                    case TmScreen::Carrier:
+                    case TmScreen::Handheld:
+                        if (ev == tmn::Cancel)
+                            tmScreen = TmScreen::Menu;
+                        break;
+                    case TmScreen::Video1:
+                        tmScreen = TmScreen::Video2; // any button
+                        break;
+                    case TmScreen::Video2:
+                        tmScreen = TmScreen::Menu;
+                        break;
+                    }
                 }
                 else if (screen == Screen::House && down && !rep && fadeTick >= 16)
                 {
@@ -2096,6 +2336,15 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             {
                 if (bootPhase == 0) // fade in (fadeTick), then hold the logos
                 {
+                    { // HandleTestModeEntrySequence: Left + Select held for 3 s, a chime, then Up, Down, Menu, Cancel; the logo waits for it
+                        const Uint8 *ks = SDL_GetKeyboardState(nullptr);
+                        const bool both = gp::keys().held(ks, gp::Action::Left) && gp::keys().held(ks, gp::Action::Select);
+                        for (int i = 0; i < ticks; ++i)
+                            if (testEntry.tick(both) == tmn::EntrySequence::Result::Chime)
+                                feSound(0x59, 0xbe);
+                        if (testEntry.armed() && now - bootT0 >= kLogoMs - 100)
+                            bootT0 = now - (kLogoMs - 100);
+                    }
                     app.drawBackground(1, 0x5c7);
                     if (now - bootT0 >= kLogoMs)
                     {
@@ -2185,8 +2434,80 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                 break;
             case Screen::Options:
                 app.drawBackground(2, 0x5c5);
-                drawOptions(gfx, optSel, optPressed, opts, optScroll, optCapture);
+                drawOptions(gfx, optSel, optPressed, opts, optScroll, optCapture, gp::debugMode() ? gp::kOptRowsDebug : gp::kOptRows);
                 break;
+            case Screen::TestMode:
+            {
+                if (tmScreen == TmScreen::Video1 || tmScreen == TmScreen::Video2)
+                {
+                    app.drawBackground(tmScreen == TmScreen::Video1 ? 0x21 : 0x22, 0x5ea); // RunVideoTestLoop
+                    break;
+                }
+                app.drawBackground(0, 0x5c3);
+                switch (tmScreen)
+                {
+                case TmScreen::Menu:
+                    drawTestMenu(gfx, tmMenu.sel);
+                    break;
+                case TmScreen::Button:
+                {
+                    const Uint8 *ks = SDL_GetKeyboardState(nullptr);
+                    const bool cancelDown = gp::keys().held(ks, gp::Action::Cancel);
+                    for (int i = 0; i < ticks; ++i)
+                    {
+                        tmButton.tick(i == 0 ? tmPress : -1, cancelDown);
+                        if (i == 0)
+                            tmPress = -1;
+                    }
+                    if (tmButton.failSound)
+                    {
+                        tmButton.failSound = false;
+                        feSound(0x59, 0x7f);
+                    }
+                    if (tmButton.exit)
+                        tmScreen = TmScreen::Menu;
+                    drawButtonTest(gfx, tmButton);
+                    break;
+                }
+                case TmScreen::Sound:
+                {
+                    for (int i = 0; i < ticks; ++i)
+                    {
+                        // The songs loop here, so one counts as playing for 30 s; sound 0 starts over when it ends.
+                        tmSongTicks += tmSound.isSong();
+                        const bool playing = tmSound.isSong() ? tmSongTicks < 30 * tmn::kTicksPerSecond : gp::audio().sfxActive(tmSound.id);
+                        if (tmSound.id == 0 && !playing)
+                            tmPlay();
+                        else if (tmSound.tick(playing))
+                        {
+                            tmSound.next();
+                            tmPlay();
+                        }
+                    }
+                    drawSoundTest(gfx, tmSound.id);
+                    break;
+                }
+                case TmScreen::Memory:
+                    drawTestText(gfx, 0x10, 0x10, "EEPROM TEST:");
+                    drawTestText(gfx, 0xb4, 0x10, "PASS"); // there is no EEPROM here: the saves are files
+                    drawTestText(gfx, 0x10, 0x30, "ROM CHECKSUM:");
+                    drawTestText(gfx, 0xb4, 0x30, std::to_string(tmChecksum));
+                    drawTestText(gfx, 0x10, 0x60, "PRESS SELECT TO RESTART THE TEST.");
+                    drawTestText(gfx, 0x10, 0x90, "PRESS CANCEL TO EXIT THIS TEST.");
+                    break;
+                case TmScreen::Carrier:
+                    drawTestText(gfx, 0x10, 0x10, "NO PET CARRIER INSERTED");
+                    drawTestText(gfx, 0x10, 0x90, "PRESS CANCEL TO EXIT THIS TEST.");
+                    break;
+                case TmScreen::Handheld:
+                    drawTestText(gfx, 0x10, 0x30, "INSERT HANDHELD");
+                    drawTestText(gfx, 0x10, 0x90, "PRESS CANCEL TO EXIT THIS TEST.");
+                    break;
+                default:
+                    break;
+                }
+                break;
+            }
             case Screen::House:
                 app.drawBackground(2, 0x5c5);
                 drawHouse(gfx, houseCur, slotName, slotFull);

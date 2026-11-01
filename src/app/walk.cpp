@@ -30,6 +30,7 @@
 #include "../engine/sprite_cache.hpp" // AnimRef, SpriteCache
 #include "../game/menu_draw.hpp"
 #include "../game/item_tabs.hpp"
+#include "../game/story_blast.hpp"
 #include "../game/menu_bar.hpp"
 #include "../game/item_use.hpp" // at the top with the other includes
 #include "../game/pending_event.hpp"
@@ -512,7 +513,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     {
                     }
 
-        for (int a : {0xe, 0x10, 0x11, 0x12, 0x16, 0x17, 0x18, gp::kTabAnimIn, gp::kTabAnimOut, gp::kStinkAnim, gp::kExclaimIntroAnim, gp::kExclaimOutroAnim, gp::kTrickQuestionBubble, gp::kTrickAnswerBubble, gp::kHaloBubble, gp::kPitchforkBubble, gp::kStarBubble}) // 0xe: the wash bubble; arrow, dig bubble; 0x17/0x18: the thought bubble
+        for (int a : {0xe, 0x10, 0x11, 0x12, 0x16, 0x17, 0x18, gp::kTabAnimIn, gp::kTabAnimOut, gp::kBlastAnim, gp::kStinkAnim, gp::kExclaimIntroAnim, gp::kExclaimOutroAnim, gp::kTrickQuestionBubble, gp::kTrickAnswerBubble, gp::kHaloBubble, gp::kPitchforkBubble, gp::kStarBubble}) // 0xe: the wash bubble; arrow, dig bubble; 0x17/0x18: the thought bubble
             try
             {
                 gp::importAnim(rom, db, a, 0x28c);
@@ -1309,7 +1310,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
                 else if (b.kind == gp::BoxKind::Quantity)
                 {
-                    numbers.draw(std::to_string(b.qty), L.x + L.btnX - 0x30, L.y + L.btnY, 0x20, gp::Align::Right);
+                    // RenderActiveDialogueWindow type 3: SprintF("%d") drawn in the body's own font, centred over the text width, 13
+                    // px below the button row in the first layout and on it in the others.
+                    text.draw(std::to_string(b.qty), L.x + L.textX, L.y + L.btnY + (b.layout == 0 ? 13 : 0), L.textW, gp::Align::Center);
                     drawUi(0x27, L.x + L.btnX, L.y + L.btnY);
                 }
                 else
@@ -1440,7 +1443,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
         auto itemName = [&](int id)
         { return db.textOr(itemDefs[id].name, "?"); };
-        const std::string emptyText = "You don't have any."; // real string at 0xb2e4: decode later
+        const std::string emptyText = gp::readWideText(rom, 0xb2e4); // "Buy medicines at the pharmacy."
 
         for (int id : {0xf5, 0xf4, 0xf3, 0xf2, 0xf0, 0xef, 0xee, 0, 0xf1, 0xed, 0, 0x105})
             std::printf("swift pick %3d (0x%x): %s\n", id, id,
@@ -1835,6 +1838,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         { return gp::Id(std::string("base:anim/") + std::to_string(in ? gp::kTabAnimIn : gp::kTabAnimOut) + "@28c"); };
         // ItemMenuScreen's input: the grid (Menu opens the tab list), the tab list (Up/Down, Select on release, Cancel/Menu back), and
         // nothing while the list slides.
+        bool itemLeave = false;
         auto itemMenuTick = [&](uint8_t pressed, bool xPress, bool menuPress, bool zPress, bool zRelease)
         {
             gp::ItemTabs &tb = im.tabs;
@@ -1887,11 +1891,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (im.selRow > im.firstRow + 2)
                 im.firstRow = im.selRow - 2;
             if (xPress)
-            {
-                im.open = false;
-                barBusy = 0;
-                barAnim.visible = false;
-            }
+                itemLeave = true; // (the caller fades out, then closes the screen)
         };
 
         Fade &fade = S.flow.fade; // starts black and fades in
@@ -1933,7 +1933,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             playBarAnim(house ? 0 : 2);
         };
 
-        barHost.onState = [&](int s)
+        // A bar button that leaves for another screen: the bar plays its closing animation first, then the screen fades out
+        // (the state change waits for the bar to be gone: HandleMenuBarInput sets the loop state to 4, which only becomes 3 once
+        // g_isPetBusy is back to 0). Go Home is the exception: it sets the state to 3 at once and does not wait.
+        int pendingBarState = -1;
+        auto runBarState = [&](int s)
         {
             if (s == kStatsState)
             {
@@ -1951,11 +1955,20 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 std::printf("bar: SwitchGameState(0x%x)\n", s);
                 return;
             }
-            im = {};
-            im.open = true;
-            im.category = barHost.category;
-            im.filtered = buildFiltered(im.category);
-            std::printf("item menu: category %d, %zu items, slot %d\n", im.category, im.filtered.size(), itemSlot);
+            requestScreen([&]
+                          {
+                im = {};
+                im.open = true;
+                im.category = barHost.category;
+                im.filtered = buildFiltered(im.category);
+                std::printf("item menu: category %d, %zu items, slot %d\n", im.category, im.filtered.size(), itemSlot); });
+        };
+        barHost.onState = [&](int s)
+        {
+            if (s >= 0xb && s <= 0xd)
+                runBarState(s);
+            else
+                pendingBarState = s;
         };
 
         // Queue draw calls, then sort by layer
@@ -3801,6 +3814,25 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                             holeFills.end());
         };
 
+        // The story blasts (game/story_blast.hpp): the explosion animation at a world spot.
+        struct Blast
+        {
+            int x, y, ticks;
+        };
+        std::vector<Blast> blasts;
+        int gateBias = 0; // added to the quest count when objects are shown or hidden: 1 once a blast has changed the scenery
+        auto tickBlasts = [&]
+        {
+            if (blasts.empty())
+                return;
+            const int frames = int(animRefById("base:anim/" + std::to_string(gp::kBlastAnim) + "@28c").size());
+            for (Blast &b : blasts)
+                ++b.ticks;
+            blasts.erase(std::remove_if(blasts.begin(), blasts.end(), [&](const Blast &b)
+                                        { return b.ticks * gp::kBlastFps / 30 >= frames; }),
+                         blasts.end());
+        };
+
         auto startDig = [&]
         { digStep = 1; digTicks = 0; settlePhase = 0; walkTicks = 0; };
 
@@ -4198,11 +4230,15 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 importPetAnims();
                 saveGame();
                 std::printf("potion %d: palette 0x%x\n", d.index, pal);
-                im.open = false;
-                barBusy = 0;
-                barAnim.visible = false;
-                if (!room)
-                    startPotionReaction();
+                if (room)
+                {
+                    im.open = false;
+                    barBusy = 0;
+                    barAnim.visible = false;
+                }
+                else // the item screen fades out, then the world comes back with the pet's reaction
+                    requestScreen([&]
+                                  { im.open = false; barBusy = 0; barAnim.visible = false; startPotionReaction(); });
                 return;
             }
             if (room) // the rest animate the world pet, which isn't shown in a room
@@ -4217,21 +4253,23 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     return;
                 const bool cured = gp::applyMedicine(player, d);
                 player.removeItem(d.id, 1);
-                im.open = false;
-                barBusy = 0;
-                const int illnessBefore = player.illnessId;
-                barAnim.visible = false;
-                if (cured)
-                    startMedicine(illnessBefore);
-                else
-                {
-                    facing = 1; // wrong medicine: the vanilla "walk in place" bug
-                    pose = Pose::Move;
-                    walkTicks = 0;
-                    medStuck = true;
-                    medStuckTicks = 0;
-                    medStuckLimit = 90 + std::rand() % 91; // same 3-6 s range as the idle timer
-                }
+                requestScreen([&, cured] // the item screen fades out first
+                              {
+                    im.open = false;
+                    barBusy = 0;
+                    const int illnessBefore = player.illnessId;
+                    barAnim.visible = false;
+                    if (cured)
+                        startMedicine(illnessBefore);
+                    else
+                    {
+                        facing = 1; // wrong medicine: the vanilla "walk in place" bug
+                        pose = Pose::Move;
+                        walkTicks = 0;
+                        medStuck = true;
+                        medStuckTicks = 0;
+                        medStuckLimit = 90 + std::rand() % 91; // same 3-6 s range as the idle timer
+                    } });
                 return;
             }
 
@@ -4252,11 +4290,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
             player.removeItem(d.id, 1);
 
-            // Menu result 2: leave the menu and play the eat animation.
-            im.open = false;
-            barBusy = 0;
-            barAnim.visible = false;
-            startFeed();
+            // Menu result 2: fade out of the menu and play the eat animation.
+            requestScreen([&]
+                          { im.open = false; barBusy = 0; barAnim.visible = false; startFeed(); });
         };
 
         // ---- 4. STATE + AREA SWITCHING ----
@@ -4383,12 +4419,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             }
             if (q.outcome == gp::BuyOutcome::CantAfford)
             { // string at 0xb669 (truncated in the decompile)
-                dialogue.show(gp::messageBox(name + " " + std::to_string(d.price) + " Bucks each. You can't afford any."));
+                dialogue.show(gp::messageBox(name + "\n" + std::to_string(d.price) + " Bucks each.\nYou can't afford that.")); // 0xb669
                 return;
             }
             // Pick: the real game opens a quantity picker here (string at 0xb637). STOPGAP until dialogue.hpp has one:
             // a Yes/No box that buys exactly 1.
-            gp::DialogueBox b = gp::messageBox(name + " " + std::to_string(d.price) + " Bucks each. How many would you like?");
+            gp::DialogueBox b = gp::messageBox(name + "\n" + std::to_string(d.price) + " Bucks each.\nHow many would you like to buy?"); // 0xb637
             b.kind = gp::BoxKind::Quantity;
             b.qty = 1;
             b.qtyMax = q.maxQty;
@@ -4506,7 +4542,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 const bool needsOffer = !o.requiresOffered.empty();
                 const bool offered = needsOffer && player.hasFlag(gp::offeredKey(o.requiresOffered));
                 const bool gone = !o.goneOnFlag.empty() && player.hasFlag(o.goneOnFlag);
-                cur->runtime->setHidden(o.id, (needsOffer && !offered) || !o.availableAt(quests.counter) || gone);
+                cur->runtime->setHidden(o.id, (needsOffer && !offered) || !o.availableAt(quests.counter + gateBias) || gone);
             }
             cur->runtime->updateVisible(camNowX(), camNowY(), W, H);
         };
@@ -4595,8 +4631,29 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
         qh.onDecline = [&]
         { nudge.restart(long(gameTicks)); }; // DeclineQuest: the 30 s reminder timer
+        // StartQuestRewardActivity -8 / -10 (TickActor_MiniPetFoundItemSequence / HandleMiniPetGiftSequence, mis-named in the
+        // decompile): the pet stands while the dialogue is closed, then the sound 0x5a, the explosion (bubble 0x13), the camera
+        // shake, and the rock's object goes while the passage's comes in; a moment later the dialogue goes on.
+        qh.storyBlast = [&](int code, std::function<void()> done)
+        {
+            const gp::StoryBlast *sb = gp::storyBlastFor(code);
+            if (!sb || cur->def->legacyId != sb->area)
+            {
+                done();
+                return;
+            }
+            qh.hold(gp::kBlastLeadTicks, [&, sb, done]
+                    {
+                sfx(0x5a, 200);
+                blasts.push_back({sb->x, sb->y, 0});
+                cameraShake.start();
+                gateBias = 1;
+                refreshBits();
+                qh.hold(gp::kBlastTailTicks, done); });
+        };
         qh.onNextQuest = [&]
         {
+            gateBias = 0; // the quest count has moved on and does the same job
             player.questsCompleted = quests.counter;
             loadNpcs(); // only ever runs from a dialogue callback, never inside talkToNpc's own NpcActor reference
             refreshBits();
@@ -4958,6 +5015,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
                 if (barBusy == 5 && (!barAnim.visible || barAnim.done)) // AdvancePetBusyStateMachine: 5 -> 4 once the bar is gone
                     barBusy = 4;
+                if (pendingBarState >= 0 && barBusy == 0) // the bar has finished closing: now the screen change
+                {
+                    const int st = pendingBarState;
+                    pendingBarState = -1;
+                    runBarState(st);
+                }
                 if (pendingExit || pendingScreen)
                     continue;
                 if (statsOpen)
@@ -4987,6 +5050,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 if (im.open && !dialogue.open()) // a box asked from the item screen is answered first
                 {
                     itemMenuTick(newlyPressed, xPressed, menuPressed, zPressed, zReleased);
+                    if (itemLeave)
+                    {
+                        itemLeave = false;
+                        requestScreen([&]
+                                      { im.open = false; barBusy = 0; barAnim.visible = false; }); // the item screen fades out too
+                    }
                     if (zPressed && im.open && im.tabs.inGrid())
                         useSelectedItem();
                     continue; // world frozen while the item screen is up
@@ -5432,6 +5501,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 tickBark();
                 tickTrick();
                 tickQuestion();
+                tickBlasts();
                 shakeDy = cameraShake.step(); // AdvanceScriptedCameraPanStep
                 tickColorMachine(zDown);
                 tickThoughtBubble();
@@ -5635,7 +5705,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             for (int idx : cur->runtime->visible())
             {
                 const gp::ObjectDef *o = cur->runtime->objects()[size_t(idx)];
-                items.push_back({o->y, 0, o});
+                // RenderStoryObjectsInYRange draws a type with no marker flag (word 0 of its 0xe9bd record) with the layer bits cleared:
+                // bridges and the like lie under everything instead of sorting against the pet.
+                const gp::ObjectType *ot = db.objectType(o->type);
+                const bool ground = ot && !ot->hasMarker;
+                items.push_back({ground ? o->y - 100000 : o->y, 0, o});
             }
             for (const gp::NpcActor &n : npcs)
                 items.push_back({n.y(), 1, &n});
@@ -5756,6 +5830,18 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     drawPet();
                     drawPetBubbles();
                 }
+            }
+            if (!blasts.empty()) // the explosion, over the scenery
+            {
+                const AnimRef BA = animRefById("base:anim/" + std::to_string(gp::kBlastAnim) + "@28c");
+                for (const Blast &b : blasts)
+                    if (BA.size())
+                    {
+                        const size_t fi = size_t(std::min(b.ticks * gp::kBlastFps / 30, int(BA.size()) - 1));
+                        const gp::SpriteFrame &bs = BA.anim->frames[fi];
+                        SDL_FRect br{b.x - camX - bs.anchorX + bs.dx, b.y - camY - bs.anchorY + bs.dy, float(bs.w), float(bs.h)};
+                        SDL_RenderCopyF(ren, (*BA.tex)[fi], nullptr, &br);
+                    }
             }
 
             if (thoughtIcon >= 0) // the hungry / tired bubble over the pet (DrawActiveBubbles)

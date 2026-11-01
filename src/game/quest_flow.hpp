@@ -27,6 +27,9 @@ namespace gp
         std::function<int()> nowTick;
         std::function<void(DialogueBox &, int)> portrait; // set the speaker portrait on a box (pool id)
         std::function<void()> onNextQuest;                // fired after the next quest has loaded
+        // Reward codes -8 (activity 0x20) and -10 (0x22): the pet is held, then a blast goes off and a rock turns into a passage
+        // (game/story_blast.hpp). `done` carries on with the dialogue. Unset = no effect, the dialogue goes straight on.
+        std::function<void(int code, std::function<void()> done)> storyBlast;
         std::function<void()> onDecline;                  // DeclineQuest: the player said no to a quest
         // Fired when the receiver takes the hand-in (objectives already removed), before the completion dialogue.
         // Returns true to skip the quest's built-in bonus rewards (the -2 / -7 activities); the thank-you text and
@@ -162,8 +165,16 @@ namespace gp
                     h.sfx(0x54);
                     done(); });
                 return;
+            case -8:  // 0x20: the Gigatown rock
+            case -10: // 0x22: the rock in the mountains
+                if (h.storyBlast)
+                {
+                    h.storyBlast(code, done);
+                    return;
+                }
+                break;
             default:
-                break; // -8..-11: minipet cartridge sequences, not ported
+                break; // -9 and -11 only flip objects (their gates are quest-count based); the mini-pet reaction is not ported
             }
             done();
         }

@@ -176,7 +176,13 @@ namespace gp
         return true;
     }
 
-    inline std::string slotPath(int slot) { return "save" + std::to_string(slot) + ".txt"; }
+    // Where saves and settings live: the current folder while developing, "data/" in the packaged game (set by main).
+    inline std::string &dataDir()
+    {
+        static std::string d;
+        return d;
+    }
+    inline std::string slotPath(int slot) { return dataDir() + "save" + std::to_string(slot) + ".txt"; }
     inline bool slotValid(int slot)
     {
         SaveData s;

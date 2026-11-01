@@ -653,7 +653,7 @@ namespace gp
         for (const Gate &g : {Gate{3, 57, 17, 0xd4b0, 0xd4dd},  // Vacation Island
                               Gate{7, 56, 61, 0xd328, 0xd350},  // Bridge
                               Gate{1, 12, 90, 0xd413, 0xd449},  // Magma Mountain
-                              Gate{0, 8, 91, 0xd4b0, 0xd4dd},   // GUESS: Vacation Island, strings not yet seen
+                              Gate{0, 8, 91, 0xd368, 0xd39a},   // the second tunnel to Gigalympia, by the rock that goes at quest 91 (slots 4-6)
                               Gate{0, 46, 4, 0xd2db, 0xd316},   // Gigatown
                               Gate{0, 33, 42, 0xd368, 0xd39a},  // Gigalympia tunnel
                               Gate{1, 29, 16, 0xd3b0, 0xd3d9},  // Giga Castle

@@ -10,17 +10,19 @@ int main()
     { std::printf("%s  %s\n", ok ? "PASS" : "FAIL", w); if (!ok) fails++; };
 
     // ---- the rows ----
-    check("seventeen rows: the settings, the aspect ratio, seven key bindings, Done last", kOptMusic == 0 && kOptSfx == 1 && kOptVolume == 2 && kOptTutorials == 3 && kOptInterpolate == 4 &&
-                                                                    kOptScale == 5 && kOptScaleMode == 6 && kOptWindowMode == 7 && kOptAspect == 8 && kOptKeyFirst == 9 &&
-                                                                    kOptKeyLast == 15 && kOptDone == 16 && kOptRows == 17);
-    check("the key rows map to the seven actions", isKeyRow(9) && isKeyRow(15) && !isKeyRow(8) && !isKeyRow(16) && keyRowAction(9) == 0 && keyRowAction(15) == 6);
-    check("down wraps from done to music", optionsMove(0, true) == 1 && optionsMove(16, true) == 0);
-    check("up wraps from music to done", optionsMove(0, false) == 16 && optionsMove(16, false) == 15);
+    check("eighteen rows: the settings, the aspect ratio, retro audio, seven key bindings, Done last", kOptMusic == 0 && kOptSfx == 1 && kOptVolume == 2 && kOptTutorials == 3 && kOptInterpolate == 4 &&
+                                                                    kOptScale == 5 && kOptScaleMode == 6 && kOptWindowMode == 7 && kOptAspect == 8 && kOptRetro == 9 && kOptKeyFirst == 10 &&
+                                                                    kOptKeyLast == 16 && kOptDone == 17 && kOptRows == 18);
+    check("the key rows map to the seven actions", isKeyRow(10) && isKeyRow(16) && !isKeyRow(9) && !isKeyRow(17) && keyRowAction(10) == 0 && keyRowAction(16) == 6);
+    check("down wraps from done to music", optionsMove(0, true) == 1 && optionsMove(17, true) == 0);
+    check("up wraps from music to done", optionsMove(0, false) == 17 && optionsMove(17, false) == 16);
     check("rows by kind: three sliders, three toggles, two choices, then Done", isSliderRow(0) && isSliderRow(1) && isSliderRow(2) && !isSliderRow(3) &&
-                                                                           isToggleRow(3) && isToggleRow(4) && isToggleRow(6) && isChoiceRow(5) && isChoiceRow(7) && isChoiceRow(8) && !isChoiceRow(16) && !isToggleRow(16));
+                                                                           isToggleRow(3) && isToggleRow(4) && isToggleRow(6) && isToggleRow(9) && isChoiceRow(5) && isChoiceRow(7) && isChoiceRow(8) && !isChoiceRow(17) && !isToggleRow(17));
     check("the list stays put while the selection is on screen", optionsScroll(0, 0) == 0 && optionsScroll(4, 0) == 0 && optionsScroll(2, 3) == 2);
-    check("it scrolls down just enough", optionsScroll(5, 0) == 1 && optionsScroll(8, 1) == 4 && optionsScroll(16, 0) == 12);
+    check("it scrolls down just enough", optionsScroll(5, 0) == 1 && optionsScroll(8, 1) == 4 && optionsScroll(17, 0) == 13);
     check("and back up", optionsScroll(0, 4) == 0 && optionsScroll(3, 4) == 3);
+    check("with the debug row the list is one longer", optionsMove(17, true, kOptRowsDebug) == 18 && optionsMove(18, true, kOptRowsDebug) == 0 &&
+                                                          optionsMove(0, false, kOptRowsDebug) == 18 && optionsScroll(18, 0, kOptRowsDebug) == 14);
     check("the scale steps 1, 2, 4, 8 and stops at the ends", stepScale(2, true) == 4 && stepScale(4, true) == 8 && stepScale(8, true) == 8 &&
                                                            stepScale(2, false) == 1 && stepScale(1, false) == 1 && stepScale(3, true) == 4 && sanitizeScale(3) == 2);
     check("the window mode cycles round both ways", stepWindowMode(0, true) == 1 && stepWindowMode(2, true) == 0 && stepWindowMode(0, false) == 2);
@@ -51,10 +53,11 @@ int main()
         s.perfectScale = false;
         s.windowMode = 2;
         s.aspect = 1;
+        s.retroAudio = true;
         s.keys[4] = 6;
         check("saves", saveSettings(s, path));
         const Settings r = loadSettings(path);
-        check("and reads back the same", !r.tutorials && r.musicVolume == 40 && r.sfxVolume == 70 && r.volume == 30 && r.interpolate && r.scale == 4 && !r.perfectScale && r.windowMode == 2 && r.aspect == 1 && r.keys[4] == 6 && r.keys[0] == 0);
+        check("and reads back the same", !r.tutorials && r.musicVolume == 40 && r.sfxVolume == 70 && r.volume == 30 && r.interpolate && r.scale == 4 && !r.perfectScale && r.windowMode == 2 && r.aspect == 1 && r.retroAudio && r.keys[4] == 6 && r.keys[0] == 0);
     }
     {
         SaveData d;

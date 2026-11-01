@@ -33,6 +33,7 @@ namespace gp
         bool perfectScale = true;  // whole-number pixel scaling (a border if the window doesn't fit), else stretched
         int windowMode = 0;        // 0 windowed, 1 fullscreen, 2 borderless window
         int aspect = 0;            // 0 = 4:3, 1 = 16:9
+        bool retroAudio = false;   // the sounds without blending between samples, like the sound chip (rom_audio.hpp)
         std::array<int, 7> keys{}; // the SDL scancodes of Up, Down, Left, Right, Select, Cancel and Menu; 0 = the default key
     };
 
@@ -53,7 +54,7 @@ namespace gp
     constexpr int stepWindowMode(int mode, bool up) { return up ? (mode + 1) % kWindowModeCount : (mode + kWindowModeCount - 1) % kWindowModeCount; }
 
     constexpr int kDefaultVolume = 80, kMaxVolume = 100;
-    inline std::string settingsPath() { return "settings.txt"; }
+    inline std::string settingsPath() { return dataDir() + "settings.txt"; }
 
     inline int sanitizeVolume(int v) { return v < 0 || v > kMaxVolume ? kDefaultVolume : v; }
     inline int sanitizePercent(int v, int fallback) { return v < 0 || v > kMaxVolume ? fallback : v; }
@@ -82,6 +83,8 @@ namespace gp
             s.perfectScale = d.getInt("perfectScale") != 0;
         if (d.has("aspect"))
             s.aspect = std::clamp(d.getInt("aspect", 0), 0, 1);
+        if (d.has("retroAudio"))
+            s.retroAudio = d.getInt("retroAudio") != 0;
         if (d.has("windowMode"))
             s.windowMode = std::clamp(d.getInt("windowMode", 0), 0, kWindowModeCount - 1);
         static const char *const kKeyNames[7] = {"key_up", "key_down", "key_left", "key_right", "key_select", "key_cancel", "key_menu"};
@@ -103,6 +106,7 @@ namespace gp
         d.setInt("perfectScale", s.perfectScale ? 1 : 0);
         d.setInt("windowMode", s.windowMode);
         d.setInt("aspect", s.aspect);
+        d.setInt("retroAudio", s.retroAudio ? 1 : 0);
         static const char *const kKeyNames[7] = {"key_up", "key_down", "key_left", "key_right", "key_select", "key_cancel", "key_menu"};
         for (int a = 0; a < 7; ++a)
             d.setInt(kKeyNames[a], s.keys[size_t(a)]);
@@ -111,24 +115,26 @@ namespace gp
 
     // ---- the options screen's rules ----
     // The list: music volume, sound effects volume, master volume, tutorials, interpolation, scale, scale mode, window mode,
-    // aspect ratio, the seven key bindings, Done. Only kOptVisible rows fit under the logo; the list scrolls to keep the selected row in view.
+    // aspect ratio, retro audio, the seven key bindings, Done. Only kOptVisible rows fit under the logo; the list scrolls to keep the selected row in view.
     constexpr int kOptMusic = 0, kOptSfx = 1, kOptVolume = 2, kOptTutorials = 3, kOptInterpolate = 4, kOptScale = 5, kOptScaleMode = 6,
-                  kOptWindowMode = 7, kOptAspect = 8, kOptKeyFirst = 9, kOptKeyLast = 15, kOptDone = 16, kOptRows = 17;
+                  kOptWindowMode = 7, kOptAspect = 8, kOptRetro = 9, kOptKeyFirst = 10, kOptKeyLast = 16, kOptDone = 17, kOptRows = 18;
+    // One more row after Done, only with debug mode on (game/debug_mode.hpp): the ROM's test mode (game/test_mode.hpp).
+    constexpr int kOptTestMode = 18, kOptRowsDebug = 19;
     constexpr int kOptVisible = 5;
     constexpr bool isKeyRow(int row) { return row >= kOptKeyFirst && row <= kOptKeyLast; }
     constexpr int keyRowAction(int row) { return row - kOptKeyFirst; }
     constexpr bool isSliderRow(int row) { return row == kOptMusic || row == kOptVolume || row == kOptSfx; }
-    constexpr bool isToggleRow(int row) { return row == kOptTutorials || row == kOptInterpolate || row == kOptScaleMode; }
+    constexpr bool isToggleRow(int row) { return row == kOptTutorials || row == kOptInterpolate || row == kOptScaleMode || row == kOptRetro; }
     constexpr bool isChoiceRow(int row) { return row == kOptScale || row == kOptWindowMode || row == kOptAspect; }
     // The first visible row that keeps `sel` on screen, moving the list as little as it can.
-    constexpr int optionsScroll(int sel, int scroll)
+    constexpr int optionsScroll(int sel, int scroll, int rows = kOptRows)
     {
         const int top = sel < scroll ? sel : sel >= scroll + kOptVisible ? sel - kOptVisible + 1 : scroll;
-        return top < 0 ? 0 : top > kOptRows - kOptVisible ? kOptRows - kOptVisible : top;
+        return top < 0 ? 0 : top > rows - kOptVisible ? rows - kOptVisible : top;
     }
 
     // Up (event 2) and down (event 3) wrap round the rows.
-    constexpr int optionsMove(int sel, bool down) { return down ? (sel + 1) % kOptRows : (sel + kOptRows - 1) % kOptRows; }
+    constexpr int optionsMove(int sel, bool down, int rows = kOptRows) { return down ? (sel + 1) % rows : (sel + rows - 1) % rows; }
 
     // Left and right on a volume row: to the next multiple of 10 below or above, 0..100.
     constexpr int volumeStep(int volume, bool up)

@@ -100,7 +100,29 @@ namespace gp
 
         // The game's own sounds, decoded from the ROM. A wav file in the audio folder still wins (mods). The ROM must
         // outlive the Audio.
-        void setRom(const Rom &rom) { romAudio_ = std::make_unique<rau::RomAudio>(rom); }
+        void setRom(const Rom &rom)
+        {
+            romAudio_ = std::make_unique<rau::RomAudio>(rom);
+            romAudio_->nearest = retro_;
+        }
+
+        // Retro audio: the ROM's sounds played the way the chip does, with no blending between samples (rom_audio.hpp). The clips
+        // are kept apart by mode, so what is playing is never freed; the music in progress starts again in the new mode.
+        void setRetro(bool on)
+        {
+            if (on == retro_)
+                return;
+            retro_ = on;
+            if (romAudio_)
+                romAudio_->nearest = on;
+            if (music_ >= 0)
+            {
+                const int m = music_;
+                music_ = -1;
+                playMusic(m);
+            }
+        }
+        bool retro() const { return retro_; }
 
         void setVolume(int percent)
         {
@@ -252,7 +274,7 @@ namespace gp
         // Loads (once) audio/<kind>/<id>.wav, trying the decimal and the 0x name. Null if there is none.
         const AudioClip *clip(const std::string &folder, int id)
         {
-            const std::string key = folder + "/" + std::to_string(id);
+            const std::string key = (retro_ ? "retro:" : "") + folder + "/" + std::to_string(id);
             auto it = clips_.find(key);
             if (it != clips_.end())
                 return it->second.get();
@@ -331,6 +353,7 @@ namespace gp
         std::array<Voice, kVoices> voices_{};
         std::map<std::string, std::unique_ptr<AudioClip>> clips_;
         std::unique_ptr<rau::RomAudio> romAudio_;
+        bool retro_ = false;
     };
 
     // The one mixer for the whole program.

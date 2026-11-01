@@ -14,10 +14,40 @@
 int main(int argc, char **argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
-    if (argc < 2)
+    // Packaged game: no arguments. Everything is looked up next to the exe: rom/ (the user's ROM), data/ (saves, settings),
+    // mods/. With a ROM path on the command line it behaves as before (development).
+    std::string romPath;
+    if (argc >= 2)
+        romPath = argv[1];
+    else
     {
-        std::printf("usage: gigapets <rom> [--slot N] [--area N] [--collision] [--smooth]\n");
-        return 1;
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        if (char *base = SDL_GetBasePath())
+        {
+            fs::current_path(base, ec);
+            SDL_free(base);
+        }
+        fs::create_directories("data", ec);
+        gp::dataDir() = "data/";
+        if (fs::is_directory("rom", ec))
+            for (const auto &e : fs::directory_iterator("rom", ec))
+            {
+                std::string ext = e.path().extension().string();
+                for (char &c : ext)
+                    c = char(std::tolower((unsigned char)c));
+                if (e.is_regular_file() && (ext == ".u7" || ext == ".bin" || ext == ".rom"))
+                {
+                    romPath = e.path().string();
+                    break;
+                }
+            }
+        if (romPath.empty())
+        {
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Gigapets",
+                                     "ROM not found.\nPut your ROM file (rom.u7) in the \"rom\" folder next to the game and start it again.", nullptr);
+            return 1;
+        }
     }
     int slot = -1, area = 0; // area 0 = what `walk rom.u7 0` used
     bool collision = false;
@@ -35,10 +65,11 @@ int main(int argc, char **argv)
 
     try
     {
-        gp::AppHost host(argv[1], "gigapets");
+        gp::AppHost host(romPath.c_str(), "gigapets");
         {
             const gp::Settings s = gp::loadSettings(); // the options screen's volume and music switch
             gp::audio().open("audio");
+            gp::audio().setRetro(s.retroAudio);
             gp::audio().setRom(*host.ctx.rom);
             gp::audio().setVolume(s.volume);
             gp::audio().setMusicVolume(s.musicVolume);
