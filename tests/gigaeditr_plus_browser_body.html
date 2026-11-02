@@ -1,0 +1,71 @@
+<script>
+(async () => {
+  const out = {}, $ = id => document.getElementById(id), wait = ms => new Promise(r => setTimeout(r, ms)), until = async (fn, n = 600) => { for (let i = 0; i < n; i++) { if (await fn()) return true; await wait(25); } return false; };
+  try {
+    // ---- an in-memory folder tree standing in for the File System Access API ----
+    class FF { constructor(n, file) { this.name = n; this.kind = 'file'; this.file = file; } async getFile() { return this.file; } async createWritable() { const s = this; return { async write(d) { s.tmp = d; }, async close() { s.file = new File([s.tmp], s.name); } }; } }
+    class FD {
+      constructor(n) { this.name = n; this.kind = 'directory'; this.m = new Map(); }
+      async getDirectoryHandle(n, o) { let d = this.m.get(n); if (!d || d.kind !== 'directory') { if (o && o.create) { d = new FD(n); this.m.set(n, d); } else throw new DOMException('nf', 'NotFoundError'); } return d; }
+      async getFileHandle(n, o) { let f = this.m.get(n); if (!f || f.kind !== 'file') { if (o && o.create) { f = new FF(n, new File([], n)); this.m.set(n, f); } else throw new DOMException('nf', 'NotFoundError'); } return f; }
+      async *entries() { for (const e of this.m) yield e; }
+    }
+    const put = (dir, path, file) => { const parts = path.split('/'); let d = dir; for (const p of parts.slice(0, -1)) { let n = d.m.get(p); if (!n) { n = new FD(p); d.m.set(p, n); } d = n; } d.m.set(parts.at(-1), new FF(parts.at(-1), file)); };
+    const png = (w, h, fn) => new Promise(r => { const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d'); fn(g); c.toBlob(b => r(new File([b], 'x.png'))); });
+    const cols = ['#c33', '#3c3', '#33c', '#cc3'];
+    const base = new FD('base'), mods = new FD('mods'); const m = new FD('m'); mods.m.set('m', m);
+    put(base, 'tilesets/t.png', await png(128, 32, g => cols.forEach((c, i) => { g.fillStyle = c; g.fillRect(i * 32, 0, 32, 32); })));
+    put(base, 'collision/c.png', await png(128, 32, g => { g.fillStyle = '#f00'; g.fillRect(32, 0, 32, 32); }));
+    put(base, 'objtypes/o.png', await png(16, 16, g => { g.fillStyle = '#fa0'; g.fillRect(0, 0, 16, 16); }));
+    const b = {
+      format: 1, tilesets: { 'base:tileset/1': { png: 'tilesets/t.png', tile: 32, count: 4 } }, collisions: { 'base:collision/1': { png: 'collision/c.png', tile: 32, count: 4 } },
+      objtypes: { 'base:objtype/1': { ground: false, png: 'objtypes/o.png', anchorX: 8, anchorY: 15, dx: 0, dy: 0 } },
+      areas: { 'base:area/0': { legacyId: 0, name: 'base:text/1', width: 4, height: 3, tileset: 'base:tileset/1', collision: 'base:collision/1', margins: [42, 42, 62, 20], y_offset: 0, max_events: 0, map: [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]], spawn_points: [], objects: [{ id: 'base:area/0/obj/0', objtype: 'base:objtype/1', x: 64, y: 64, slot: 0, box: [56, 49, 72, 65] }] } },
+      npcs: [], texts: { 'base:text/1': 'Town' }
+    };
+    put(base, 'base.json', new File([JSON.stringify(b)], 'base.json'));
+    put(m, 'manifest.json', new File([JSON.stringify({ id: 'm', version: '1.0', game_api: '1', requires: [], load_after: [] })], 'manifest.json'));
+    window.showDirectoryPicker = async o => o.id === 'ge-base' ? base : mods;
+    window.prompt = () => '24x24'; window.confirm = () => true;
+
+    $('bBase').click(); await until(() => GE.base); $('bMods').click(); await until(() => GE.mods.length);
+    out.toast = document.getElementById('msg').textContent; const S = GE; out.mods = S.mods.map(x => x.id); out.area = S.area;
+    $('modSel').value = 'm'; $('modSel').dispatchEvent(new Event('change')); await until(() => GE.cur === 'm' && GE.W); out.cur = S.cur;
+
+    // ---- tileset editor: paint a pixel on tile 0 and a blocked pixel, save ----
+    await until(() => { $('bTsEdit').click(); return $('se').style.display === 'flex'; }); out.toast1 = $('msg').textContent;
+    const E = SpriteEd._state; out.tsOpen = $('se').style.display === 'flex' && E.w === 128 && E.h === 32 && E.cell === 32;
+    out.colInit = E.col[5 * 128 + 40] === 1 && E.col[5 * 128 + 5] === 0 && E.col[5 * 128 + 100] === 0; // tile 1 blocked, others free
+    const cv = $('sec'); cv.setPointerCapture = () => { };
+    const at = (x, y) => { const r = cv.getBoundingClientRect(); return { clientX: r.left + (x + .5 - E.cam.x) * E.cam.z * r.width / cv.width, clientY: r.top + (y + .5 - E.cam.y) * E.cam.z * r.height / cv.height }; };
+    const ev = (t, x, y, bt) => cv.dispatchEvent(new PointerEvent(t, { ...at(x, y), button: 0, buttons: bt === undefined ? 1 : bt, pointerId: 1, bubbles: true }));
+    $('secc').value = '#ffffff'; $('secc').dispatchEvent(new Event('input')); document.querySelector('#se [data-t=pencil]').click(); ev('pointerdown', 3, 3); ev('pointerup', 3, 3, 0);
+    document.querySelector('#se [data-l=col]').click(); ev('pointerdown', 5, 5); ev('pointerup', 5, 5, 0);
+    $('sesave').click(); await until(() => $('se').style.display === 'none');
+    const mfs = await m.getDirectoryHandle('data'); const rec = JSON.parse(await (await (await mfs.getFileHandle('zz_gigaeditr.json')).getFile()).text());
+    out.recs = rec.map(r => r.type + ':' + (r.mode || '') + ':' + r.id + (r.png ? '@' + r.png : '') + (r.tileset ? ' ts=' + r.tileset : '') + (r.collision ? ' col=' + r.collision : ''));
+    const as = await m.getDirectoryHandle('assets'); out.assets = [...as.m.keys()];
+    out.areaNow = [S.W.areas['base:area/0'].tileset, S.W.areas['base:area/0'].collision];
+    out.closed = $('se').style.display === 'none';
+
+    // ---- object art editor: select the base object, edit, save as a new type ----
+    const cm = $('c'), r = cm.getBoundingClientRect();
+    S.cam.z = 2; S.cam.x = 0; S.cam.y = 0;
+    cm.dispatchEvent(new MouseEvent('mousedown', { clientX: r.left + 64 * 2, clientY: r.top + 58 * 2, button: 0, bubbles: true })); window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    out.sel = S.sel && S.sel.id;
+    await until(() => { $('sart').click(); return $('se').style.display === 'flex'; });
+    out.objOpen = $('se').style.display === 'flex' && E.w === 16 && E.h === 16;
+    document.querySelector('#se [data-l=art]').click(); $('secc').value = '#000000'; $('secc').dispatchEvent(new Event('input')); document.querySelector('#se [data-t=pencil]').click();
+    ev('pointerdown', 1, 1); ev('pointerup', 1, 1, 0);
+    $('sesave').click(); await until(() => $('se').style.display === 'none');
+    const rec2 = JSON.parse(await (await (await mfs.getFileHandle('zz_gigaeditr.json')).getFile()).text());
+    out.recs2 = rec2.filter(r => r.type === 'objtype' || r.type === 'object').map(r => JSON.stringify(r));
+    out.objNow = S.W.areas['base:area/0'].objects[0].objtype;
+    out.assets2 = [...(await m.getDirectoryHandle('assets')).m.keys()];
+  } catch (e) { out.error = String(e && e.stack || e); }
+  document.body.setAttribute('data-result', JSON.stringify(out));
+})();
+</script>
+
+
+

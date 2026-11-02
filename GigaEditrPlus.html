@@ -1,0 +1,1395 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>GigaEditr+ - Gigapets mod editor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --bg: #131a36;
+      --pn: #1b223f;
+      --pn2: #262b47;
+      --fg: #e8e9f3;
+      --mut: #8b90ad;
+      --bd: #2d416b;
+      --ac: #ffcc4d;
+      --ac2: #83bd62;
+      --add: #5fe08a;
+      --patch: #ffd34d;
+      --rem: #ff6b6b;
+      --conf: #ff9a3c;
+    }
+
+    * { box-sizing: border-box }
+    html, body { height: 100% }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.35 system-ui, sans-serif;
+      display: grid; grid-template: auto 1fr auto/1fr 400px; grid-template-areas: "h h" "m a" "f f"; overflow: hidden
+    }
+    header {
+      grid-area: h; display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 8px 12px;
+      background: linear-gradient(#4385ff, #221b88); border-bottom: 3px solid var(--ac)
+    }
+    .brand { font: 700 15px ui-monospace, Consolas, monospace; letter-spacing: .14em }
+    .brand b { color: var(--ac); margin-left: .4em }
+    .ttl { font: 12px ui-monospace, Consolas, monospace; color: var(--ac2) }
+    .sp { flex: 1 }
+    .hrow { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; width: 100% }
+    .hg { display: flex; gap: 6px; align-items: center; flex-wrap: wrap }
+    button, .btn {
+      background: var(--pn2); color: var(--fg); border: 2px solid var(--bd); border-radius: 6px; padding: 4px 10px;
+      font: inherit; cursor: pointer; box-shadow: 0 3px 0 #0007
+    }
+    button:active, .btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #0007 }
+    button:hover, .btn:hover { border-color: var(--ac) }
+    button:disabled { opacity: .45; cursor: default }
+    .primary { background: var(--ac); color: #241a00; border-color: #b98a12; font-weight: 700 }
+    select, textarea, input:not([type=checkbox]):not([type=file]) {
+      background: #181727; color: var(--fg); border: 2px solid var(--bd); border-radius: 5px; padding: 3px 6px; font: inherit
+    }
+    .sel { display: flex; gap: 5px; align-items: center; color: #dfe4ff }
+    .chip { position: relative; cursor: pointer }
+    .chip input { position: absolute; opacity: 0; pointer-events: none }
+    .chip span {
+      display: inline-block; padding: 4px 10px; border: 2px solid var(--bd); border-radius: 6px; background: var(--pn2);
+      box-shadow: 0 3px 0 #0007; user-select: none
+    }
+    .chip input:checked + span { background: var(--ac); color: #241a00; border-color: #b98a12; font-weight: 700 }
+    kbd { font: 10px ui-monospace, monospace; opacity: .7; margin-left: 4px }
+    .seg { padding: 2px 6px 4px; border: 1px solid #ffffff30; border-radius: 8px; position: relative; margin-top: 8px }
+    .seg::before {
+      content: attr(data-l); position: absolute; top: -9px; left: 8px; font-size: 10px; background: #2a2a9a; padding: 0 4px;
+      border-radius: 4px; color: #cfd6ff
+    }
+    main { grid-area: m; position: relative; overflow: hidden; background: #0b0f22 }
+    #c { position: absolute; inset: 0; width: 100%; height: 100%; display: block }
+    #msg {
+      position: absolute; left: 50%; top: 12px; transform: translateX(-50%); background: #000c; border: 2px solid var(--ac);
+      padding: 6px 12px; border-radius: 8px; display: none; pointer-events: none; max-width: 80%
+    }
+    #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; color: var(--mut); padding: 30px }
+    aside { grid-area: a; overflow: auto; background: var(--pn); border-left: 3px solid var(--bd) }
+    details { border-bottom: 1px solid var(--bd) }
+    summary { padding: 7px 10px; cursor: pointer; font-weight: 700; background: var(--pn2); color: var(--ac) }
+    .body { padding: 8px 10px }
+    .row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 5px 0 }
+    .hint { color: var(--mut); font-size: 12px }
+    footer { grid-area: f; padding: 4px 12px; background: #0d1226; color: var(--mut); font: 12px ui-monospace, Consolas, monospace; display: flex; gap: 16px }
+    .tag { display: inline-block; font: 700 10px system-ui; padding: 1px 6px; border-radius: 9px; color: #111; margin-right: 4px }
+    .tag.add { background: var(--add) } .tag.patch { background: var(--patch) } .tag.remove { background: var(--rem) } .tag.conf { background: var(--conf) }
+    .ch { padding: 4px 6px; border: 1px solid var(--bd); border-radius: 5px; margin: 3px 0; cursor: pointer; background: #181d38 }
+    .ch:hover { border-color: var(--ac) }
+    .ch .d { color: var(--mut); font-size: 11px; word-break: break-all }
+    #types { display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: 4px; max-height: 260px; overflow: auto; border: 1px solid var(--bd); padding: 4px }
+    #types canvas { width: 100%; height: 56px; background: #0b0f22; border: 2px solid transparent; border-radius: 4px; cursor: pointer }
+    #types canvas.on { border-color: var(--ac) }
+    #pal { width: 100%; image-rendering: pixelated; border: 1px solid var(--bd); cursor: crosshair; background: #0b0f22 }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 8px; vertical-align: -1px }
+  </style>
+</head>
+
+<body>
+  <header>
+    <div class="hrow">
+      <div class="brand">GIGA<b>EDITR+</b></div>
+      <button id="bBase" class="primary">1. Open base export</button>
+      <button id="bMods" class="primary">2. Open mods folder</button>
+      <label class="sel">Editing <select id="modSel"><option value="">(view only)</option></select></label>
+      <button id="bNew">New mod…</button>
+      <label class="sel">Area <select id="area" disabled></select></label>
+      <span id="ttl" class="ttl">nothing loaded</span>
+      <span class="sp"></span>
+      <button id="bUndo">&#8630; Undo</button>
+      <button id="bSave" class="primary">Save to mod</button>
+    </div>
+    <div class="hrow">
+      <div class="hg seg" data-l="Tool">
+        <label class="chip"><input type="radio" name="tool" value="select" checked><span>Select<kbd>S</kbd></span></label>
+        <label class="chip"><input type="radio" name="tool" value="move"><span>Move<kbd>M</kbd></span></label>
+        <label class="chip"><input type="radio" name="tool" value="paint"><span>Paint<kbd>P</kbd></span></label>
+        <label class="chip"><input type="radio" name="tool" value="place"><span>Place<kbd>A</kbd></span></label>
+      </div>
+      <div class="hg seg" data-l="Show">
+        <label class="chip"><input type="checkbox" id="lCol"><span>Collision<kbd>C</kbd></span></label>
+        <label class="chip"><input type="checkbox" id="lObj" checked><span>Objects<kbd>O</kbd></span></label>
+        <label class="chip"><input type="checkbox" id="lBox"><span>Boxes</span></label>
+        <label class="chip"><input type="checkbox" id="lNpc" checked><span>NPCs<kbd>N</kbd></span></label>
+        <label class="chip"><input type="checkbox" id="lIds"><span>Tile IDs</span></label>
+        <label class="chip"><input type="checkbox" id="lGrid"><span>Grid</span></label>
+        <label class="chip"><input type="checkbox" id="lSp"><span>Spawn pts</span></label>
+        <label class="chip"><input type="checkbox" id="lMod" checked><span>Mod changes</span></label>
+      </div>
+      <span class="legend hint"><i style="background:var(--add)"></i>added<i style="background:var(--patch)"></i>changed<i style="background:var(--rem)"></i>removed<i style="background:var(--conf)"></i>changed by 2+ mods</span>
+    </div>
+  </header>
+  <main id="stage">
+    <canvas id="c"></canvas>
+    <div id="empty">Open the folder written by <b>&nbsp;gigapets.exe rom.u7 --export-base &lt;folder&gt;&nbsp;</b>, then your <b>&nbsp;mods&nbsp;</b> folder<br>(or a single mod folder). Needs Chrome or Edge.</div>
+    <div id="msg"></div>
+  </main>
+  <aside id="side">
+    <details open>
+      <summary>Selected</summary>
+      <div class="body" id="selBody"><div class="hint">Click an object or NPC. With the Move tool, drag it. <kbd>Del</kbd> removes it, arrows nudge it.</div></div>
+    </details>
+    <details>
+      <summary>Paint tiles</summary>
+      <div class="body">
+        <div class="row"><b>Brush tile</b> <input id="brush" type="number" min="0" value="0" style="width:5em"><span id="brushInfo" class="hint"></span></div>
+        <canvas id="pal" width="16" height="16"></canvas>
+        <div class="row"><button id="bTsEdit" class="primary">Edit this tileset (art + collision)…</button></div>
+        <div class="hint">Click a tile to pick it. With the Paint tool: drag on the map to paint, right-click a map cell to copy its tile. On a base area this saves a <code>set_tiles</code> patch; on a mod's own area it edits the map.</div>
+      </div>
+    </details>
+    <details>
+      <summary>Place objects</summary>
+      <div class="body">
+        <div class="row"><input id="tyq" placeholder="filter types" size="14"><button id="bNewType">New type from PNG…</button><button id="bDrawType">Draw a new type…</button><input type="file" id="tyf" accept="image/png" hidden></div>
+        <div id="types"></div>
+        <div id="tyInfo" class="hint">Pick a type, choose the Place tool, then click the map: the click is the object's feet.</div>
+      </div>
+    </details>
+    <details>
+      <summary>New area</summary>
+      <div class="body">
+        <div class="row"><label>Name <input id="naName" size="16" placeholder="The Shed"></label><label>Size <input id="naW" type="number" value="12" min="1" max="255" style="width:4em"> × <input id="naH" type="number" value="8" min="1" max="255" style="width:4em"> tiles</label></div>
+        <div class="row"><label>Borrow tileset and collision from <select id="naLook"></select></label><label>Music <select id="naMusic"><option value="">keep current</option><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></label></div>
+        <div class="row"><button id="naGo" class="primary">Create area</button></div>
+        <div class="hint">The map starts filled with the most common tile of the area you borrow from; then paint it. Make a door to it from the Selected panel. A mod area has no random finds, shops or digging yet.</div>
+      </div>
+    </details>
+    <details>
+      <summary>New NPC</summary>
+      <div class="body">
+        <div class="row"><label>Name <input id="nnName" size="14" placeholder="Cave Keeper"></label><label><input type="checkbox" id="nnStat" checked> stationary</label></div>
+        <div class="row"><label>What they say (one line each, up to 3)<br><textarea id="nnLines" rows="3" style="width:340px"></textarea></label></div>
+        <div class="row"><button id="nnPng">Choose picture…</button><button id="nnDraw">Draw one…</button><span id="nnFile" class="hint">no picture</span><input type="file" id="nnPngF" accept="image/png" hidden></div>
+        <div class="row"><button id="nnGo" class="primary">Place on map</button></div>
+        <div class="hint">A single PNG, feet at the bottom middle. Click the map to put them down. NPCs drawn from a PNG show their picture; base-game NPCs show as dots. Move and delete work on every NPC.</div>
+      </div>
+    </details>
+    <details open>
+      <summary>Mod changes <span id="chCount" class="hint"></span></summary>
+      <div class="body">
+        <div class="row"><label class="sel">Show <select id="chMod"><option value="">all mods</option></select></label>
+          <label class="sel"><input type="checkbox" id="chHere" checked> this area only</label></div>
+        <div id="changes"></div>
+      </div>
+    </details>
+    <details>
+      <summary>How it works</summary>
+      <div class="body hint">
+        Your edits are written to <code>data/zz_gigaeditr.json</code> in the mod you are editing, as <code>object</code> / <code>area</code> / <code>objtype</code> / <code>text</code> records
+        (add, patch, remove). The file sorts last, so it wins over the mod's own files. Other files are never touched, and the ROM is never changed.
+        New PNGs go to <code>assets/</code>. Mods are applied in the game's load order; a later mod overwrites an earlier one, shown in orange.
+        Not yet: new areas, new NPCs, tileset editing (use Aseprite for tile art).
+      </div>
+    </details>
+  </aside>
+  <footer><span id="fPos">—</span><span id="fSel"></span><span id="fDirty"></span></footer>
+
+  <script id="core">
+    // ===== core: pure data logic (no DOM). Mirrors how the game's mod loader applies records, so the editor shows the same world. =====
+    const EDFILE = 'zz_gigaeditr.json';
+    const PASS0 = ['text', 'anim', 'tileset', 'collision', 'objtype'];
+    const passOf = t => PASS0.includes(t) ? 0 : (t === 'area' ? 1 : 2);
+
+    // dependency order like the loader: required / load_after mods first, ties alphabetical
+    function orderMods(mods) {
+      const byId = new Map(mods.map(m => [m.id, m])), out = [], done = new Set(), vis = new Set();
+      const visit = m => {
+        if (done.has(m.id) || vis.has(m.id)) return; vis.add(m.id);
+        for (const d of [...(m.manifest.requires || []), ...(m.manifest.load_after || [])].sort()) { const dm = byId.get(d); if (dm) visit(dm); }
+        done.add(m.id); out.push(m);
+      };
+      [...mods].sort((a, b) => a.id < b.id ? -1 : 1).forEach(visit);
+      return out;
+    }
+
+    const clone = o => JSON.parse(JSON.stringify(o));
+
+    // base = parsed base.json; mods = ordered [{id, files:[{name, records}]}]. Returns the effective world.
+    function buildWorld(base, mods) {
+      const B = clone(base);
+      const W = { areas: B.areas, objtypes: B.objtypes, tilesets: B.tilesets, collisions: B.collisions, texts: B.texts, npcs: [], anims: {}, exits: [], log: [], touch: {}, removed: {} };
+      for (const t of [W.tilesets, W.collisions, W.objtypes]) for (const k in t) t[k].src = 'base';
+      const legacy = {};
+      for (const id in W.areas) {
+        const a = W.areas[id]; a.id = id; a.src = 'base'; legacy[a.legacyId] = id;
+        for (const o of a.objects) { o.areaId = id; o.src = 'base'; o.mods = []; if (o.reach && o.reach[0] >= 0xffff) delete o.reach; }
+      }
+      for (const n of B.npcs) W.npcs.push({ ...n, areaId: legacy[n.area] || null, src: 'base', mods: [] });
+
+      const note = (key, mod, file, kind, rec, diffs) => {
+        const e = { mod, file, kind, rec, key, diffs: diffs || [] };
+        W.log.push(e); (W.touch[key] = W.touch[key] || []).push(e); return e;
+      };
+      const objKey = (aid, id) => 'o:' + aid + '|' + id;
+      const fields = ['x', 'y', 'objtype', 'reach', 'sign', 'message', 'quest_min', 'quest_max'];
+
+      for (const m of mods) for (let pass = 0; pass < 3; pass++) for (const f of m.files) for (const r of f.records) {
+        if (!r || passOf(r.type) !== pass) continue;
+        const mode = r.mode;
+        switch (r.type) {
+          case 'text': W.texts[r.id] = r.text; note('x:' + r.id, m.id, f.name, mode, r); break;
+          case 'tileset': W.tilesets[r.id] = { src: m.id, png: r.png, tile: r.tile || 32 }; note('x:' + r.id, m.id, f.name, mode, r); break;
+          case 'collision': W.collisions[r.id] = { src: m.id, png: r.png, tile: r.tile || 32, count: r.count, blocked_tiles: r.blocked_tiles || [] }; note('x:' + r.id, m.id, f.name, mode, r); break;
+          case 'objtype': W.objtypes[r.id] = { src: m.id, png: r.png, anchorX: r.anchorX, anchorY: r.anchorY, dx: r.dx || 0, dy: r.dy || 0, ground: !!r.ground, boxSpec: r.box || null }; note('x:' + r.id, m.id, f.name, mode, r); break;
+          case 'area': {
+            if (mode === 'add') {
+              const map = clone(r.map || [[0]]);
+              W.areas[r.id] = { id: r.id, src: m.id, legacyId: null, name: r.name || '', width: map[0].length, height: map.length, tileset: r.tileset, collision: r.collision, map, objects: [], spawn_points: r.spawn_points || [], margins: r.margins || [42, 42, 62, 20], y_offset: r.y_offset || 0, max_events: r.max_events || 0, music: r.music };
+              note('a:' + r.id, m.id, f.name, 'add', r);
+            } else if (mode === 'patch') {
+              const a = W.areas[r.id]; if (!a) { note('a:' + r.id, m.id, f.name, 'skipped', r); break; }
+              const diffs = [];
+              for (const k of ['name', 'tileset', 'collision', 'music', 'y_offset', 'max_events', 'margins', 'spawn_points']) if (r[k] !== undefined) { diffs.push([k, a[k], r[k]]); a[k] = clone(r[k]); }
+              if (r.map) { diffs.push(['map', a.width + 'x' + a.height, r.map[0].length + 'x' + r.map.length]); a.map = clone(r.map); a.width = a.map[0].length; a.height = a.map.length; }
+              for (const [c, rw, t] of r.set_tiles || []) {
+                if (rw < 0 || rw >= a.height || c < 0 || c >= a.width) continue;
+                const k = 't:' + r.id + '|' + c + ',' + rw; const prev = a.map[rw][c];
+                (W.touch[k] = W.touch[k] || []).push({ mod: m.id, file: f.name, kind: 'patch' });
+                a.map[rw][c] = t; if (prev !== t) a.tilesChanged = (a.tilesChanged || 0) + 1;
+              }
+              if (r.set_tiles && r.set_tiles.length) diffs.push(['tiles', '', r.set_tiles.length + ' changed']);
+              note('a:' + r.id, m.id, f.name, 'patch', r, diffs);
+            } else note('a:' + r.id, m.id, f.name, mode, r);
+            break;
+          }
+          case 'object': {
+            const a = W.areas[r.area]; const key = objKey(r.area, r.id);
+            if (!a) { note(key, m.id, f.name, 'skipped', r); break; }
+            if (mode === 'add') {
+              const o = { id: r.id, areaId: r.area, objtype: r.objtype, x: r.x, y: r.y, slot: -1, src: m.id, added: true, mods: [] };
+              for (const k of ['reach', 'sign', 'message', 'quest_min', 'quest_max']) if (r[k] !== undefined) o[k] = clone(r[k]);
+              a.objects.push(o); o.mods.push({ mod: m.id, kind: 'add' }); note(key, m.id, f.name, 'add', r);
+            } else {
+              const i = a.objects.findIndex(o => o.id === r.id);
+              if (i < 0) { note(key, m.id, f.name, 'skipped', r); break; }
+              const o = a.objects[i];
+              if (mode === 'remove') {
+                a.objects.splice(i, 1); (W.removed[r.area] = W.removed[r.area] || []).push({ ...o, removedBy: m.id });
+                note(key, m.id, f.name, 'remove', r, [['object', o.objtype + ' @' + o.x + ',' + o.y, 'removed']]);
+              } else if (mode === 'patch') {
+                const diffs = [];
+                for (const k of fields) if (r[k] !== undefined) { diffs.push([k, o[k], r[k]]); if (k === 'x' && o.box) { const d = r.x - o.x; o.box[0] += d; o.box[2] += d; } if (k === 'y' && o.box) { const d = r.y - o.y; o.box[1] += d; o.box[3] += d; } o[k] = clone(r[k]); }
+                o.mods.push({ mod: m.id, kind: 'patch' }); note(key, m.id, f.name, 'patch', r, diffs);
+              }
+            }
+            break;
+          }
+          case 'anim': W.anims[r.id] = { src: m.id, frames: r.frames || [] }; note('x:' + r.id, m.id, f.name, mode, r); break;
+          case 'exit': W.exits.push({ ...r, src: m.id }); note('e:' + r.id, m.id, f.name, mode, r); break;
+          case 'npc': {
+            const aidOf = v => typeof v === 'string' ? v : legacy[v] || null;
+            if (mode === 'add') {
+              W.npcs.push({ id: r.id, name: r.name, areaId: aidOf(r.area), x: r.x, y: r.y, stationary: !!r.stationary, anim: r.anim, lines: r.lines || [], src: m.id, added: true, mods: [{ mod: m.id, kind: 'add' }] });
+              note('n:' + r.id, m.id, f.name, 'add', r);
+            } else {
+              const i = W.npcs.findIndex(n => n.id === r.id);
+              if (i < 0) { note('n:' + r.id, m.id, f.name, 'skipped', r); break; }
+              const n = W.npcs[i];
+              if (mode === 'remove') { W.npcs.splice(i, 1); note('n:' + r.id, m.id, f.name, 'remove', r, [['npc', '@' + n.x + ',' + n.y, 'removed']]); }
+              else {
+                const diffs = [];
+                for (const k of ['x', 'y', 'name', 'anim', 'stationary', 'lines']) if (r[k] !== undefined) { diffs.push([k, n[k], r[k]]); n[k] = clone(r[k]); }
+                if (r.area !== undefined) { diffs.push(['area', n.areaId, aidOf(r.area)]); n.areaId = aidOf(r.area); }
+                n.mods.push({ mod: m.id, kind: 'patch' }); note('n:' + r.id, m.id, f.name, 'patch', r, diffs);
+              }
+            }
+            break;
+          }
+          default: note('x:' + (r.id || r.type), m.id, f.name, mode || '?', r);
+        }
+      }
+      // what is contested: a record changed by two or more different mods
+      for (const k in W.touch) {
+        const mods2 = [...new Set(W.touch[k].map(e => e.mod))];
+        if (mods2.length > 1) for (const e of W.touch[k]) e.contested = mods2;
+      }
+      for (const aid in W.areas) for (const o of W.areas[aid].objects) { const t = W.touch[objKey(aid, o.id)] || []; o.contested = [...new Set(t.map(e => e.mod))].length > 1; }
+      return W;
+    }
+
+    // ===== editing: change the editor's own record list `recs` =====
+    const find = (recs, type, mode, id) => recs.find(r => r.type === type && r.mode === mode && r.id === id);
+    function nextId(recs, W, modId, kind) {
+      const used = new Set(recs.map(r => r.id));
+      for (const a of Object.values(W.areas)) for (const o of a.objects) used.add(o.id);
+      for (let n = 1; ; n++) {
+        const id = `${modId}:${kind}/e${n}`;
+        if (!used.has(id) && !(W.texts && W.texts[id] !== undefined) && !['objtypes', 'tilesets', 'collisions', 'anims', 'areas'].some(k => W[k] && W[k][id]) && !(W.npcs || []).some(x => x.id === id)) return id;
+      }
+    }
+    function edMoveObject(recs, o, x, y) {
+      x = Math.round(x); y = Math.round(y);
+      const add = find(recs, 'object', 'add', o.id); if (add) { add.x = x; add.y = y; return; }
+      let p = find(recs, 'object', 'patch', o.id);
+      if (!p) { p = { type: 'object', mode: 'patch', id: o.id, area: o.areaId }; recs.push(p); }
+      p.x = x; p.y = y;
+    }
+    function edPatchObject(recs, o, fields) {
+      const add = find(recs, 'object', 'add', o.id); if (add) { Object.assign(add, fields); return; }
+      let p = find(recs, 'object', 'patch', o.id);
+      if (!p) { p = { type: 'object', mode: 'patch', id: o.id, area: o.areaId }; recs.push(p); }
+      Object.assign(p, fields);
+    }
+    function edDeleteObject(recs, o) {
+      const had = find(recs, 'object', 'add', o.id);
+      for (let i = recs.length - 1; i >= 0; i--) { const r = recs[i]; if (r.id === o.id && r.type === 'object') recs.splice(i, 1); else if (r.type === 'exit' && had && r.object === o.id) recs.splice(i, 1); }
+      if (!had) recs.push({ type: 'object', mode: 'remove', id: o.id, area: o.areaId });
+    }
+    function edAddObject(recs, W, modId, areaId, objtype, x, y) {
+      const id = nextId(recs, W, modId, 'obj');
+      recs.push({ type: 'object', mode: 'add', id, area: areaId, objtype, x: Math.round(x), y: Math.round(y) });
+      return id;
+    }
+    function edPaint(recs, W, areaId, c, r, t) {
+      const own = find(recs, 'area', 'add', areaId);
+      if (own) { if (own.map[r] && own.map[r][c] !== undefined) own.map[r][c] = t; return; }
+      let p = find(recs, 'area', 'patch', areaId);
+      if (!p) { p = { type: 'area', mode: 'patch', id: areaId, set_tiles: [] }; recs.push(p); }
+      p.set_tiles = (p.set_tiles || []).filter(s => !(s[0] === c && s[1] === r));
+      p.set_tiles.push([c, r, t]);
+    }
+    // text for a sign or message: a text record the editor owns, and the object field pointing at it
+    function edSetText(recs, W, modId, o, kind, text) {
+      const cur = (find(recs, 'object', 'add', o.id) || find(recs, 'object', 'patch', o.id) || {})[kind];
+      let tid = cur && cur.startsWith(modId + ':str/e') && find(recs, 'text', 'add', cur) ? cur : null;
+      if (!tid) { tid = nextId(recs, W, modId, 'str'); recs.push({ type: 'text', mode: 'add', id: tid, text }); }
+      else find(recs, 'text', 'add', tid).text = text;
+      const f = { [kind]: tid }; if (kind === 'sign') delete (find(recs, 'object', 'patch', o.id) || {}).message; else delete (find(recs, 'object', 'patch', o.id) || {}).sign;
+      edPatchObject(recs, o, f);
+    }
+    // ---- NPCs: a moved base NPC is a `replace` with just x, y (replace keeps every other field) ----
+    function edMoveNpc(recs, n, x, y) {
+      x = Math.round(x); y = Math.round(y);
+      const add = find(recs, 'npc', 'add', n.id); if (add) { add.x = x; add.y = y; return; }
+      let p = find(recs, 'npc', 'replace', n.id);
+      if (!p) { p = { type: 'npc', mode: 'replace', id: n.id }; recs.push(p); }
+      p.x = x; p.y = y;
+    }
+    function edDeleteNpc(recs, n) {
+      const add = find(recs, 'npc', 'add', n.id);
+      for (let i = recs.length - 1; i >= 0; i--) if (recs[i].type === 'npc' && recs[i].id === n.id) recs.splice(i, 1);
+      if (!add) { recs.push({ type: 'npc', mode: 'remove', id: n.id }); return; }
+      // the texts and anim only this NPC used go with it
+      const own = new Set([add.name, add.anim, ...(add.lines || [])]);
+      for (let i = recs.length - 1; i >= 0; i--) if ((recs[i].type === 'text' || recs[i].type === 'anim') && own.has(recs[i].id)) recs.splice(i, 1);
+    }
+    // o = { areaId, x, y, name, lines: [3 strings], png (path in the mod), stationary }
+    function edAddNpc(recs, W, modId, o) {
+      const id = nextId(recs, W, modId, 'npc'), animId = nextId(recs, W, modId, 'anim');
+      const text = t => { const tid = nextId(recs, W, modId, 'str'); recs.push({ type: 'text', mode: 'add', id: tid, text: t }); return tid; };
+      const name = text(o.name || 'Visitor'), lines = (o.lines || []).filter(l => l.trim()).map(text);
+      while (o.stationary !== false && lines.length < 3) lines.push(lines.length ? lines[lines.length - 1] : text('...'));
+      recs.push({ type: 'anim', mode: 'add', id: animId, frames: [{ png: o.png }] });
+      const r = { type: 'npc', mode: 'add', id, name, area: o.areaId, x: Math.round(o.x), y: Math.round(o.y), stationary: o.stationary !== false, anim: animId };
+      if (lines.length) r.lines = lines;
+      recs.push(r); return id;
+    }
+    // ---- areas and doors ----
+    function mostCommonTile(map) {
+      const c = new Map(); for (const row of map) for (const t of row) c.set(t, (c.get(t) || 0) + 1);
+      let best = 0, n = -1; for (const [t, k] of c) if (k > n) { best = t; n = k; } return best;
+    }
+    // o = { slug, name, width, height, lookFrom (area id to borrow tileset + collision from), music }
+    function edNewArea(recs, W, modId, o) {
+      const src = W.areas[o.lookFrom]; if (!src) throw new Error('pick an area to borrow the tileset from');
+      const slug = (o.slug || 'area').toLowerCase().replace(/[^a-z0-9_]/g, '_') || 'area';
+      let id = `${modId}:area/${slug}`, n = 2; while (W.areas[id] || find(recs, 'area', 'add', id)) id = `${modId}:area/${slug}${n++}`;
+      const tile = mostCommonTile(src.map), w = Math.max(1, Math.min(255, o.width | 0)), h = Math.max(1, Math.min(255, o.height | 0));
+      const nameId = nextId(recs, W, modId, 'str'); recs.push({ type: 'text', mode: 'add', id: nameId, text: o.name || slug });
+      const r = { type: 'area', mode: 'add', id, name: nameId, tileset: src.tileset, collision: src.collision, map: Array.from({ length: h }, () => Array(w).fill(tile)) };
+      if (o.music !== undefined && o.music !== '' && o.music !== null) r.music = +o.music;
+      recs.push(r); return id;
+    }
+    // A door: `object` (in `from`) leads to `to`, landing at spawn. Gives the object a reach if it has none.
+    // wayBack: also put a door in `to` at the landing spot that leads back, landing in front of the first door.
+    function edAddExit(recs, W, modId, o) {
+      const obj = (W.areas[o.from] || { objects: [] }).objects.find(x => x.id === o.object); if (!obj) throw new Error('that object is not in ' + o.from);
+      if (!obj.reach) edPatchObject(recs, obj, { reach: [28, 28] });
+      const touch = o.onTouch !== false;
+      for (let i = recs.length - 1; i >= 0; i--) if (recs[i].type === 'exit' && recs[i].from === o.from && recs[i].object === o.object && (recs[i].on_touch !== false) === touch) recs.splice(i, 1);
+      const eid = nextId(recs, W, modId, 'exit');
+      const sx = Math.round(o.spawn[0]), sy = Math.round(o.spawn[1]);
+      let back = null;
+      if (o.wayBack) { // (the door object goes in before the exits, which need it to exist)
+        back = nextId(recs, W, modId, 'obj');
+        recs.push({ type: 'object', mode: 'add', id: back, area: o.to, objtype: obj.objtype, x: sx, y: sy + 40, reach: [28, 28] });
+      }
+      recs.push({ type: 'exit', mode: 'add', id: eid, from: o.from, object: o.object, to: o.to, spawn: [sx, sy], on_touch: touch });
+      if (back) recs.push({ type: 'exit', mode: 'add', id: nextId(recs, W, modId, 'exit'), from: o.to, object: back, to: o.from, spawn: [Math.round(obj.x), Math.round(obj.y) + 40], on_touch: touch });
+      return { exit: eid, back };
+    }
+    function edRemoveExit(recs, id) { const i = recs.findIndex(r => r.type === 'exit' && r.id === id); if (i >= 0) recs.splice(i, 1); }
+    function edAddObjType(recs, W, modId, slug, png, box) {
+      let id = `${modId}:objtype/${slug}`, n = 2; while (W.objtypes[id] || find(recs, 'objtype', 'add', id)) id = `${modId}:objtype/${slug}${n++}`;
+      const r = { type: 'objtype', mode: 'add', id, png }; if (box) r.box = box; recs.push(r); return id;
+    }
+    // ===== pixel helpers for the sprite editor. `arr` has one element per pixel: a Uint32Array over RGBA bytes (art) or a Uint8Array (collision mask). =====
+    const packRGBA = (r, g, b, a) => ((a << 24) | (b << 16) | (g << 8) | r) >>> 0; // (little-endian: the same layout as the RGBA bytes)
+    const unpackRGBA = v => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+    // flood fill (same value, connected) or replace-all (`global`); returns how many pixels changed
+    function fillRegion(arr, w, h, x, y, val, global) {
+      if (x < 0 || y < 0 || x >= w || y >= h) return 0;
+      const tgt = arr[y * w + x]; if (tgt === val) return 0; let n = 0;
+      if (global) { for (let i = 0; i < w * h; i++) if (arr[i] === tgt) { arr[i] = val; n++; } return n; }
+      const st = [y * w + x];
+      while (st.length) {
+        const p = st.pop(); if (arr[p] !== tgt) continue; arr[p] = val; n++;
+        const cx = p % w; if (cx > 0) st.push(p - 1); if (cx < w - 1) st.push(p + 1); if (p >= w) st.push(p - w); if (p < w * (h - 1)) st.push(p + w);
+      }
+      return n;
+    }
+    function lineCells(x0, y0, x1, y1) { // Bresenham, both ends included
+      const out = [], dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1; let e = dx + dy;
+      for (; ;) { out.push([x0, y0]); if (x0 === x1 && y0 === y1) break; const e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; } }
+      return out;
+    }
+    function brushCells(x, y, size, round) {
+      const i0 = -Math.floor((size - 1) / 2), c = (size - 1) / 2, r = size / 2 - .1, out = [];
+      for (let j = 0; j < size; j++) for (let i = 0; i < size; i++) { if (round && ((i - c) ** 2 + (j - c) ** 2) > r * r) continue; out.push([x + i0 + i, y + i0 + j]); }
+      return out;
+    }
+    function rectCells(x0, y0, x1, y1, filled) {
+      const l = Math.min(x0, x1), r = Math.max(x0, x1), t = Math.min(y0, y1), b = Math.max(y0, y1), out = [];
+      for (let y = t; y <= b; y++) for (let x = l; x <= r; x++) if (filled || x === l || x === r || y === t || y === b) out.push([x, y]);
+      return out;
+    }
+    function flipArr(arr, w, h, horizontal) {
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const nx = horizontal ? w - 1 - x : x, ny = horizontal ? y : h - 1 - y, a = y * w + x, b = ny * w + nx;
+        if (a < b) { const t = arr[a]; arr[a] = arr[b]; arr[b] = t; }
+      }
+    }
+    function resizeArr(arr, w, h, nw, nh) { // keeps the top-left corner; new space is 0 (transparent / walkable)
+      const out = new arr.constructor(nw * nh);
+      for (let y = 0; y < Math.min(h, nh); y++) for (let x = 0; x < Math.min(w, nw); x++) out[y * nw + x] = arr[y * w + x];
+      return out;
+    }
+    function colorsOf(a32, limit) { // [[packed colour, count]] most used first, transparent skipped
+      const m = new Map(); for (let i = 0; i < a32.length; i++) { const v = a32[i]; if (v >>> 24) m.set(v, (m.get(v) || 0) + 1); }
+      return [...m].sort((p, q) => q[1] - p[1]).slice(0, limit || 48);
+    }
+    const maskFromRGBA = (rgba, w, h) => { const m = new Uint8Array(w * h); for (let i = 0; i < w * h; i++) m[i] = rgba[i * 4 + 3] >= 128 ? 1 : 0; return m; };
+    // The collision of a tileset as one mask the size of the tile sheet (cols x rows cells of `cell` px): what blocks walking, cell n = tile n.
+    // col = { png: {rgba, w, h}, tile } or { count, blocked_tiles }. Like the game: tiles past the collision's count are blocked; a
+    // collision cell of another size is scaled (a bigger one blocks a pixel if any of the pixels it covers is blocked).
+    function collisionLayer(col, cols, rows, cell) {
+      const W = cols * cell, H = rows * cell, m = new Uint8Array(W * H);
+      const ct = col && col.png ? col.tile || 32 : 32, ccols = col && col.png ? Math.floor(col.png.w / ct) : 0, ccount = col && col.png ? ccols * Math.floor(col.png.h / ct) : (col && col.count) || 0;
+      const blockedSet = new Set(col && !col.png ? col.blocked_tiles || [] : []);
+      for (let t = 0; t < cols * rows; t++) {
+        const ox = (t % cols) * cell, oy = Math.floor(t / cols) * cell;
+        for (let y = 0; y < cell; y++) for (let x = 0; x < cell; x++) {
+          let b = 0;
+          if (t >= ccount) b = 1;
+          else if (col.png) {
+            const x0 = Math.floor(x * ct / cell), x1 = Math.max(x0 + 1, Math.floor((x + 1) * ct / cell)), y0 = Math.floor(y * ct / cell), y1 = Math.max(y0 + 1, Math.floor((y + 1) * ct / cell));
+            const bx = (t % ccols) * ct, by = Math.floor(t / ccols) * ct;
+            for (let sy = y0; sy < y1 && !b; sy++) for (let sx = x0; sx < x1 && !b; sx++) b = col.png.rgba[((by + sy) * col.png.w + bx + sx) * 4 + 3] >= 128 ? 1 : 0;
+          } else b = blockedSet.has(t) ? 1 : 0;
+          m[(oy + y) * W + ox + x] = b;
+        }
+      }
+      return m;
+    }
+    // point an area at a tileset and/or collision (its own add record if the editor made the area, else a patch)
+    function edSetAreaLook(recs, areaId, tilesetId, collisionId) {
+      let r = find(recs, 'area', 'add', areaId) || find(recs, 'area', 'patch', areaId);
+      if (!r) { r = { type: 'area', mode: 'patch', id: areaId }; recs.push(r); }
+      if (tilesetId) r.tileset = tilesetId; if (collisionId) r.collision = collisionId;
+    }
+    // an object type with every field (anchors, ground, footprint picture)
+    function edAddObjTypeFull(recs, W, modId, slug, png, f) {
+      let id = `${modId}:objtype/${slug}`, n = 2; while (W.objtypes[id] || find(recs, 'objtype', 'add', id)) id = `${modId}:objtype/${slug}${n++}`;
+      const r = { type: 'objtype', mode: 'add', id, png };
+      for (const k of ['anchorX', 'anchorY', 'dx', 'dy']) if (f && f[k] !== undefined && f[k] !== null) r[k] = f[k];
+      if (f && f.ground) r.ground = true; if (f && f.collision_png) r.collision_png = f.collision_png;
+      recs.push(r); return id;
+    }
+    function nextSlot(recs, W, modId, kind) { return nextId(recs, W, modId, kind).split('/e').pop(); }
+    if (typeof module !== 'undefined') module.exports = { packRGBA, unpackRGBA, fillRegion, lineCells, brushCells, rectCells, flipArr, resizeArr, colorsOf, maskFromRGBA, collisionLayer, edSetAreaLook, edAddObjTypeFull, nextSlot, EDFILE, orderMods, buildWorld, edMoveObject, edPatchObject, edDeleteObject, edAddObject, edPaint, edSetText, edAddObjType, edMoveNpc, edDeleteNpc, edAddNpc, edNewArea, edAddExit, edRemoveExit, find };
+  </script>
+
+  <script id="sprite">
+    // ===== sprite editor: draws on an RGBA picture (and, for tile sheets and objects, a second "walk-blocking" layer). =====
+    // SpriteEd.open({ title, kind: 'tileset'|'object'|'npc'|'blank', w, h, art (RGBA bytes) | null, col (Uint8Array mask) | null, cell (tile size) | 0,
+    //                 colName (what the second layer is called), onSave(result) -> Promise })
+    // result = { w, h, artDirty, colDirty, artBlob, colBlob | null }; onSave may throw, the message is shown and the editor stays open.
+    if (typeof document !== 'undefined') (() => {
+      const $ = id => document.getElementById(id);
+      const st = document.createElement('style');
+      st.textContent = '#se{position:fixed;inset:0;background:#000b;display:none;z-index:50;align-items:center;justify-content:center;padding:12px}'
+        + '#se .pn{background:var(--pn);border:3px solid var(--ac);border-radius:8px;max-width:100%;max-height:100%;display:flex;flex-direction:column;box-shadow:0 8px 40px #000}'
+        + '#se .hd{display:flex;gap:10px;align-items:center;padding:8px 12px;background:var(--pn2);border-bottom:2px solid var(--bd);font:700 12px ui-monospace,Consolas,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--ac)}'
+        + '#se .bd{display:flex;gap:12px;padding:10px;overflow:hidden;min-height:0}'
+        + '#se #sew{position:relative;border:2px solid var(--bd);width:min(62vw,820px);height:min(72vh,680px);background:#0b0f22;flex:none;overflow:hidden}'
+        + '#se #sec{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none}'
+        + '#se .side{width:290px;display:flex;flex-direction:column;gap:6px;overflow:auto;max-height:74vh}'
+        + '#se .tb button.on,#se .lay button.on{background:var(--ac);color:#241a00;border-color:#b98a12}'
+        + '#se .sw{display:flex;flex-wrap:wrap;gap:2px;max-height:96px;overflow:auto;width:100%}'
+        + '#se .sw i{width:16px;height:16px;border:1px solid #000;cursor:pointer;display:block;background-image:conic-gradient(#888 25%,#bbb 0 50%,#888 0 75%,#bbb 0);background-size:8px 8px}'
+        + '#se .sw i b{display:block;width:100%;height:100%}'
+        + '#se .sw i.on{outline:2px solid var(--ac);z-index:1}'
+        + '@media(max-width:820px){#se .bd{flex-direction:column;overflow:auto}#se #sew{width:92vw;height:46vh}#se .side{width:auto;max-height:none}}';
+      document.head.append(st);
+      const o = document.createElement('div'); o.id = 'se';
+      o.innerHTML = '<div class="pn"><div class="hd"><span id="set">Sprite editor</span><span class="sp" style="flex:1"></span><button id="sesave" class="primary">Save to mod</button><button id="sedl">Download PNG</button><button id="sex">Close (Esc)</button></div>'
+        + '<div class="bd"><div id="sew"><canvas id="sec"></canvas></div><div class="side">'
+        + '<div class="row lay" id="selay" style="display:none"><b>Draw on</b><button data-l="art" class="on">Picture</button><button data-l="col" id="secoln">Walk-blocking</button><label><input type="checkbox" id="seshowcol" checked> show it</label></div>'
+        + '<div class="row tb"><b>Tool</b><button data-t="pencil" title="Draw with the brush">Pencil<kbd>B</kbd></button><button data-t="eraser" title="Make pixels transparent">Eraser<kbd>E</kbd></button><button data-t="line">Line<kbd>L</kbd></button><button data-t="rect">Box<kbd>U</kbd></button>'
+        + '<button data-t="fill" title="Fill the connected area of the same colour">Fill<kbd>G</kbd></button><button data-t="replace" title="Replace every pixel of the clicked colour">Replace all<kbd>R</kbd></button><button data-t="pick" title="Take a colour from the picture">Pick<kbd>I</kbd></button></div>'
+        + '<div class="row"><label>Brush <select id="sebs"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>8</option><option>12</option><option>16</option></select></label><label><input type="checkbox" id="sebr"> round</label><label><input type="checkbox" id="sefill"> filled box</label><span class="hint">[ ] resize</span></div>'
+        + '<div class="row"><b>Colour</b><input type="color" id="secc" style="width:44px;height:28px;padding:0"><label>alpha <input type="range" id="sea" min="0" max="255" value="255" style="width:90px"><span id="seav" class="hint">255</span></label><span id="secl" class="hint"></span></div>'
+        + '<div class="row"><b>Recent</b><div class="sw" id="serec"></div></div>'
+        + '<div class="row"><b>In this picture</b><div class="sw" id="sepic"></div></div>'
+        + '<div class="row"><label>Zoom <select id="sez"><option>1</option><option>2</option><option>4</option><option>6</option><option>8</option><option>12</option><option>16</option><option>24</option><option>32</option></select></label><label><input type="checkbox" id="seg" checked> pixel grid</label><label><input type="checkbox" id="setg" checked> tile grid</label><span class="hint" style="width:100%">wheel zooms, middle-drag or Space+drag pans</span></div>'
+        + '<div class="row"><button id="seimp">Import PNG…</button><input type="file" id="sef" accept="image/png,image/*" hidden><button id="seu">Undo</button><button id="ser">Redo</button><button id="sefh">Flip ↔</button><button id="sefv">Flip ↕</button></div>'
+        + '<div class="row"><button id="sesz">Canvas size…</button><button id="seadd" style="display:none">Add a row of tiles</button></div>'
+        + '<div id="sest" style="font:12px ui-monospace,Consolas,monospace;min-height:2.6em;color:var(--ac2)"></div>'
+        + '<div id="sem" class="hint" style="min-height:3em"></div></div></div></div>';
+      document.body.append(o);
+
+      const E = { open: false, w: 0, h: 0, a32: null, bytes: null, col: null, cell: 0, kind: '', layer: 'art', tool: 'pencil', color: [255, 255, 255, 255], recent: [], cam: { x: 0, y: 0, z: 8 }, down: null, hover: null, undo: [], redo: [], artDirty: false, colDirty: false, onSave: null, space: false, pan: null, off: document.createElement('canvas'), coff: document.createElement('canvas'), raf: 0, picCols: [] };
+      const cv = $('sec'), g = cv.getContext('2d'), msg = t => $('sem').textContent = t;
+      const packed = () => packRGBA(...E.color), hex = c => '#' + c.slice(0, 3).map(v => v.toString(16).padStart(2, '0')).join('');
+
+      function setDoc(w, h, bytes, col) {
+        E.w = w; E.h = h; E.bytes = bytes; E.a32 = new Uint32Array(bytes.buffer, bytes.byteOffset, w * h); E.col = col;
+        E.off.width = w; E.off.height = h; E.coff.width = w; E.coff.height = h; refreshPic(true);
+      }
+      function refreshPic(all) {
+        E.off.getContext('2d').putImageData(new ImageData(E.bytes, E.w, E.h), 0, 0);
+        if (E.col) {
+          const c = E.coff.getContext('2d'), im = c.createImageData(E.w, E.h), d = im.data;
+          for (let i = 0; i < E.col.length; i++) if (E.col[i]) { d[i * 4] = 255; d[i * 4 + 1] = 40; d[i * 4 + 2] = 40; d[i * 4 + 3] = 255; }
+          c.putImageData(im, 0, 0);
+        }
+        if (all) palPic(); need();
+      }
+      const need = () => { if (!E.raf) E.raf = requestAnimationFrame(() => { E.raf = 0; draw(); }); };
+      function palPic() {
+        const box = $('sepic'); box.innerHTML = '';
+        for (const [v] of colorsOf(E.a32, 64)) addSwatch(box, unpackRGBA(v));
+      }
+      function addSwatch(box, c) {
+        const i = document.createElement('i'), b = document.createElement('b'); b.style.background = `rgba(${c[0]},${c[1]},${c[2]},${c[3] / 255})`; i.append(b); i.title = hex(c) + ' alpha ' + c[3];
+        i.onclick = () => setColor(c); if (c.every((v, k) => v === E.color[k])) i.classList.add('on'); box.append(i);
+      }
+      function setColor(c) {
+        E.color = c.slice(); $('secc').value = hex(c); $('sea').value = c[3]; $('seav').textContent = c[3];
+        if (E.tool === 'eraser') tool('pencil');
+        for (const box of [$('sepic'), $('serec')]) [...box.children].forEach((el, k) => el.classList.remove('on'));
+        need();
+      }
+      function useColor() { const key = E.color.join(','); E.recent = E.recent.filter(c => c.join(',') !== key); E.recent.unshift(E.color.slice()); E.recent.length = Math.min(E.recent.length, 24); const box = $('serec'); box.innerHTML = ''; E.recent.forEach(c => addSwatch(box, c)); }
+      function tool(t) { E.tool = t; document.querySelectorAll('#se .tb button').forEach(b => b.classList.toggle('on', b.dataset.t === t)); need(); }
+      function layer(l) { E.layer = E.col ? l : 'art'; document.querySelectorAll('#se .lay button').forEach(b => b.classList.toggle('on', b.dataset.l === E.layer)); need(); }
+      function tileInfo(x, y) {
+        if (!E.cell) return ''; const cols = Math.floor(E.w / E.cell), c = Math.floor(x / E.cell), r = Math.floor(y / E.cell);
+        return c >= 0 && c < cols && r >= 0 && r * E.cell < E.h ? `  tile ${r * cols + c}` : '';
+      }
+
+      // ---- history ----
+      function snap() {
+        E.undo.push({ w: E.w, h: E.h, bytes: new Uint8ClampedArray(E.bytes), col: E.col ? new Uint8Array(E.col) : null }); E.redo = [];
+        let total = 0; for (let i = E.undo.length - 1; i >= 0; i--) { total += E.undo[i].bytes.length * 2; if (total > 160e6) { E.undo.splice(0, i + 1); break; } }
+      }
+      function restore(s) { setDoc(s.w, s.h, new Uint8ClampedArray(s.bytes), s.col ? new Uint8Array(s.col) : null); E.artDirty = E.colDirty = true; }
+      function undo() { if (!E.undo.length) return; E.redo.push({ w: E.w, h: E.h, bytes: new Uint8ClampedArray(E.bytes), col: E.col ? new Uint8Array(E.col) : null }); restore(E.undo.pop()); }
+      function redo() { if (!E.redo.length) return; E.undo.push({ w: E.w, h: E.h, bytes: new Uint8ClampedArray(E.bytes), col: E.col ? new Uint8Array(E.col) : null }); restore(E.redo.pop()); }
+
+      // ---- drawing on the picture ----
+      function plot(x, y, erase) {
+        if (x < 0 || y < 0 || x >= E.w || y >= E.h) return;
+        if (E.layer === 'col') { const v = erase ? 0 : 1; if (E.col[y * E.w + x] !== v) { E.col[y * E.w + x] = v; E.colDirty = true; } }
+        else { const v = erase ? 0 : packed(); if (E.a32[y * E.w + x] !== v) { E.a32[y * E.w + x] = v; E.artDirty = true; } }
+      }
+      const stamp = (x, y, erase) => { for (const [a, b] of brushCells(x, y, +$('sebs').value, $('sebr').checked)) plot(a, b, erase); };
+      function px(e) { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * cv.width / r.width, (e.clientY - r.top) * cv.height / r.height]; }
+      function pix(e) { const [sx, sy] = px(e); return [Math.floor(sx / E.cam.z + E.cam.x), Math.floor(sy / E.cam.z + E.cam.y)]; }
+      cv.addEventListener('contextmenu', e => e.preventDefault());
+      cv.addEventListener('pointerdown', e => {
+        if (e.button === 1 || (e.button === 0 && E.space)) { const [sx, sy] = px(e); E.pan = { sx, sy, cx: E.cam.x, cy: E.cam.y }; cv.setPointerCapture(e.pointerId); e.preventDefault(); return; }
+        if (e.button !== 0) return; e.preventDefault(); const [x, y] = pix(e), t = E.tool;
+        if (t === 'pick') { if (x >= 0 && y >= 0 && x < E.w && y < E.h) { setColor(unpackRGBA(E.a32[y * E.w + x])); } return; }
+        if (x < 0 || y < 0 || x >= E.w || y >= E.h) return;
+        snap(); cv.setPointerCapture(e.pointerId);
+        if (t === 'fill' || t === 'replace') {
+          const arr = E.layer === 'col' ? E.col : E.a32, val = E.layer === 'col' ? 1 : packed(), tgt = arr[y * E.w + x];
+          const v = (E.layer === 'col' && tgt === 1) ? 0 : val; // filling a blocked area with the walk layer clears it
+          const n = fillRegion(arr, E.w, E.h, x, y, v, t === 'replace'); if (n) { E.layer === 'col' ? E.colDirty = true : E.artDirty = true; useColor(); refreshPic(true); } else E.undo.pop(); return;
+        }
+        E.down = { start: [x, y], last: [x, y] };
+        if (t === 'pencil' || t === 'eraser') { stamp(x, y, t === 'eraser'); if (t === 'pencil' && E.layer === 'art') useColor(); refreshPic(false); }
+        need();
+      });
+      cv.addEventListener('pointermove', e => {
+        if (E.pan) { const [sx, sy] = px(e); E.cam.x = E.pan.cx - (sx - E.pan.sx) / E.cam.z; E.cam.y = E.pan.cy - (sy - E.pan.sy) / E.cam.z; need(); return; }
+        const [x, y] = pix(e); E.hover = [x, y];
+        const inside = x >= 0 && y >= 0 && x < E.w && y < E.h;
+        $('sest').textContent = inside ? `${x},${y}${tileInfo(x, y)}  rgba ${unpackRGBA(E.a32[y * E.w + x]).join(',')}${E.col ? (E.col[y * E.w + x] ? '  blocks walking' : '') : ''}` : '';
+        if (E.down) {
+          const t = E.tool;
+          if (t === 'pencil' || t === 'eraser') { for (const [a, b] of lineCells(E.down.last[0], E.down.last[1], x, y)) stamp(a, b, t === 'eraser'); E.down.last = [x, y]; refreshPic(false); }
+          else E.down.last = [x, y];
+        }
+        need();
+      });
+      const up = e => {
+        if (E.pan) { E.pan = null; return; }
+        if (!E.down) return; const d = E.down; E.down = null; const t = E.tool;
+        if (t === 'line' || t === 'rect') {
+          const pts = t === 'line' ? lineCells(d.start[0], d.start[1], d.last[0], d.last[1]) : rectCells(d.start[0], d.start[1], d.last[0], d.last[1], $('sefill').checked);
+          for (const [x, y] of pts) stamp(x, y, false); if (E.layer === 'art') useColor();
+        }
+        refreshPic(true);
+      };
+      cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+      cv.addEventListener('pointerleave', () => { E.hover = null; need(); });
+      cv.addEventListener('wheel', e => {
+        e.preventDefault(); const [sx, sy] = px(e), bx = sx / E.cam.z + E.cam.x, by = sy / E.cam.z + E.cam.y;
+        E.cam.z = Math.max(1, Math.min(48, Math.round(E.cam.z * (e.deltaY < 0 ? 1.25 : 0.8) * 10) / 10 || 1)); E.cam.z = Math.max(1, E.cam.z);
+        E.cam.x = bx - sx / E.cam.z; E.cam.y = by - sy / E.cam.z; $('sez').value = [...$('sez').options].some(o => +o.value === Math.round(E.cam.z)) ? Math.round(E.cam.z) : $('sez').value; need();
+      }, { passive: false });
+
+      function draw() {
+        if (!E.open) return; const w = cv.clientWidth, h = cv.clientHeight; if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+        const z = E.cam.z, X = v => Math.round((v - E.cam.x) * z), Y = v => Math.round((v - E.cam.y) * z);
+        g.setTransform(1, 0, 0, 1, 0, 0); g.imageSmoothingEnabled = false; g.fillStyle = '#0b0f22'; g.fillRect(0, 0, w, h);
+        const x0 = X(0), y0 = Y(0), x1 = X(E.w), y1 = Y(E.h);
+        g.save(); g.beginPath(); g.rect(x0, y0, x1 - x0, y1 - y0); g.clip();
+        const ck = Math.max(8, Math.round(z)); for (let yy = y0; yy < y1; yy += ck) for (let xx = x0; xx < x1; xx += ck) { g.fillStyle = ((((xx - x0) / ck | 0) + ((yy - y0) / ck | 0)) & 1) ? '#9a9a9a' : '#c4c4c4'; g.fillRect(xx, yy, ck, ck); }
+        g.restore();
+        g.drawImage(E.off, 0, 0, E.w, E.h, x0, y0, x1 - x0, y1 - y0);
+        if (E.col && ($('seshowcol').checked || E.layer === 'col')) { g.globalAlpha = E.layer === 'col' ? .6 : .4; g.drawImage(E.coff, 0, 0, E.w, E.h, x0, y0, x1 - x0, y1 - y0); g.globalAlpha = 1; }
+        const vx0 = Math.max(0, Math.floor(E.cam.x)), vx1 = Math.min(E.w, Math.ceil(E.cam.x + w / z)), vy0 = Math.max(0, Math.floor(E.cam.y)), vy1 = Math.min(E.h, Math.ceil(E.cam.y + h / z));
+        if ($('seg').checked && z >= 6) { g.strokeStyle = 'rgba(255,255,255,.2)'; g.lineWidth = 1; g.beginPath(); for (let x = vx0; x <= vx1; x++) { g.moveTo(X(x) + .5, y0); g.lineTo(X(x) + .5, y1); } for (let y = vy0; y <= vy1; y++) { g.moveTo(x0, Y(y) + .5); g.lineTo(x1, Y(y) + .5); } g.stroke(); }
+        if (E.cell && $('setg').checked) {
+          g.strokeStyle = 'rgba(255,204,77,.75)'; g.lineWidth = 1; g.beginPath();
+          for (let x = 0; x <= E.w; x += E.cell) { g.moveTo(X(x) + .5, y0); g.lineTo(X(x) + .5, y1); } for (let y = 0; y <= E.h; y += E.cell) { g.moveTo(x0, Y(y) + .5); g.lineTo(x1, Y(y) + .5); } g.stroke();
+          if (z * E.cell >= 28) { g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 3; g.font = '11px monospace'; const cols = Math.floor(E.w / E.cell); for (let t = 0; t < cols * Math.floor(E.h / E.cell); t++) { const tx = X((t % cols) * E.cell) + 3, ty = Y(Math.floor(t / cols) * E.cell) + 12; if (tx > w || ty > h + 12 || tx < -E.cell * z || ty < 0) continue; g.strokeText(t, tx, ty); g.fillText(t, tx, ty); } }
+        }
+        g.strokeStyle = '#ffffff66'; g.lineWidth = 1; g.strokeRect(x0 + .5, y0 + .5, x1 - x0, y1 - y0);
+        // what the tool would touch
+        if (E.hover) {
+          const [hx, hy] = E.hover, t = E.tool; let pts = [];
+          if (E.down && (t === 'line' || t === 'rect')) { const s = E.down.start; pts = (t === 'line' ? lineCells(s[0], s[1], hx, hy).flatMap(([a, b]) => brushCells(a, b, +$('sebs').value, $('sebr').checked)) : rectCells(s[0], s[1], hx, hy, $('sefill').checked).flatMap(([a, b]) => brushCells(a, b, +$('sebs').value, $('sebr').checked))); }
+          else if (t === 'pencil' || t === 'eraser' || t === 'line' || t === 'rect') pts = brushCells(hx, hy, +$('sebs').value, $('sebr').checked); else pts = [[hx, hy]];
+          const erase = t === 'eraser'; g.fillStyle = erase ? 'rgba(255,90,90,.4)' : E.layer === 'col' ? 'rgba(255,40,40,.5)' : `rgba(${E.color[0]},${E.color[1]},${E.color[2]},${Math.max(.25, E.color[3] / 255)})`;
+          for (const [x, y] of pts) { if (x < 0 || y < 0 || x >= E.w || y >= E.h) continue; g.fillRect(X(x), Y(y), Math.max(1, X(x + 1) - X(x)), Math.max(1, Y(y + 1) - Y(y))); }
+          if (pts.length < 400) { g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = 1; for (const [x, y] of pts) { if (x < 0 || y < 0 || x >= E.w || y >= E.h) continue; g.strokeRect(X(x) + .5, Y(y) + .5, Math.max(1, X(x + 1) - X(x) - 1), Math.max(1, Y(y + 1) - Y(y) - 1)); } }
+        }
+      }
+
+      // ---- buttons ----
+      function blobOf(canvas) { return new Promise(r => canvas.toBlob(r, 'image/png')); }
+      function colCanvas() { const c = document.createElement('canvas'); c.width = E.w; c.height = E.h; const gg = c.getContext('2d'), im = gg.createImageData(E.w, E.h); for (let i = 0; i < E.col.length; i++) if (E.col[i]) { im.data[i * 4] = 255; im.data[i * 4 + 1] = 40; im.data[i * 4 + 2] = 40; im.data[i * 4 + 3] = 255; } gg.putImageData(im, 0, 0); return c; }
+      async function save() {
+        try {
+          const res = { w: E.w, h: E.h, artDirty: E.artDirty, colDirty: E.colDirty, sizeChanged: E.w !== E.orig.w || E.h !== E.orig.h, artBlob: await blobOf(E.off), colBlob: E.col ? await blobOf(colCanvas()) : null, colAny: E.col ? E.col.some(v => v) : false };
+          const msgOut = await E.onSave(res);
+          E.artDirty = E.colDirty = false; E.orig = { w: E.w, h: E.h }; msg(msgOut || 'Saved.'); if (msgOut === true || !msgOut) close();
+        } catch (e) { msg('Not saved: ' + e.message); }
+      }
+      async function download() { const b = await blobOf(E.layer === 'col' && E.col ? colCanvas() : E.off), a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = (E.layer === 'col' ? 'walk_blocking' : 'picture') + '.png'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
+      function close() { E.open = false; $('se').style.display = 'none'; }
+      function fit() { const w = cv.clientWidth || 600, h = cv.clientHeight || 500; E.cam.z = Math.max(1, Math.min(32, Math.floor(Math.min(w / E.w, h / E.h) * 0.92) || 1)); E.cam.x = -(w / E.cam.z - E.w) / 2; E.cam.y = -(h / E.cam.z - E.h) / 2; const zs = [...$('sez').options].map(o => +o.value); $('sez').value = zs.reduce((p, c) => Math.abs(c - E.cam.z) < Math.abs(p - E.cam.z) ? c : p); }
+      function resize(nw, nh) {
+        snap(); const nb = new Uint8ClampedArray(nw * nh * 4), na = new Uint32Array(nb.buffer); na.set(resizeArr(E.a32, E.w, E.h, nw, nh)); // eslint-disable-line
+        let nc = null; if (E.col) { nc = resizeArr(E.col, E.w, E.h, nw, nh); if (E.cell) { /* new tiles start walkable */ } }
+        setDoc(nw, nh, nb, nc); E.artDirty = E.colDirty = true; fit(); need();
+      }
+      window.SpriteEd = {
+        open(o) {
+          E.open = true; E.kind = o.kind; E.cell = o.cell || 0; E.onSave = o.onSave; E.undo = []; E.redo = []; E.artDirty = E.colDirty = false; E.orig = { w: o.w, h: o.h };
+          const bytes = o.art ? new Uint8ClampedArray(o.art) : new Uint8ClampedArray(o.w * o.h * 4);
+          setDoc(o.w, o.h, bytes, o.col ? new Uint8Array(o.col) : (o.colName ? new Uint8Array(o.w * o.h) : null));
+          $('se').style.display = 'flex'; $('set').textContent = o.title || 'Sprite editor'; $('selay').style.display = E.col ? 'flex' : 'none'; $('secoln').textContent = o.colName || 'Walk-blocking';
+          $('seadd').style.display = E.cell ? '' : 'none'; $('setg').parentElement.style.display = E.cell ? '' : 'none'; layer('art'); tool(E.tool === 'eraser' ? 'pencil' : E.tool);
+          setColor(E.color); fit(); msg(o.hint || ''); $('sest').textContent = ''; need();
+        }, close, _state: E
+      };
+      $('sesave').onclick = save; $('sedl').onclick = download; $('sex').onclick = () => { if ((E.artDirty || E.colDirty) && !confirm('Close without saving your changes?')) return; close(); };
+      document.querySelectorAll('#se .tb button').forEach(b => b.onclick = () => tool(b.dataset.t));
+      document.querySelectorAll('#se .lay button').forEach(b => b.onclick = () => layer(b.dataset.l));
+      $('seshowcol').onchange = need; $('seg').onchange = need; $('setg').onchange = need; $('sebs').onchange = $('sebr').onchange = need;
+      $('sez').onchange = () => { const sx = cv.clientWidth / 2, sy = cv.clientHeight / 2, bx = sx / E.cam.z + E.cam.x, by = sy / E.cam.z + E.cam.y; E.cam.z = +$('sez').value; E.cam.x = bx - sx / E.cam.z; E.cam.y = by - sy / E.cam.z; need(); };
+      $('secc').oninput = () => { const v = $('secc').value, c = [parseInt(v.slice(1, 3), 16), parseInt(v.slice(3, 5), 16), parseInt(v.slice(5, 7), 16), +$('sea').value]; E.color = c; if (E.tool === 'eraser') tool('pencil'); need(); };
+      $('sea').oninput = () => { E.color[3] = +$('sea').value; $('seav').textContent = E.color[3]; need(); };
+      $('seu').onclick = () => { undo(); }; $('ser').onclick = () => { redo(); };
+      $('sefh').onclick = () => { snap(); const arr = E.layer === 'col' ? E.col : E.a32; flipArr(arr, E.w, E.h, true); E.layer === 'col' ? E.colDirty = true : E.artDirty = true; refreshPic(true); };
+      $('sefv').onclick = () => { snap(); const arr = E.layer === 'col' ? E.col : E.a32; flipArr(arr, E.w, E.h, false); E.layer === 'col' ? E.colDirty = true : E.artDirty = true; refreshPic(true); };
+      $('sesz').onclick = () => {
+        const v = prompt(`New canvas size (width x height). The picture keeps its top-left corner.${E.cell ? ' Use a multiple of ' + E.cell + ' for a tile sheet.' : ''}`, E.w + 'x' + E.h); if (!v) return;
+        const m = /^\s*(\d+)\s*[x×,]\s*(\d+)\s*$/i.exec(v); if (!m) return msg('Type it like 64x48.');
+        const nw = +m[1], nh = +m[2]; if (nw < 1 || nh < 1 || nw > 4096 || nh > 4096) return msg('Sizes are 1 to 4096.');
+        if (E.cell && (nw % E.cell || nh % E.cell)) return msg(`A tile sheet must be a multiple of ${E.cell}.`);
+        resize(nw, nh);
+      };
+      $('seadd').onclick = () => { resize(E.w, E.h + E.cell); const cols = Math.floor(E.w / E.cell), first = (Math.floor(E.h / E.cell) - 1) * cols; msg(`Added tiles ${first}-${first + cols - 1}. They start empty and walkable.`); };
+      $('seimp').onclick = () => $('sef').click();
+      $('sef').onchange = () => {
+        const f = $('sef').files[0]; $('sef').value = ''; if (!f) return; const img = new Image();
+        img.onload = () => {
+          const replace = confirm(`Import ${f.name} (${img.width}x${img.height}).\n\nOK = make it the new picture (canvas takes its size).\nCancel = paste it onto the current picture from the top-left.`);
+          const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const cg = c.getContext('2d'); cg.drawImage(img, 0, 0); const d = cg.getImageData(0, 0, img.width, img.height).data;
+          snap();
+          if (replace) { setDoc(img.width, img.height, new Uint8ClampedArray(d), E.col ? new Uint8Array(img.width * img.height) : null); fit(); }
+          else { for (let y = 0; y < Math.min(img.height, E.h); y++) for (let x = 0; x < Math.min(img.width, E.w); x++) { const i = (y * img.width + x) * 4; if (d[i + 3]) { E.bytes.set([d[i], d[i + 1], d[i + 2], d[i + 3]], (y * E.w + x) * 4); } } refreshPic(true); }
+          E.artDirty = true; if (replace) E.colDirty = true; msg('Imported ' + f.name + '.');
+        }; img.onerror = () => msg('Could not read that image.'); img.src = URL.createObjectURL(f);
+      };
+      document.addEventListener('keydown', e => {
+        if (!E.open) return; e.stopPropagation();
+        if (e.code === 'Space' && !/INPUT|SELECT|TEXTAREA|BUTTON/.test(e.target.tagName)) { E.space = true; e.preventDefault(); return; }
+        if (e.key === 'Escape') { $('sex').click(); return; }
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+        if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y')) { e.preventDefault(); redo(); return; }
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); return; }
+        if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.key === '[' || e.key === ']') { const s = $('sebs'); s.selectedIndex = Math.max(0, Math.min(s.options.length - 1, s.selectedIndex + (e.key === ']' ? 1 : -1))); need(); return; }
+        const t = { b: 'pencil', e: 'eraser', g: 'fill', r: 'replace', i: 'pick', l: 'line', u: 'rect' }[e.key.toLowerCase()]; if (t) tool(t);
+      }, true);
+      document.addEventListener('keyup', e => { if (e.code === 'Space') E.space = false; }, true);
+      new ResizeObserver(need).observe($('sew'));
+    })();
+  </script>
+
+  <script id="ui">
+    // ===== UI =====
+    if (typeof document !== 'undefined') (() => {
+      const $ = id => document.getElementById(id);
+      const S = {
+        base: null, baseStr: '', baseDir: null, modsDir: null, single: false, mods: [], cur: '', recs: [], W: null, area: null, sel: null,
+        tool: 'select', cam: { x: 0, y: 0, z: 0.5 }, undo: [], dirty: false, imgs: new Map(), pending: {}, pendList: [], tint: new Map(),
+        brush: 0, type: '', drag: null, pan: null, space: false, hover: null, needDraw: true, thumbs: true
+      };
+      const cv = $('c'), ctx = cv.getContext('2d');
+      const hasFS = !!window.showDirectoryPicker;
+
+      // ---- files ----
+      async function getDir(dir, path, create) { let d = dir; for (const p of path.split('/').filter(Boolean)) d = await d.getDirectoryHandle(p, { create: !!create }); return d; }
+      async function getFile(dir, path) { const parts = path.split('/'); const d = await getDir(dir, parts.slice(0, -1).join('/')); return (await d.getFileHandle(parts.at(-1))).getFile(); }
+      async function putFile(dir, path, data) {
+        const parts = path.split('/'); const d = await getDir(dir, parts.slice(0, -1).join('/'), true);
+        const w = await (await d.getFileHandle(parts.at(-1), { create: true })).createWritable(); await w.write(data); await w.close();
+      }
+      const srcDir = src => src === 'base' ? S.baseDir : (S.mods.find(m => m.id === src) || {}).dir;
+      function getImg(src, path) {
+        if (!path) return null;
+        const k = src + '|' + path, c = S.imgs.get(k); if (c) return c.bmp;
+        const e = { bmp: null }; S.imgs.set(k, e);
+        (async () => { const f = S.pending[k] || await getFile(srcDir(src), path); e.bmp = await createImageBitmap(f); S.needDraw = true; S.thumbs = true; if (S.W) renderPalette(); })().catch(() => { });
+        return null;
+      }
+
+      // ---- load ----
+      async function openBase() {
+        if (!hasFS) return toast('This browser has no folder access. Use Chrome or Edge.');
+        try {
+          const d = await showDirectoryPicker({ id: 'ge-base' });
+          const txt = await (await getFile(d, 'base.json')).text();
+          S.baseDir = d; S.base = JSON.parse(txt); S.baseStr = txt; S.imgs.clear(); S.tint.clear();
+          const sel = $('area'); sel.disabled = false;
+          sel.innerHTML = Object.entries(S.base.areas).sort((a, b) => a[1].legacyId - b[1].legacyId).map(([id, a]) => `<option value="${id}">${a.legacyId}: ${esc(S.base.texts[a.name] || id)}</option>`).join('');
+          rebuild(); selectArea(S.base.areas['base:area/0'] ? 'base:area/0' : sel.value, true);
+          $('empty').style.display = 'none';
+        } catch (e) { if (e.name !== 'AbortError') toast('Could not open: ' + e.message + ' (pick the folder made by --export-base)'); }
+      }
+      async function readMod(h) {
+        const manifest = JSON.parse(await (await h.getFileHandle('manifest.json').then(x => x.getFile())).text());
+        const m = { id: manifest.id || h.name, dir: h, manifest, files: [] };
+        try {
+          const dd = await h.getDirectoryHandle('data'); const names = [];
+          for await (const [n, fh] of dd.entries()) if (fh.kind === 'file' && n.endsWith('.json')) names.push(n);
+          names.sort();
+          for (const n of names) {
+            try { const j = JSON.parse(await (await (await dd.getFileHandle(n)).getFile()).text()); m.files.push({ name: n, records: Array.isArray(j) ? j : [j] }); }
+            catch (e) { toast(`${m.id}/${n}: ${e.message}`); }
+          }
+        } catch (e) { /* no data folder yet */ }
+        return m;
+      }
+      async function loadMods(d) {
+        S.mods = [];
+        try { await d.getFileHandle('manifest.json'); S.single = true; S.mods.push(await readMod(d)); }
+        catch (e) {
+          S.single = false;
+          for await (const [n, h] of d.entries()) if (h.kind === 'directory') { try { S.mods.push(await readMod(h)); } catch (e2) { /* not a mod */ } }
+        }
+        S.mods = orderMods(S.mods);
+      }
+      async function openMods() {
+        if (!hasFS) return toast('This browser has no folder access. Use Chrome or Edge.');
+        try {
+          const d = await showDirectoryPicker({ id: 'ge-mods', mode: 'readwrite' });
+          S.modsDir = d; await loadMods(d); fillModSelects();
+          const first = S.mods.find(m => m.id !== 'testmod') || S.mods[0];
+          setEditing(S.mods.length === 1 && first ? first.id : '');
+          rebuild();
+        } catch (e) { if (e.name !== 'AbortError') toast('Could not open: ' + e.message); }
+      }
+      function fillModSelects() {
+        $('modSel').innerHTML = '<option value="">(view only)</option>' + S.mods.map(m => `<option value="${m.id}">${m.id}</option>`).join('');
+        $('chMod').innerHTML = '<option value="">all mods</option>' + S.mods.map(m => `<option value="${m.id}">${m.id}</option>`).join('');
+        $('modSel').value = S.cur;
+      }
+      function setEditing(id) {
+        S.cur = id; S.undo = []; S.dirty = false; S.pendList = [];
+        const m = S.mods.find(x => x.id === id), f = m && m.files.find(f => f.name === EDFILE);
+        S.recs = f ? clone(f.records) : [];
+        $('modSel').value = id; updateTitle(); rebuild();
+      }
+      async function newMod() {
+        if (!S.modsDir || S.single) return toast('Open your mods folder first (not a single mod).');
+        const id = (prompt('New mod id (lowercase letters, digits, _):') || '').trim();
+        if (!/^[a-z][a-z0-9_]*$/.test(id) || id === 'base') return toast('Bad id. Use lowercase letters, digits and _.');
+        if (S.mods.some(m => m.id === id)) return toast('That mod already exists.');
+        try {
+          const d = await S.modsDir.getDirectoryHandle(id, { create: true });
+          await putFile(d, 'manifest.json', JSON.stringify({ id, version: '1.0', game_api: '1', requires: [], load_after: [] }, null, 2));
+          await loadMods(S.modsDir); fillModSelects(); setEditing(id);
+        } catch (e) { toast('Could not create: ' + e.message); }
+      }
+
+      // ---- world ----
+      function modList() {
+        return S.mods.map(m => {
+          const files = m.files.filter(f => f.name !== EDFILE || m.id !== S.cur).map(f => ({ name: f.name, records: f.records }));
+          if (m.id === S.cur) files.push({ name: EDFILE, records: S.recs });
+          return { id: m.id, files };
+        });
+      }
+      function rebuild() {
+        if (!S.base) return;
+        S.W = buildWorld(S.base, modList());
+        if (S.area && !S.W.areas[S.area]) S.area = null;
+        refreshAreaList(); renderChanges(); renderSelected(); renderPalette(); S.needDraw = true;
+      }
+      function refreshAreaList() {
+        const sel = $('area'), keep = S.area || sel.value;
+        const base = Object.entries(S.W.areas).filter(([, a]) => a.src === 'base').sort((a, b) => a[1].legacyId - b[1].legacyId);
+        const mod = Object.entries(S.W.areas).filter(([, a]) => a.src !== 'base');
+        sel.innerHTML = base.map(([id, a]) => `<option value="${id}">${a.legacyId}: ${esc(S.W.texts[a.name] || id)}</option>`).join('')
+          + mod.map(([id, a]) => `<option value="${id}">[${a.src}] ${esc(S.W.texts[a.name] || id)}</option>`).join('');
+        if (S.W.areas[keep]) sel.value = keep;
+      }
+      function selectArea(id, fit) {
+        if (!S.W || !S.W.areas[id]) return; S.area = id; $('area').value = id; S.sel = null;
+        if (fit) fitView(); renderChanges(); renderSelected(); renderPalette(); S.needDraw = true; updateTitle();
+      }
+      function fitView() {
+        const a = S.W.areas[S.area]; if (!a) return;
+        const w = a.width * 32, h = a.height * 32, vw = cv.clientWidth, vh = cv.clientHeight;
+        const z = Math.min(vw / w, vh / h, 1); S.cam.z = Math.max(0.1, z); S.cam.x = -(vw / S.cam.z - w) / 2; S.cam.y = -(vh / S.cam.z - h) / 2;
+      }
+      const clone = o => JSON.parse(JSON.stringify(o));
+      const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      function toast(t) { const m = $('msg'); m.textContent = t; m.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => m.style.display = 'none', 4500); }
+      function updateTitle() {
+        const a = S.W && S.W.areas[S.area];
+        $('ttl').textContent = a ? `${esc(S.W.texts[a.name] || S.area)}  ${a.width}x${a.height} tiles${S.cur ? '  |  editing ' + S.cur : '  |  view only'}` : 'nothing loaded';
+        $('fDirty').textContent = S.dirty ? '● unsaved changes' : '';
+      }
+
+      // ---- edits ----
+      function snap() { S.undo.push(JSON.stringify(S.recs)); if (S.undo.length > 150) S.undo.shift(); }
+      function canEdit() { if (!S.cur) { toast('Choose a mod to edit first (or make one with New mod…).'); return false; } return true; }
+      function changed() { S.dirty = true; rebuild(); updateTitle(); }
+      function undo() { if (!S.undo.length) return; S.recs = JSON.parse(S.undo.pop()); S.dirty = true; rebuild(); updateTitle(); }
+      async function save() {
+        if (!S.cur) return toast('Nothing to save: no mod is selected.');
+        const m = S.mods.find(x => x.id === S.cur);
+        try {
+          for (const p of S.pendList) { await putFile(m.dir, p.path, p.file); delete S.pending[S.cur + '|' + p.path]; }
+          S.pendList = [];
+          if (S.recs.length || m.files.some(f => f.name === EDFILE)) await putFile(m.dir, 'data/' + EDFILE, JSON.stringify(S.recs, null, 2));
+          const f = m.files.find(f => f.name === EDFILE); if (f) f.records = clone(S.recs); else m.files.push({ name: EDFILE, records: clone(S.recs) });
+          S.dirty = false; updateTitle(); toast('Saved to ' + S.cur + '/data/' + EDFILE);
+        } catch (e) { toast('Save failed: ' + e.message); }
+      }
+
+      // ---- geometry ----
+      const curArea = () => S.W && S.W.areas[S.area];
+      const toWorld = (px, py) => ({ x: px / S.cam.z + S.cam.x, y: py / S.cam.z + S.cam.y });
+      function objRect(o) {
+        const ot = S.W.objtypes[o.objtype], img = ot && ot.png ? getImg(ot.src, ot.png) : null;
+        if (img) {
+          const ax = ot.anchorX != null ? ot.anchorX : Math.floor(img.width / 2), ay = ot.anchorY != null ? ot.anchorY : img.height - 1;
+          return { img, l: o.x - ax + (ot.dx || 0), t: o.y - ay + (ot.dy || 0), w: img.width, h: img.height };
+        }
+        if (o.box) return { img: null, l: o.box[0], t: o.box[1], w: Math.max(8, o.box[2] - o.box[0]), h: Math.max(8, o.box[3] - o.box[1]) };
+        return { img: null, l: o.x - 8, t: o.y - 16, w: 16, h: 16 };
+      }
+      // an NPC drawn from a mod's picture has a rectangle like an object; every other NPC is a dot with a small box
+      function npcRect(n) {
+        const an = n.anim && S.W.anims[n.anim], fr = an && an.frames[0], img = fr && fr.png ? getImg(an.src, fr.png) : null;
+        if (img) {
+          const ax = fr.anchorX != null ? fr.anchorX : Math.floor(img.width / 2), ay = fr.anchorY != null ? fr.anchorY : img.height - 1;
+          return { img, l: n.x - ax + (fr.dx || 0), t: n.y - ay + (fr.dy || 0), w: img.width, h: img.height };
+        }
+        return { img: null, l: n.x - 10, t: n.y - 30, w: 20, h: 32 };
+      }
+      function hitTest(wx, wy) {
+        const a = curArea(); if (!a) return null; let best = null;
+        if ($('lNpc').checked) for (const n of S.W.npcs) if (n.areaId === a.id) { const r = npcRect(n); if (wx >= r.l - 2 && wx <= r.l + r.w + 2 && wy >= r.t - 2 && wy <= r.t + r.h + 2) best = { kind: 'npc', id: n.id, y: n.y, ref: n }; }
+        if ($('lObj').checked) {
+          // 1st choice: a click on the art itself (a few pixels of slack, so thin sprites can be hit). Transparent parts are skipped so objects behind can be reached.
+          let loose = null;
+          for (const o of a.objects) {
+            const r = objRect(o); if (!(wx >= r.l && wx <= r.l + r.w && wy >= r.t && wy <= r.t + r.h)) continue;
+            let solid = !r.img;
+            if (r.img) { const px = Math.floor(wx - r.l), py = Math.floor(wy - r.t); for (let dy = -2; dy <= 2 && !solid; dy++) for (let dx = -2; dx <= 2 && !solid; dx++) if (px + dx >= 0 && py + dy >= 0 && px + dx < r.img.width && py + dy < r.img.height && opaqueAt(r.img, px + dx, py + dy)) solid = true; }
+            if (solid) { if (!best || o.y >= best.y) best = { kind: 'obj', id: o.id, y: o.y, ref: o }; }
+            else { const area = r.w * r.h; if (!loose || area < loose.area || (area === loose.area && o.y >= loose.y)) loose = { kind: 'obj', id: o.id, y: o.y, ref: o, area }; }
+          }
+          // 2nd choice: inside an object's picture but on a transparent part (a doodle with gaps): the smallest such picture wins
+          if (!best && loose) best = loose;
+        }
+        return best;
+      }
+      const alphaCache = new WeakMap();
+      function opaqueAt(img, x, y) {
+        let d = alphaCache.get(img);
+        if (!d) { const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const g = c.getContext('2d'); g.drawImage(img, 0, 0); d = g.getImageData(0, 0, img.width, img.height).data; alphaCache.set(img, d); }
+        return d[(y * img.width + x) * 4 + 3] > 8;
+      }
+
+      // ---- drawing ----
+      function tintOf(cid) {
+        const col = S.W.collisions[cid]; if (!col) return null;
+        const k = cid + '|' + col.src; if (S.tint.has(k)) return S.tint.get(k);
+        let out = null;
+        if (col.png) {
+          const img = getImg(col.src, col.png); if (!img) return null;
+          const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+          const id = g.getImageData(0, 0, c.width, c.height), p = id.data;
+          for (let i = 0; i < p.length; i += 4) { const on = p[i + 3] >= 128; p[i] = 255; p[i + 1] = 40; p[i + 2] = 40; p[i + 3] = on ? 255 : 0; }
+          g.putImageData(id, 0, 0); out = { c, tile: col.tile || 32, cols: Math.floor(c.width / (col.tile || 32)) };
+        } else {
+          const n = col.count || 0, cols = 16, c = document.createElement('canvas'); c.width = cols * 32; c.height = Math.max(1, Math.ceil(n / cols)) * 32; const g = c.getContext('2d'); g.fillStyle = '#ff2828';
+          for (const t of col.blocked_tiles || []) g.fillRect((t % cols) * 32, Math.floor(t / cols) * 32, 32, 32);
+          out = { c, tile: 32, cols };
+        }
+        S.tint.set(k, out); return out;
+      }
+      function draw() {
+        const dpr = 1, w = cv.clientWidth, h = cv.clientHeight;
+        if (cv.width !== w * dpr || cv.height !== h * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
+        ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#0b0f22'; ctx.fillRect(0, 0, w, h); ctx.imageSmoothingEnabled = false;
+        const a = curArea(); if (!a) return;
+        const z = S.cam.z, cx = S.cam.x, cy = S.cam.y, X = wx => Math.round((wx - cx) * z), Y = wy => Math.round((wy - cy) * z);
+        const c0 = Math.max(0, Math.floor(cx / 32)), c1 = Math.min(a.width - 1, Math.floor((cx + w / z) / 32)), r0 = Math.max(0, Math.floor(cy / 32)), r1 = Math.min(a.height - 1, Math.floor((cy + h / z) / 32));
+        const ts = S.W.tilesets[a.tileset], timg = ts ? getImg(ts.src, ts.png) : null, tt = ts ? ts.tile || 32 : 32;
+        const tcols = timg ? Math.max(1, Math.floor(timg.width / tt)) : 1, tcount = timg ? tcols * Math.floor(timg.height / tt) : 0;
+        const tint = $('lCol').checked ? tintOf(a.collision) : null;
+        const ids = $('lIds').checked && z >= 0.7;
+        for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+          const t = a.map[r][c], x0 = X(c * 32), y0 = Y(r * 32), dw = X((c + 1) * 32) - x0, dh = Y((r + 1) * 32) - y0;
+          if (timg && t < tcount) ctx.drawImage(timg, (t % tcols) * tt, Math.floor(t / tcols) * tt, tt, tt, x0, y0, dw, dh);
+          else { ctx.fillStyle = timg ? '#c0c' : '#1a2040'; ctx.fillRect(x0, y0, dw, dh); }
+          if (tint) { ctx.globalAlpha = 0.5; if (t < tint.cols * Math.floor(tint.c.height / tint.tile)) ctx.drawImage(tint.c, (t % tint.cols) * tint.tile, Math.floor(t / tint.cols) * tint.tile, tint.tile, tint.tile, x0, y0, dw, dh); ctx.globalAlpha = 1; }
+          if (ids) { ctx.fillStyle = '#fff'; ctx.font = '10px monospace'; ctx.fillText(t, x0 + 2, y0 + 10); }
+        }
+        if ($('lGrid').checked) {
+          ctx.strokeStyle = '#ffffff25'; ctx.lineWidth = 1; ctx.beginPath();
+          for (let c = c0; c <= c1 + 1; c++) { ctx.moveTo(X(c * 32) + .5, 0); ctx.lineTo(X(c * 32) + .5, h); }
+          for (let r = r0; r <= r1 + 1; r++) { ctx.moveTo(0, Y(r * 32) + .5); ctx.lineTo(w, Y(r * 32) + .5); } ctx.stroke();
+        }
+        // tiles patched by mods
+        if ($('lMod').checked && a.tilesChanged) {
+          ctx.strokeStyle = 'rgba(255,211,77,.55)'; ctx.lineWidth = 1;
+          for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) { const t = S.W.touch['t:' + a.id + '|' + c + ',' + r]; if (t) { ctx.strokeStyle = [...new Set(t.map(e => e.mod))].length > 1 ? 'rgba(255,154,60,.9)' : 'rgba(255,211,77,.6)'; ctx.strokeRect(X(c * 32) + 1.5, Y(r * 32) + 1.5, 32 * z - 3, 32 * z - 3); } }
+        }
+        // objects + npcs sorted by feet; ground objects first
+        const items = [];
+        if ($('lObj').checked) for (const o of a.objects) { const ot = S.W.objtypes[o.objtype]; items.push({ k: 'o', o, y: ot && ot.ground ? o.y - 1e6 : o.y }); }
+        if ($('lNpc').checked) for (const n of S.W.npcs) if (n.areaId === a.id) items.push({ k: 'n', n, y: n.y });
+        items.sort((p, q) => p.y - q.y);
+        const outline = (o, rect) => {
+          if (!$('lMod').checked) return;
+          let col = null; if (o.added) col = 'var(--add)'; else if (o.mods && o.mods.length) col = 'var(--patch)'; if (o.contested) col = 'var(--conf)';
+          if (col) { ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue(col.slice(4, -1)).trim() || '#ff0'; ctx.lineWidth = 2; ctx.strokeRect(X(rect.l) - 1, Y(rect.t) - 1, rect.w * z + 2, rect.h * z + 2); }
+        };
+        for (const it of items) {
+          if (it.k === 'o') {
+            const o = it.o, dr = S.drag && S.drag.o === o ? S.drag.o2 : o, r = objRect(dr);
+            if (r.img) ctx.drawImage(r.img, X(r.l), Y(r.t), Math.max(1, Math.round(r.w * z)), Math.max(1, Math.round(r.h * z)));
+            else { ctx.fillStyle = '#7a7ab855'; ctx.fillRect(X(r.l), Y(r.t), r.w * z, r.h * z); }
+            outline(dr, r);
+            if ($('lBox').checked && o.box) { ctx.strokeStyle = '#4af'; ctx.lineWidth = 1; ctx.strokeRect(X(o.box[0]) + .5, Y(o.box[1]) + .5, (o.box[2] - o.box[0]) * z, (o.box[3] - o.box[1]) * z); }
+            if ($('lBox').checked) { ctx.fillStyle = '#fff'; ctx.fillRect(X(dr.x) - 2, Y(dr.y) - 2, 4, 4); }
+          } else {
+            const n = S.drag && S.drag.n && S.drag.n.id === it.n.id ? S.drag.n2 : it.n, px = X(n.x), py = Y(n.y), nr = npcRect(n);
+            if (nr.img) { ctx.drawImage(nr.img, X(nr.l), Y(nr.t), Math.max(1, Math.round(nr.w * z)), Math.max(1, Math.round(nr.h * z))); if ($('lMod').checked && n.added) { ctx.strokeStyle = '#5fe08a'; ctx.lineWidth = 2; ctx.strokeRect(X(nr.l) - 1, Y(nr.t) - 1, nr.w * z + 2, nr.h * z + 2); } }
+            else { ctx.fillStyle = n.added ? '#5fe08a' : '#ffffff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(px, py - 12 * z, Math.max(4, 7 * z), 0, 7); ctx.fill(); ctx.stroke(); }
+            if (z >= 0.5) { ctx.fillStyle = '#fff'; ctx.font = '11px system-ui'; ctx.fillText(S.W.texts[n.name] || n.id, px + 9, py - 12 * z + 4); }
+          }
+        }
+        // objects removed by mods: red ghosts
+        if ($('lMod').checked) for (const o of S.W.removed[a.id] || []) {
+          const r = objRect(o); ctx.globalAlpha = .35; if (r.img) ctx.drawImage(r.img, X(r.l), Y(r.t), r.w * z, r.h * z); ctx.globalAlpha = 1;
+          ctx.strokeStyle = '#ff6b6b'; ctx.lineWidth = 2; ctx.setLineDash([5, 4]); ctx.strokeRect(X(r.l), Y(r.t), r.w * z, r.h * z); ctx.setLineDash([]);
+        }
+        if ($('lSp').checked) { ctx.fillStyle = '#7df'; for (const p of a.spawn_points || []) ctx.fillRect(X(p[0]) - 2, Y(p[1]) - 2, 4, 4); }
+        // selection
+        if (S.sel) {
+          let r = null;
+          if (S.sel.kind === 'obj') { const o = a.objects.find(o => o.id === S.sel.id); if (o) r = objRect(S.drag && S.drag.o === o ? S.drag.o2 : o); }
+          else { const n = S.W.npcs.find(n => n.id === S.sel.id); if (n) r = npcRect(S.drag && S.drag.n && S.drag.n.id === n.id ? S.drag.n2 : n); }
+          if (r) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.setLineDash([6, 3]); ctx.strokeRect(X(r.l) - 2, Y(r.t) - 2, r.w * z + 4, r.h * z + 4); ctx.setLineDash([]); }
+        }
+        // paint / place cursor
+        if (S.hover) {
+          if (S.tool === 'paint') {
+            const c = Math.floor(S.hover.x / 32), r = Math.floor(S.hover.y / 32);
+            if (c >= 0 && r >= 0 && c < a.width && r < a.height) {
+              const x0 = X(c * 32), y0 = Y(r * 32), dw = X((c + 1) * 32) - x0, dh = Y((r + 1) * 32) - y0;
+              if (timg && S.brush < tcount) { ctx.globalAlpha = .7; ctx.drawImage(timg, (S.brush % tcols) * tt, Math.floor(S.brush / tcols) * tt, tt, tt, x0, y0, dw, dh); ctx.globalAlpha = 1; }
+              ctx.strokeStyle = '#ffcc4d'; ctx.lineWidth = 2; ctx.strokeRect(x0 + 1, y0 + 1, dw - 2, dh - 2);
+            }
+          } else if (S.tool === 'place' && S.type) {
+            const o = { x: Math.round(S.hover.x), y: Math.round(S.hover.y), objtype: S.type }, r = objRect(o);
+            ctx.globalAlpha = .6; if (r.img) ctx.drawImage(r.img, X(r.l), Y(r.t), r.w * z, r.h * z); ctx.globalAlpha = 1;
+            ctx.fillStyle = '#ffcc4d'; ctx.fillRect(X(o.x) - 2, Y(o.y) - 2, 4, 4);
+          }
+        }
+        // area bounds
+        ctx.strokeStyle = '#ffffff55'; ctx.lineWidth = 1; ctx.strokeRect(X(0) + .5, Y(0) + .5, a.width * 32 * z, a.height * 32 * z);
+      }
+      function frame() {
+        if (S.thumbs && S.W && $('types').children.length) drawThumbs();
+        if (S.needDraw) { S.needDraw = false; if (S.W) draw(); }
+        requestAnimationFrame(frame);
+      }
+
+      // ---- side panels ----
+      function renderSelected() {
+        const b = $('selBody'); const a = curArea();
+        if (!a || !S.sel) { b.innerHTML = '<div class="hint">Click an object or NPC. With the Move tool, drag it. <kbd>Del</kbd> removes it, arrows nudge it.</div>'; $('fSel').textContent = ''; return; }
+        if (S.sel.kind === 'npc') {
+          const n = S.W.npcs.find(n => n.id === S.sel.id); if (!n) { S.sel = null; return renderSelected(); }
+          const ed = S.cur ? '' : 'disabled', tags = (n.mods || []).map(m => `<span class="tag ${m.kind}">${m.kind} · ${esc(m.mod)}</span>`).join('');
+          b.innerHTML = `<div><b>${esc(S.W.texts[n.name] || n.id)}</b> <span class="hint">${esc(n.id)}</span></div><div>${tags}</div>
+            <div class="hint">NPC${n.stationary ? ' (stationary)' : ''}. Moving a base NPC moves where it starts; a wandering one keeps its route relative to that.</div>
+            <div class="row"><label>x <input id="nx" type="number" value="${n.x}" style="width:5.5em" ${ed}></label><label>y <input id="ny" type="number" value="${n.y}" style="width:5.5em" ${ed}></label></div>
+            <div class="row"><button id="napp" ${ed}>Apply</button><button id="ndel" ${ed}>Delete NPC</button><button id="nart" ${ed}>Edit picture…</button></div>`;
+          $('fSel').textContent = `${n.id} @ ${n.x},${n.y}`;
+          $('napp').onclick = () => { if (!canEdit()) return; snap(); edMoveNpc(S.recs, n, +$('nx').value, +$('ny').value); changed(); };
+          $('ndel').onclick = () => deleteSelected();
+          $('nart').onclick = () => editNpcPicture(n);
+          return;
+        }
+        const o = a.objects.find(o => o.id === S.sel.id); if (!o) { S.sel = null; return renderSelected(); }
+        const tags = (o.mods || []).map(m => `<span class="tag ${m.kind}">${m.kind} · ${esc(m.mod)}</span>`).join('') + (o.contested ? '<span class="tag conf">contested</span>' : '');
+        const ed = S.cur ? '' : 'disabled';
+        b.innerHTML = `<div><b>${esc(o.id)}</b></div><div class="hint">type ${esc(o.objtype)}${o.slot >= 0 ? ' · slot ' + o.slot : ''}</div><div>${tags}</div>
+          <div class="row"><label>x <input id="sx" type="number" value="${o.x}" style="width:5.5em" ${ed}></label><label>y <input id="sy" type="number" value="${o.y}" style="width:5.5em" ${ed}></label></div>
+          <div class="row"><label>reach <input id="srx" type="number" value="${o.reach ? o.reach[0] : ''}" placeholder="none" style="width:5em" ${ed}> × <input id="sry" type="number" value="${o.reach ? o.reach[1] : ''}" placeholder="none" style="width:5em" ${ed}></label></div>
+          <div class="row"><label>Sign text<br><textarea id="ssign" rows="2" style="width:340px" ${ed}>${esc(o.sign ? S.W.texts[o.sign] || '' : '')}</textarea></label></div>
+          <div class="row"><label>Message text<br><textarea id="smsg" rows="2" style="width:340px" ${ed}>${esc(o.message ? S.W.texts[o.message] || '' : '')}</textarea></label></div>
+          <div class="row"><button id="sapp" ${ed}>Apply</button><button id="sdel" ${ed}>Delete object</button><button id="sart" ${ed}>Edit art…</button></div>
+          <div class="row"><b>Door</b>${S.W.exits.filter(e => e.object === o.id).map(e => `<span class="hint">→ ${esc(e.to)} at ${e.spawn} (${e.on_touch === false ? 'press Z' : 'on touch'}, ${esc(e.src)}) ${e.src === S.cur ? `<button data-rx="${esc(e.id)}">remove</button>` : ''}</span>`).join('') || '<span class="hint">no exit from this object</span>'}</div>
+          <div class="row"><label>Leads to <select id="dto">${Object.keys(S.W.areas).map(id => `<option value="${esc(id)}">${esc(S.W.areas[id].src === 'base' ? S.W.areas[id].legacyId + ': ' : '[' + S.W.areas[id].src + '] ')}${esc(S.W.texts[S.W.areas[id].name] || id)}</option>`).join('')}</select></label></div>
+          <div class="row"><label>land at x <input id="dsx" type="number" style="width:5.5em"></label><label>y <input id="dsy" type="number" style="width:5.5em"></label><label><input type="checkbox" id="dtouch" checked> on touch</label><label><input type="checkbox" id="dback"> add a way back</label></div>
+          <div class="row"><button id="dgo" ${ed}>Make door</button><span class="hint">Without "on touch" the pet presses Z at the door. Click the map with the Select tool to read x, y for the landing spot.</span></div>`;
+        $('fSel').textContent = `${o.id} @ ${o.x},${o.y}`;
+        const fillSpawn = () => { const d = S.W.areas[$('dto').value]; if (d) { $('dsx').value = Math.round(d.width * 16); $('dsy').value = Math.round(d.height * 16); } };
+        $('dto').value = (S.W.exits.find(e => e.object === o.id) || {}).to || (Object.keys(S.W.areas).find(id => S.W.areas[id].src !== 'base') || S.area); $('dto').onchange = fillSpawn; fillSpawn();
+        const ex = S.W.exits.find(e => e.object === o.id); if (ex) { $('dsx').value = ex.spawn[0]; $('dsy').value = ex.spawn[1]; $('dtouch').checked = ex.on_touch !== false; }
+        b.querySelectorAll('[data-rx]').forEach(btn => btn.onclick = () => { snap(); edRemoveExit(S.recs, btn.dataset.rx); changed(); });
+        $('dgo').onclick = () => {
+          if (!canEdit()) return; snap();
+          try { edAddExit(S.recs, S.W, S.cur, { from: o.areaId, object: o.id, to: $('dto').value, spawn: [+$('dsx').value, +$('dsy').value], onTouch: $('dtouch').checked, wayBack: $('dback').checked }); changed(); toast('Door made.'); }
+          catch (e) { S.undo.pop(); toast(e.message); }
+        };
+        $('sapp').onclick = () => {
+          if (!canEdit()) return; snap();
+          const x = +$('sx').value, y = +$('sy').value; if (x !== o.x || y !== o.y) edMoveObject(S.recs, o, x, y);
+          const rx = $('srx').value, ry = $('sry').value; if (rx !== '' && ry !== '' && (!o.reach || +rx !== o.reach[0] || +ry !== o.reach[1])) edPatchObject(S.recs, o, { reach: [Math.max(1, +rx | 0), Math.max(1, +ry | 0)] });
+          const st = $('ssign').value.trim(), mt = $('smsg').value.trim();
+          if (st && st !== (S.W.texts[o.sign] || '')) edSetText(S.recs, S.W, S.cur, o, 'sign', st);
+          else if (mt && mt !== (S.W.texts[o.message] || '')) edSetText(S.recs, S.W, S.cur, o, 'message', mt);
+          changed();
+        };
+        $('sdel').onclick = () => deleteSelected();
+        $('sart').onclick = () => editObjectArt(o);
+      }
+      function deleteSelected() {
+        if (S.sel && S.sel.kind === 'npc') {
+          if (!canEdit()) return; const n = S.W.npcs.find(n => n.id === S.sel.id); if (!n) return;
+          snap(); edDeleteNpc(S.recs, n); S.sel = null; changed(); return;
+        }
+        if (!S.sel || S.sel.kind !== 'obj' || !canEdit()) return;
+        const o = curArea().objects.find(o => o.id === S.sel.id); if (!o) return;
+        snap(); edDeleteObject(S.recs, o); S.sel = null; changed();
+      }
+      function renderPalette() {
+        const a = curArea(), pal = $('pal'); if (!a) return;
+        const ts = S.W.tilesets[a.tileset], img = ts ? getImg(ts.src, ts.png) : null, g = pal.getContext('2d');
+        if (!img) { pal.width = 16; pal.height = 16; $('brushInfo').textContent = ts ? 'loading…' : 'no tileset'; return; }
+        pal.width = img.width; pal.height = img.height; g.imageSmoothingEnabled = false; g.clearRect(0, 0, pal.width, pal.height); g.drawImage(img, 0, 0);
+        const tt = ts.tile || 32, cols = Math.floor(img.width / tt), count = cols * Math.floor(img.height / tt), col = S.W.collisions[a.collision];
+        const bx = (S.brush % cols) * tt, by = Math.floor(S.brush / cols) * tt;
+        g.strokeStyle = '#ffcc4d'; g.lineWidth = 2; g.strokeRect(bx + 1, by + 1, tt - 2, tt - 2);
+        $('brushInfo').textContent = `of ${count} tiles${col && col.count != null && col.count < count ? ' (collision covers ' + col.count + ')' : ''}`;
+        pal.dataset.tt = tt; pal.dataset.cols = cols; pal.dataset.count = count;
+      }
+      function drawThumbs() {
+        S.thumbs = false;
+        for (const c of $('types').children) {
+          const ot = S.W.objtypes[c.dataset.id]; const img = ot && ot.png ? getImg(ot.src, ot.png) : null; const g = c.getContext('2d');
+          g.clearRect(0, 0, c.width, c.height); g.imageSmoothingEnabled = false;
+          if (img) { const s = Math.min(c.width / img.width, c.height / img.height, 2); const w = img.width * s, h = img.height * s; g.drawImage(img, (c.width - w) / 2, (c.height - h) / 2, w, h); }
+          else { g.fillStyle = '#8b90ad'; g.font = '10px system-ui'; g.fillText(ot && ot.png ? '…' : 'no art', 4, 30); }
+        }
+      }
+      function renderTypes() {
+        if (!S.W) return; const q = $('tyq').value.trim().toLowerCase(), box = $('types'); box.innerHTML = '';
+        const ids = Object.keys(S.W.objtypes).filter(id => !q || id.toLowerCase().includes(q)).sort((a, b) => (S.W.objtypes[a].src === 'base') - (S.W.objtypes[b].src === 'base') || a.localeCompare(b, undefined, { numeric: true }));
+        for (const id of ids) {
+          const c = document.createElement('canvas'); c.width = 62; c.height = 56; c.dataset.id = id; c.title = id; if (id === S.type) c.className = 'on';
+          c.onclick = () => { S.type = id; S.npcArm = null; $('tyInfo').textContent = 'Selected: ' + id + '. Choose the Place tool and click the map.'; for (const x of box.children) x.classList.toggle('on', x.dataset.id === id); document.querySelector('input[name=tool][value=place]').click(); };
+          box.appendChild(c);
+        }
+        S.thumbs = true;
+      }
+      function renderChanges() {
+        const box = $('changes'); if (!S.W) { box.innerHTML = ''; return; }
+        const only = $('chMod').value, here = $('chHere').checked, a = curArea();
+        let list = S.W.log.filter(e => (!only || e.mod === only) && e.kind !== 'text' && !(e.rec.type === 'text'));
+        if (here && a) list = list.filter(e => e.rec.area === a.id || e.rec.id === a.id || e.rec.from === a.id || (e.rec.type === 'npc' && (e.rec.area === a.id)));
+        $('chCount').textContent = `(${list.length})`;
+        box.innerHTML = list.map((e, i) => {
+          const r = e.rec, kind = e.kind === 'skipped' ? 'conf' : e.kind;
+          const diffs = e.diffs.map(d => `${d[0]}: ${esc(d[1] === undefined ? '—' : JSON.stringify(d[1]))} → ${esc(JSON.stringify(d[2]))}`).join(', ');
+          const conf = e.contested ? `<span class="tag conf">also: ${esc(e.contested.filter(m => m !== e.mod).join(', '))}${e.contested[e.contested.length - 1] === e.mod ? ' · this wins' : ' · overwritten'}</span>` : '';
+          const base = e.kind !== 'add' && /^base:/.test(r.id || '') ? '<span class="tag patch">base</span>' : '';
+          return `<div class="ch" data-i="${i}"><span class="tag ${kind}">${esc(e.kind === 'skipped' ? 'not applied' : e.kind)}</span><b>${esc(r.type)}</b> ${esc(r.id)} ${base}${conf}<div class="d">${esc(e.mod)} / ${esc(e.file)}${diffs ? '<br>' + diffs : ''}</div></div>`;
+        }).join('') || '<div class="hint">No mod changes' + (here ? ' in this area.' : '.') + '</div>';
+        box.onclick = ev => {
+          const el = ev.target.closest('.ch'); if (!el) return; const e = list[+el.dataset.i], r = e.rec; const aid = r.type === 'area' ? r.id : (r.area || r.from);
+          if (aid && S.W.areas[aid]) { selectArea(aid, aid !== S.area); if (r.type === 'object' && e.kind !== 'remove') { S.sel = { kind: 'obj', id: r.id }; const o = S.W.areas[aid].objects.find(o => o.id === r.id); if (o) { S.cam.x = o.x - cv.clientWidth / S.cam.z / 2; S.cam.y = o.y - cv.clientHeight / S.cam.z / 2; } renderSelected(); S.needDraw = true; } }
+        };
+      }
+
+      // ---- mouse / keys ----
+      function pos(ev) { const r = cv.getBoundingClientRect(); return { px: ev.clientX - r.left, py: ev.clientY - r.top }; }
+      function paintAt(w) {
+        const a = curArea(); if (!a) return; const c = Math.floor(w.x / 32), r = Math.floor(w.y / 32);
+        if (c < 0 || r < 0 || c >= a.width || r >= a.height || a.map[r][c] === S.brush) return;
+        const ts = S.W.tilesets[a.tileset], col = S.W.collisions[a.collision], img = ts && getImg(ts.src, ts.png);
+        if (img) { const tt = ts.tile || 32, n = Math.floor(img.width / tt) * Math.floor(img.height / tt); if (S.brush >= n) return toast(`Tile ${S.brush} does not exist in this tileset (${n} tiles).`); }
+        if (col && col.count != null && S.brush >= col.count) return toast(`Collision only covers ${col.count} tiles; tile ${S.brush} would be blocked and fail to load.`);
+        if (!S.drag || !S.drag.paint) { snap(); S.drag = { paint: true }; }
+        edPaint(S.recs, S.W, a.id, c, r, S.brush); S.dirty = true; rebuildQuick();
+      }
+      function rebuildQuick() { S.W = buildWorld(S.base, modList()); S.needDraw = true; updateTitle(); }
+      cv.addEventListener('contextmenu', e => e.preventDefault());
+      cv.addEventListener('mousedown', ev => {
+        if (!S.W || !curArea()) return; const { px, py } = pos(ev), w = toWorld(px, py);
+        if (ev.button === 1 || (ev.button === 0 && S.space)) { S.pan = { px, py, cx: S.cam.x, cy: S.cam.y }; ev.preventDefault(); return; }
+        if (ev.button === 2) {
+          const a = curArea(); const c = Math.floor(w.x / 32), r = Math.floor(w.y / 32);
+          if (c >= 0 && r >= 0 && c < a.width && r < a.height) { S.brush = a.map[r][c]; $('brush').value = S.brush; renderPalette(); toast('Copied tile ' + S.brush); }
+          return;
+        }
+        if (ev.button !== 0) return;
+        if (S.tool === 'paint') { if (canEdit()) paintAt(w); return; }
+        if (S.tool === 'place' && S.npcArm) {
+          if (!canEdit()) return; const arm = S.npcArm; snap();
+          const slug = arm.file.name.replace(/\.png$/i, '').toLowerCase().replace(/[^a-z0-9_]/g, '_') || 'npc', path = 'assets/' + slug + '.png', key = S.cur + '|' + path;
+          S.pending[key] = arm.file; S.pendList = S.pendList.filter(p => p.path !== path); S.pendList.push({ path, file: arm.file }); S.imgs.delete(key);
+          const id = edAddNpc(S.recs, S.W, S.cur, { areaId: curArea().id, x: w.x, y: w.y, name: arm.name, lines: arm.lines, png: path, stationary: arm.stationary });
+          S.npcArm = null; changed(); S.sel = { kind: 'npc', id }; renderSelected(); toast('NPC placed.'); return;
+        }
+        if (S.tool === 'place') {
+          if (!S.type) return toast('Pick an object type in "Place objects" first.'); if (!canEdit()) return;
+          snap(); const id = edAddObject(S.recs, S.W, S.cur, curArea().id, S.type, w.x, w.y); changed(); S.sel = { kind: 'obj', id }; renderSelected(); return;
+        }
+        const hit = hitTest(w.x, w.y);
+        S.sel = hit ? { kind: hit.kind, id: hit.id } : null; renderSelected();
+        if (hit && hit.kind === 'obj' && S.tool === 'move') {
+          if (!S.cur) { toast('Choose a mod to edit first.'); } else S.drag = { o: hit.ref, o2: { ...hit.ref }, ox: w.x - hit.ref.x, oy: w.y - hit.ref.y, moved: false };
+        }
+        if (hit && hit.kind === 'npc' && S.tool === 'move') {
+          if (!S.cur) toast('Choose a mod to edit first.'); else S.drag = { n: hit.ref, n2: { ...hit.ref }, ox: w.x - hit.ref.x, oy: w.y - hit.ref.y, moved: false };
+        }
+        S.needDraw = true;
+      });
+      window.addEventListener('mousemove', ev => {
+        if (!S.W) return; const { px, py } = pos(ev), w = toWorld(px, py); S.hover = w;
+        if (S.pan) { S.cam.x = S.pan.cx - (px - S.pan.px) / S.cam.z; S.cam.y = S.pan.cy - (py - S.pan.py) / S.cam.z; }
+        else if (S.drag && S.drag.o) { S.drag.o2.x = Math.round(w.x - S.drag.ox); S.drag.o2.y = Math.round(w.y - S.drag.oy); S.drag.moved = true; }
+        else if (S.drag && S.drag.n) { S.drag.n2.x = Math.round(w.x - S.drag.ox); S.drag.n2.y = Math.round(w.y - S.drag.oy); S.drag.moved = true; }
+        else if (S.tool === 'paint' && (ev.buttons & 1) && S.cur) paintAt(w);
+        const a = curArea(); if (a) { const c = Math.floor(w.x / 32), r = Math.floor(w.y / 32); $('fPos').textContent = `x ${Math.round(w.x)}  y ${Math.round(w.y)}  tile ${c},${r}` + (c >= 0 && r >= 0 && c < a.width && r < a.height ? '  id ' + a.map[r][c] : ''); }
+        S.needDraw = true;
+      });
+      window.addEventListener('mouseup', () => {
+        if (S.drag && S.drag.o && S.drag.moved) { snap(); edMoveObject(S.recs, S.drag.o, S.drag.o2.x, S.drag.o2.y); S.drag = null; changed(); }
+        else if (S.drag && S.drag.n && S.drag.moved) { snap(); edMoveNpc(S.recs, S.drag.n, S.drag.n2.x, S.drag.n2.y); S.drag = null; changed(); }
+        else if (S.drag && S.drag.paint) { S.drag = null; changed(); }
+        else S.drag = null;
+        S.pan = null; S.needDraw = true;
+      });
+      cv.addEventListener('wheel', ev => {
+        if (!S.W) return; ev.preventDefault(); const { px, py } = pos(ev), before = toWorld(px, py);
+        S.cam.z = Math.min(6, Math.max(0.1, S.cam.z * (ev.deltaY < 0 ? 1.15 : 1 / 1.15)));
+        S.cam.x = before.x - px / S.cam.z; S.cam.y = before.y - py / S.cam.z; S.needDraw = true;
+      }, { passive: false });
+      window.addEventListener('keydown', ev => {
+        if (/INPUT|TEXTAREA|SELECT/.test(ev.target.tagName)) return;
+        if (ev.code === 'Space') { S.space = true; ev.preventDefault(); return; }
+        if (ev.ctrlKey && ev.key.toLowerCase() === 'z') { ev.preventDefault(); return undo(); }
+        if (ev.ctrlKey && ev.key.toLowerCase() === 's') { ev.preventDefault(); return save(); }
+        const tools = { s: 'select', m: 'move', p: 'paint', a: 'place' }, lay = { c: 'lCol', o: 'lObj', n: 'lNpc' }, k = ev.key.toLowerCase();
+        if (!ev.ctrlKey && tools[k]) document.querySelector(`input[name=tool][value=${tools[k]}]`).click();
+        else if (!ev.ctrlKey && lay[k]) { $(lay[k]).click(); }
+        else if (ev.key === 'Delete' || ev.key === 'Backspace') deleteSelected();
+        else if (ev.key.startsWith('Arrow') && S.sel && S.sel.kind === 'obj' && canEdit()) {
+          const o = curArea().objects.find(o => o.id === S.sel.id); if (!o) return; const d = ev.shiftKey ? 8 : 1;
+          const dx = ev.key === 'ArrowLeft' ? -d : ev.key === 'ArrowRight' ? d : 0, dy = ev.key === 'ArrowUp' ? -d : ev.key === 'ArrowDown' ? d : 0;
+          snap(); edMoveObject(S.recs, o, o.x + dx, o.y + dy); changed(); ev.preventDefault();
+        }
+      });
+      window.addEventListener('keyup', ev => { if (ev.code === 'Space') S.space = false; });
+      window.addEventListener('beforeunload', ev => { if (S.dirty) { ev.preventDefault(); ev.returnValue = ''; } });
+      new ResizeObserver(() => { S.needDraw = true; }).observe(cv);
+
+      // ---- wiring ----
+      $('bBase').onclick = openBase; $('bMods').onclick = openMods; $('bNew').onclick = newMod; $('bUndo').onclick = undo; $('bSave').onclick = save;
+      $('modSel').onchange = e => { if (S.dirty && !confirm('Discard unsaved changes in ' + S.cur + '?')) { e.target.value = S.cur; return; } setEditing(e.target.value); };
+      $('area').onchange = e => selectArea(e.target.value, true);
+      document.querySelectorAll('input[name=tool]').forEach(r => r.onchange = () => { S.tool = r.value; if (r.value !== 'place') S.npcArm = null; cv.style.cursor = S.tool === 'paint' || S.tool === 'place' ? 'crosshair' : S.tool === 'move' ? 'move' : 'default'; S.needDraw = true; });
+      ['lCol', 'lObj', 'lBox', 'lNpc', 'lIds', 'lGrid', 'lSp', 'lMod'].forEach(id => $(id).onchange = () => S.needDraw = true);
+      $('chMod').onchange = renderChanges; $('chHere').onchange = renderChanges;
+      $('brush').onchange = e => { S.brush = Math.max(0, +e.target.value | 0); renderPalette(); };
+      $('pal').addEventListener('click', ev => {
+        const p = $('pal'), tt = +p.dataset.tt, cols = +p.dataset.cols, count = +p.dataset.count; if (!tt) return;
+        const r = p.getBoundingClientRect(), x = (ev.clientX - r.left) * p.width / r.width, y = (ev.clientY - r.top) * p.height / r.height;
+        const t = Math.floor(y / tt) * cols + Math.floor(x / tt); if (t >= 0 && t < count) { S.brush = t; $('brush').value = t; renderPalette(); S.needDraw = true; }
+      });
+      $('tyq').oninput = renderTypes;
+      document.querySelector('details:nth-of-type(3)').addEventListener('toggle', e => { if (e.target.open) renderTypes(); });
+      $('bNewType').onclick = () => { if (canEdit()) $('tyf').click(); };
+      $('tyf').onchange = async e => {
+        const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+        const slug = f.name.replace(/\.png$/i, '').toLowerCase().replace(/[^a-z0-9_]/g, '_') || 'object';
+        snap(); const path = 'assets/' + slug + '.png', key = S.cur + '|' + path;
+        S.pending[key] = f; S.pendList = S.pendList.filter(p => p.path !== path); S.pendList.push({ path, file: f }); S.imgs.delete(key);
+        const id = edAddObjType(S.recs, S.W, S.cur, slug, path, null); S.type = id; changed(); renderTypes();
+        toast(`Added object type ${id}. It has no collision box; give it one in the mod's data if it should block walking.`);
+      };
+      // ---- sprite editor entry points ----
+      function bmpData(bmp) { const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height; const gg = c.getContext('2d'); gg.drawImage(bmp, 0, 0); return gg.getImageData(0, 0, bmp.width, bmp.height); }
+      function writeAsset(path, blob) {
+        const key = S.cur + '|' + path, f = new File([blob], path.split('/').pop(), { type: 'image/png' });
+        S.pending[key] = f; S.pendList = S.pendList.filter(p => p.path !== path); S.pendList.push({ path, file: f }); S.imgs.delete(key); S.tint.clear(); S.thumbs = true; S.needDraw = true; return f;
+      }
+      async function finishEdit(text) { changed(); await save(); S.thumbs = true; S.needDraw = true; renderPalette(); toast(text); }
+      function editTileset() {
+        if (!canEdit()) return; const a = curArea(); if (!a) return;
+        const ts = S.W.tilesets[a.tileset], col = S.W.collisions[a.collision]; if (!ts) return toast('This area has no tileset.');
+        const img = ts.png && getImg(ts.src, ts.png), cimg = col && col.png ? getImg(col.src, col.png) : null;
+        if (!img || (col && col.png && !cimg)) return toast('The tile sheet is still loading. Try again in a moment.');
+        const cell = ts.tile || 32, cols = Math.floor(img.width / cell), rows = Math.floor(img.height / cell), W0 = cols * cell, H0 = rows * cell, d = bmpData(img);
+        const art = new Uint8ClampedArray(W0 * H0 * 4); for (let y = 0; y < H0; y++) art.set(d.data.subarray(y * img.width * 4, y * img.width * 4 + W0 * 4), y * W0 * 4);
+        let spec = null; if (col) { if (col.png) { const cd = bmpData(cimg); spec = { png: { rgba: cd.data, w: cd.width, h: cd.height }, tile: col.tile || 32 }; } else spec = { count: col.count || 0, blocked_tiles: col.blocked_tiles || [] }; }
+        SpriteEd.open({
+          title: `Tileset ${a.tileset}  (${cols}x${rows} tiles of ${cell}px)`, kind: 'tileset', w: W0, h: H0, art, col: collisionLayer(spec, cols, rows, cell), cell, colName: 'Walk-blocking',
+          hint: 'Tile numbers count left to right, then down. Draw on "Walk-blocking" to mark where the pet cannot walk (red). Saving points this area at your copy of the tileset; the base game is not touched.',
+          onSave: async res => {
+            if (!S.cur) throw new Error('no mod selected'); snap(); let tsId = null, colId = null;
+            if (res.artDirty || res.sizeChanged) {
+              if (ts.src === S.cur && ts.png) writeAsset(ts.png, res.artBlob);
+              else { const n = nextSlot(S.recs, S.W, S.cur, 'tileset'), path = `assets/tiles_e${n}.png`; writeAsset(path, res.artBlob); tsId = `${S.cur}:tileset/e${n}`; S.recs.push({ type: 'tileset', mode: 'add', id: tsId, png: path, tile: cell }); }
+            }
+            if (res.colDirty || res.sizeChanged) {
+              if (col && col.src === S.cur && col.png) writeAsset(col.png, res.colBlob);
+              else { const n = nextSlot(S.recs, S.W, S.cur, 'collision'), path = `assets/collision_e${n}.png`; writeAsset(path, res.colBlob); colId = `${S.cur}:collision/e${n}`; S.recs.push({ type: 'collision', mode: 'add', id: colId, png: path, tile: cell }); }
+            }
+            if (tsId || colId) edSetAreaLook(S.recs, a.id, tsId, colId);
+            await finishEdit(tsId || colId ? 'Saved: this area now uses your copy of the tileset.' : 'Saved the tile sheet in place.');
+          }
+        });
+      }
+      function editObjectArt(o) {
+        if (!canEdit()) return; const ot = S.W.objtypes[o.objtype], img = ot && ot.png && getImg(ot.src, ot.png);
+        if (!img) return toast('This object has no picture to edit (or it is still loading).');
+        SpriteEd.open({
+          title: 'Object art: ' + o.objtype, kind: 'object', w: img.width, h: img.height, art: bmpData(img).data, colName: 'Footprint (walk-blocking)',
+          hint: 'The feet are the bottom middle unless the type says otherwise. Paint a footprint on the second layer if this object should block walking. A base-game object loses its original footprint when you save a copy.',
+          onSave: async res => {
+            if (!S.cur) throw new Error('no mod selected'); snap();
+            if (ot.src === S.cur && ot.png && !res.colAny) writeAsset(ot.png, res.artBlob);
+            else {
+              const n = nextSlot(S.recs, S.W, S.cur, 'objtype'), path = `assets/obj_e${n}.png`; writeAsset(path, res.artBlob);
+              let cp = null; if (res.colAny) { cp = `assets/obj_e${n}_walk.png`; writeAsset(cp, res.colBlob); }
+              const id = edAddObjTypeFull(S.recs, S.W, S.cur, 'e' + n, path, { anchorX: ot.anchorX, anchorY: ot.anchorY, dx: ot.dx, dy: ot.dy, ground: ot.ground, collision_png: cp });
+              edPatchObject(S.recs, o, { objtype: id });
+            }
+            await finishEdit('Saved. This object now uses the edited picture.');
+          }
+        });
+      }
+      function editNpcPicture(n) {
+        if (!canEdit()) return; const an = n.anim && S.W.anims[n.anim], fr = an && an.frames[0];
+        if (!fr || an.src !== S.cur) return toast('Only pictures that belong to your mod can be edited. Base-game NPCs are drawn from the game itself.');
+        const img = getImg(an.src, fr.png); if (!img) return toast('Still loading, try again.');
+        SpriteEd.open({ title: 'NPC picture', kind: 'npc', w: img.width, h: img.height, art: bmpData(img).data, hint: 'Feet at the bottom middle.', onSave: async res => { snap(); writeAsset(fr.png, res.artBlob); await finishEdit('Saved.'); } });
+      }
+      function drawNew(kind) {
+        if (!canEdit()) return;
+        const v = prompt('Size of the new picture (width x height in pixels):', kind === 'npc' ? '32x40' : '32x48'); if (!v) return;
+        const m = /^\s*(\d+)\s*[x×,]\s*(\d+)\s*$/i.exec(v); if (!m || +m[1] < 1 || +m[2] < 1 || +m[1] > 1024 || +m[2] > 1024) return toast('Type it like 32x48 (up to 1024).');
+        SpriteEd.open({
+          title: kind === 'npc' ? 'New NPC picture' : 'New object type', kind: 'blank', w: +m[1], h: +m[2], art: null, colName: kind === 'npc' ? '' : 'Footprint (walk-blocking)',
+          hint: 'The feet are the bottom middle of the picture.',
+          onSave: async res => {
+            snap();
+            if (kind === 'npc') { S.npcFile = new File([res.artBlob], 'drawn_npc.png', { type: 'image/png' }); $('nnFile').textContent = 'drawn picture'; toast('Picture ready. Fill in the NPC form and place them.'); return; }
+            const n = nextSlot(S.recs, S.W, S.cur, 'objtype'), path = `assets/obj_e${n}.png`; writeAsset(path, res.artBlob);
+            let cp = null; if (res.colAny) { cp = `assets/obj_e${n}_walk.png`; writeAsset(cp, res.colBlob); }
+            S.type = edAddObjTypeFull(S.recs, S.W, S.cur, 'e' + n, path, { collision_png: cp });
+            await finishEdit('New object type ' + S.type + ' is ready: choose the Place tool and click the map.'); renderTypes();
+          }
+        });
+      }
+      $('bTsEdit').onclick = editTileset; $('bDrawType').onclick = () => drawNew('object'); $('nnDraw').onclick = () => drawNew('npc');
+
+      // new area
+      function fillLook() {
+        const sel = $('naLook'), keep = sel.value; if (!S.W) return;
+        sel.innerHTML = Object.keys(S.W.areas).map(id => `<option value="${esc(id)}">${esc(S.W.areas[id].src === 'base' ? S.W.areas[id].legacyId + ': ' : '[' + S.W.areas[id].src + '] ')}${esc(S.W.texts[S.W.areas[id].name] || id)}</option>`).join('');
+        sel.value = S.W.areas[keep] ? keep : (S.area || 'base:area/0');
+      }
+      document.querySelector('details:nth-of-type(4)').addEventListener('toggle', e => { if (e.target.open) fillLook(); });
+      $('naGo').onclick = () => {
+        if (!canEdit()) return; snap();
+        try {
+          const id = edNewArea(S.recs, S.W, S.cur, { slug: $('naName').value || 'area', name: $('naName').value || 'New area', width: +$('naW').value, height: +$('naH').value, lookFrom: $('naLook').value, music: $('naMusic').value });
+          changed(); selectArea(id, true); toast('Created ' + id);
+        } catch (e) { S.undo.pop(); toast(e.message); }
+      };
+      // new NPC
+      $('nnPng').onclick = () => $('nnPngF').click();
+      $('nnPngF').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; S.npcFile = f; $('nnFile').textContent = f.name; };
+      $('nnGo').onclick = () => {
+        if (!canEdit()) return; if (!S.npcFile) return toast('Choose a picture (PNG) for the NPC first.');
+        const lines = $('nnLines').value.split('\n').map(s => s.trim()).filter(Boolean).slice(0, 3), stat = $('nnStat').checked;
+        if (stat && !lines.length) return toast('A stationary NPC needs something to say.');
+        S.npcArm = { name: $('nnName').value.trim() || 'Visitor', lines, stationary: stat, file: S.npcFile };
+        document.querySelector('input[name=tool][value=place]').click(); toast('Click the map to put ' + S.npcArm.name + ' down.');
+      };
+      requestAnimationFrame(frame);
+      window.GE = S; // for debugging in the console
+    })();
+  </script>
+</body>
+
+</html>

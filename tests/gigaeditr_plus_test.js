@@ -93,6 +93,110 @@ check('text for a sign is a text record the editor owns', () => {
   assert.strictEqual(W.texts[o2.sign], 'Hello again');
 });
 
+const wr = recs => [{ id: 'm', files: [{ name: G.EDFILE, records: recs }] }];
+
+check('new area, door with a way back, and an npc', () => {
+  const recs = [];
+  let W = G.buildWorld(base, wr(recs));
+  const aid = G.edNewArea(recs, W, 'm', { slug: 'Shed!', name: 'The Shed', width: 10, height: 6, lookFrom: 'base:area/0', music: 3 });
+  assert.strictEqual(aid, 'm:area/shed_');
+  W = G.buildWorld(base, wr(recs));
+  const a = W.areas[aid];
+  assert(a && a.width === 10 && a.height === 6 && a.tileset === W.areas['base:area/0'].tileset && a.music === 3);
+  assert.strictEqual(W.texts[a.name], 'The Shed');
+
+  const door = W.areas['base:area/0'].objects.find(o => o.objtype && !o.reach);
+  const r = G.edAddExit(recs, W, 'm', { from: 'base:area/0', object: door.id, to: aid, spawn: [100, 100], onTouch: true, wayBack: true });
+  assert(r.back && recs.filter(x => x.type === 'exit').length === 2);
+  // the door gets a reach, and the way back object comes before the exits that name it
+  assert(recs.some(x => x.type === 'object' && x.mode === 'patch' && x.id === door.id && x.reach));
+  assert(recs.findIndex(x => x.id === r.back) < recs.findIndex(x => x.type === 'exit'));
+  G.edAddExit(recs, W, 'm', { from: 'base:area/0', object: door.id, to: aid, spawn: [120, 100] }); // same door again replaces its exit
+  assert.strictEqual(recs.filter(x => x.type === 'exit' && x.from === 'base:area/0').length, 1);
+
+  W = G.buildWorld(base, wr(recs));
+  const id = G.edAddNpc(recs, W, 'm', { areaId: aid, x: 50, y: 60, name: 'Sam', lines: ['Hi'], png: 'assets/sam.png' });
+  W = G.buildWorld(base, wr(recs));
+  const n = W.npcs.find(x => x.id === id);
+  assert(n && n.areaId === aid && n.lines.length === 3 && W.texts[n.name] === 'Sam' && W.anims[n.anim].frames[0].png === 'assets/sam.png');
+  G.edMoveNpc(recs, n, 70, 80);
+  assert(recs.find(x => x.id === id).x === 70);
+  G.edDeleteNpc(recs, n); // npc, anim and its texts all go
+  assert(!recs.some(x => x.id === id || x.type === 'anim' || (x.type === 'text' && x.text === 'Sam')));
+});
+
+check('base npcs: move is a replace, delete is a remove', () => {
+  const recs = [];
+  const W = G.buildWorld(base, wr(recs));
+  const n = W.npcs[0];
+  G.edMoveNpc(recs, n, 5, 6); G.edMoveNpc(recs, n, 7, 8);
+  assert.deepStrictEqual(recs, [{ type: 'npc', mode: 'replace', id: n.id, x: 7, y: 8 }]);
+  const W2 = G.buildWorld(base, wr(recs));
+  const m = W2.npcs.find(x => x.id === n.id);
+  assert(m.x === 7 && m.y === 8);
+  G.edDeleteNpc(recs, m);
+  assert.deepStrictEqual(recs, [{ type: 'npc', mode: 'remove', id: n.id }]);
+  assert(!G.buildWorld(base, wr(recs)).npcs.some(x => x.id === n.id));
+});
+
+if (process.env.GE_DUMP) { // write a mod for the real loader to read: GE_DUMP=<folder> node tests/gigaeditr_plus_test.js
+  const recs = [];
+  let W = G.buildWorld(base, wr(recs));
+  const aid = G.edNewArea(recs, W, 'edtest', { slug: 'shed', name: 'The Shed', width: 10, height: 6, lookFrom: 'base:area/0', music: 3 });
+  W = G.buildWorld(base, wr(recs));
+  const door = W.areas['base:area/0'].objects.find(o => o.objtype && !o.reach);
+  G.edAddExit(recs, W, 'edtest', { from: 'base:area/0', object: door.id, to: aid, spawn: [160, 120], wayBack: true });
+  G.edMoveObject(recs, W.areas['base:area/0'].objects[3], 300, 400);
+  G.edPaint(recs, W, 'base:area/0', 5, 5, W.areas['base:area/0'].map[5][5]);
+  G.edMoveNpc(recs, W.npcs[0], W.npcs[0].x + 10, W.npcs[0].y);
+  G.edAddNpc(recs, W, 'edtest', { areaId: aid, x: 100, y: 100, name: 'Sam', lines: ['Hi'], png: 'assets/sam.png' });
+  const dir = path.join(process.env.GE_DUMP, 'edtest');
+  fs.mkdirSync(path.join(dir, 'data'), { recursive: true }); fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ id: 'edtest', version: '1.0', game_api: '1', requires: [], load_after: [] }));
+  fs.writeFileSync(path.join(dir, 'data', G.EDFILE), JSON.stringify(recs, null, 2));
+  fs.copyFileSync(path.join(__dirname, '..', 'mods', 'cavemod', 'assets', 'keeper.png'), path.join(dir, 'assets', 'sam.png'));
+}
+
+check('pixel helpers: fill, replace all, line, brush, rect, flip, resize, colours', () => {
+  const w = 5, h = 4, a = new Uint32Array(w * h);
+  const red = G.packRGBA(255, 0, 0, 255), blue = G.packRGBA(0, 0, 255, 255);
+  for (let y = 0; y < h; y++) a[y * w + 2] = blue; // a vertical wall splits the picture in two
+  assert.strictEqual(G.fillRegion(a, w, h, 0, 0, red, false), 8); // only the left side
+  assert.strictEqual(a[3], 0); assert.strictEqual(a[0], red);
+  assert.strictEqual(G.fillRegion(a, w, h, 3, 0, red, false), 8);
+  assert.strictEqual(G.fillRegion(a, w, h, 2, 0, red, true), 4); // replace every blue pixel
+  assert.strictEqual(G.fillRegion(a, w, h, 0, 0, red, false), 0); // same colour: nothing
+  assert.strictEqual(G.fillRegion(a, w, h, 9, 9, red, false), 0);
+  assert.deepStrictEqual(G.unpackRGBA(red), [255, 0, 0, 255]);
+  const ln = G.lineCells(0, 0, 4, 2); assert.deepStrictEqual(ln[0], [0, 0]); assert.deepStrictEqual(ln[ln.length - 1], [4, 2]); assert.strictEqual(ln.length, 5);
+  assert.strictEqual(G.brushCells(5, 5, 3, false).length, 9); assert(G.brushCells(5, 5, 5, true).length < 25);
+  assert.strictEqual(G.rectCells(0, 0, 3, 2, true).length, 12); assert.strictEqual(G.rectCells(0, 0, 3, 2, false).length, 10);
+  const f = Uint8Array.from([1, 2, 3, 4, 5, 6]); G.flipArr(f, 3, 2, true); assert.deepStrictEqual([...f], [3, 2, 1, 6, 5, 4]); G.flipArr(f, 3, 2, false); assert.deepStrictEqual([...f], [6, 5, 4, 3, 2, 1]);
+  const r = G.resizeArr(Uint8Array.from([1, 2, 3, 4]), 2, 2, 3, 3); assert.deepStrictEqual([...r], [1, 2, 0, 3, 4, 0, 0, 0, 0]);
+  const c = G.colorsOf(Uint32Array.from([red, red, blue, 0])); assert.deepStrictEqual(c, [[red, 2], [blue, 1]]);
+});
+
+check('collision layer matches how the game reads a collision sheet', () => {
+  // a 64 px collision cell, tile 0 has only its top-left quarter blocked; two tiles side by side
+  const rgba = new Uint8ClampedArray(128 * 64 * 4);
+  for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) rgba[(y * 128 + x) * 4 + 3] = 255;
+  const m = G.collisionLayer({ png: { rgba, w: 128, h: 64 }, tile: 64 }, 3, 1, 32); // 3 tiles wide on a 32 px sheet, the collision only covers 2
+  const at = (t, x, y) => m[y * 96 + t * 32 + x];
+  assert.strictEqual(at(0, 5, 5), 1); assert.strictEqual(at(0, 20, 5), 0); assert.strictEqual(at(0, 20, 20), 0);
+  assert.strictEqual(at(1, 5, 5), 0);
+  assert.strictEqual(at(2, 5, 5), 1); assert.strictEqual(at(2, 31, 31), 1); // past the collision's count: blocked
+  const s = G.collisionLayer({ count: 2, blocked_tiles: [1] }, 2, 1, 32);
+  assert.strictEqual(s[5], 0); assert.strictEqual(s[32 + 5], 1);
+});
+
+check('area look, full objtype records', () => {
+  const recs = []; G.edSetAreaLook(recs, 'base:area/0', 'm:tileset/e1', 'm:collision/e1'); G.edSetAreaLook(recs, 'base:area/0', 'm:tileset/e2', null);
+  assert.deepStrictEqual(recs, [{ type: 'area', mode: 'patch', id: 'base:area/0', tileset: 'm:tileset/e2', collision: 'm:collision/e1' }]);
+  const W = G.buildWorld(base, wr(recs)); assert.strictEqual(W.areas['base:area/0'].tileset, 'm:tileset/e2');
+  const id = G.edAddObjTypeFull(recs, W, 'm', 'tree', 'assets/tree.png', { anchorX: 3, anchorY: 9, dx: 0, dy: 1, ground: true });
+  assert.deepStrictEqual(recs[1], { type: 'objtype', mode: 'add', id, png: 'assets/tree.png', anchorX: 3, anchorY: 9, dx: 0, dy: 1, ground: true });
+});
+
 check('mod order honours load_after', () => {
   const ms = [{ id: 'b', manifest: { load_after: ['z'] } }, { id: 'z', manifest: {} }, { id: 'a', manifest: {} }];
   assert.deepStrictEqual(G.orderMods(ms).map(m => m.id), ['a', 'z', 'b']);
