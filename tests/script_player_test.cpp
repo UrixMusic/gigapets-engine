@@ -328,6 +328,48 @@ int main()
                           "player.setIllness('cold')\n"));
         CHECK(h.errors().empty());
     }
+    // --- objective.set / clear / has ---
+    {
+        gp::ScriptHost h;
+        struct Obj
+        {
+            std::string text, item;
+            int need;
+        };
+        std::map<std::string, Obj> objs;
+        h.api().setObjective = [&](const std::string &id, const std::string &text, const std::string &item, int need)
+        {
+            if (item == "m:item/gone" || text == "m:str/gone")
+                return false;
+            objs[id] = {text, item, need};
+            return true;
+        };
+        h.api().clearObjective = [&](const std::string &id) { return objs.erase(id) > 0; };
+        h.api().hasObjective = [&](const std::string &id) { return objs.count(id) > 0; };
+        CHECK(h.runString("m",
+                          "assert(objective.set('m:obj/pies', { text = 'm:str/find', item = 'm:item/pie', need = 3 }))\n"
+                          "assert(objective.set('m:obj/talk', { text = 'm:str/talk' }))\n"
+                          "assert(objective.has('m:obj/pies') and not objective.has('m:obj/none'))\n"
+                          "assert(objective.set('m:obj/count', { item = 'm:item/pie' }))\n"));
+        CHECK(objs.size() == 3 && objs["m:obj/pies"].need == 3 && objs["m:obj/talk"].need == 0 && objs["m:obj/count"].need == 1);
+        CHECK(objs["m:obj/talk"].item.empty() && objs["m:obj/count"].text.empty());
+        CHECK(h.runString("m", "assert(objective.clear('m:obj/pies') and not objective.clear('m:obj/pies'))") && objs.size() == 2);
+        // unknown text or item: false, nothing set
+        CHECK(h.runString("m", "assert(objective.set('m:obj/x', { text = 'm:str/gone' }) == false)\nassert(objective.set('m:obj/y', { item = 'm:item/gone' }) == false)"));
+        CHECK(objs.size() == 2 && h.errors().empty());
+        // mistakes are script errors: someone else's prefix, no text or item, a bad need, need without an item, bad characters
+        CHECK(!h.runString("m", "objective.set('other:obj/a', { text = 'm:str/t' })"));
+        CHECK(!h.runString("m", "objective.set('m:obj/a', {})"));
+        CHECK(!h.runString("m", "objective.set('m:obj/a', { item = 'm:item/pie', need = 0 })"));
+        CHECK(!h.runString("m", "objective.set('m:obj/a', { item = 'm:item/pie', need = 100 })"));
+        CHECK(!h.runString("m", "objective.set('m:obj/a', { text = 'm:str/t', need = 2 })"));
+        CHECK(!h.runString("m", "objective.set('m:obj/a b', { text = 'm:str/t' })"));
+        CHECK(!h.runString("m", "objective.set('m:obj/a', { text = 'm:str/t|x' })"));
+        CHECK(objs.size() == 2);
+        // without the game callbacks nothing happens and nothing breaks
+        gp::ScriptHost bare;
+        CHECK(bare.runString("m", "assert(objective.set('m:obj/a', { text = 'm:str/t' }) == false and objective.has('m:obj/a') == false and objective.clear('m:obj/a') == false)"));
+    }
     std::printf(fails ? "FAILED: %d check(s)\n" : "script_player_test: all passed\n", fails);
     return fails ? 1 : 0;
 }

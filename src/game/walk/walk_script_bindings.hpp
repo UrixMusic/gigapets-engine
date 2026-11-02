@@ -22,10 +22,26 @@ inline void showNextSay(WalkServices &svc)
     auto &q = svc.S.script.sayQueue;
     if (q.empty() || svc.dialogue.open())
         return;
-    gp::DialogueBox b = gp::messageBox(std::move(q.front()));
+    auto item = std::move(q.front());
     q.pop_front();
-    b.onYes = [&svc]
-    { showNextSay(svc); };
+    gp::DialogueBox b = gp::messageBox(std::move(item.text));
+    if (item.answer) // ask(): Yes / No, then the script goes on (it may queue more), then whatever is next is shown
+    {
+        b.kind = gp::BoxKind::Confirm;
+        b.onYes = [&svc, answer = item.answer]
+        {
+            answer(true);
+            showNextSay(svc);
+        };
+        b.onNo = [&svc, answer = item.answer]
+        {
+            answer(false);
+            showNextSay(svc);
+        };
+    }
+    else
+        b.onYes = [&svc]
+        { showNextSay(svc); };
     svc.dialogue.show(std::move(b));
 }
 
@@ -67,9 +83,48 @@ inline void bindScripts(WalkServices &svc)
             return false;
         // Only queued here: the main loop shows it on the next tick, after any dialogue the game opens right after
         // the hook (a hook that does not take over), so a script's text never gets overwritten.
-        q.push_back(gp::fillTemplateVars(gp::fmtAll(svc.db.textOr(id), svc.player.name), vars));
+        q.push_back({gp::fillTemplateVars(gp::fmtAll(svc.db.textOr(id), svc.player.name), vars), nullptr});
         return true;
     };
+    // ask(textId, vars): the same, as a yes/no question; the script waits for the reply (see ScriptHost::answerRoutine).
+    api.ask = [&svc](const std::string &id, const gp::ScriptApi::SayVars &vars, std::function<void(bool)> answer)
+    {
+        static std::set<std::string> warned;
+        if (!svc.db.hasText(id))
+        {
+            if (warned.insert(id).second)
+                std::fprintf(stderr, "script warning: ask(\"%s\"): no such text\n", id.c_str());
+            return false;
+        }
+        auto &q = svc.S.script.sayQueue;
+        if (q.size() >= 16)
+            return false;
+        q.push_back({gp::fillTemplateVars(gp::fmtAll(svc.db.textOr(id), svc.player.name), vars), std::move(answer)});
+        return true;
+    };
+
+    // ---- objective.* ----
+    // The HUD lines (drawn by walk.cpp's drawQuestHud) live on the Player, so they are saved with it.
+    api.setObjective = [&svc](const std::string &id, const std::string &text, const std::string &item, int need)
+    {
+        static std::set<std::string> warned;
+        if ((!text.empty() && !svc.db.hasText(text)) || (!item.empty() && !svc.db.item(item)))
+        {
+            if (warned.insert(id).second)
+                std::fprintf(stderr, "script warning: objective.set(\"%s\"): unknown %s\n", id.c_str(), !text.empty() && !svc.db.hasText(text) ? "text" : "item");
+            return false;
+        }
+        gp::ScriptObjective o;
+        o.id = id;
+        o.text = text;
+        o.item = item;
+        o.need = need;
+        return svc.player.setObjective(std::move(o));
+    };
+    api.clearObjective = [&svc](const std::string &id)
+    { return svc.player.clearObjective(id); };
+    api.hasObjective = [&svc](const std::string &id)
+    { return svc.player.objective(id) != nullptr; };
 
     // ---- rand.* ----
     // Scripts have their own stream, never the base game's. GP_SCRIPT_SEED=<number> makes it repeatable for tests;

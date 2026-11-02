@@ -1470,7 +1470,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             gp::audio().stopSfx(); // ExitCurrentArea: Sound_StopAllChannels
             if (gp::QuestNudge::applies(player.questsCompleted, quests.q.phase))
                 nudge.restart(long(gameTicks)); // Game_ProcessTick: an area change restarts the reminder
-            if (const int song = gp::rau::zoneSong(a.legacyId); song >= 0)
+            if (const int song = a.music >= 0 ? a.music : gp::rau::zoneSong(a.legacyId); song >= 0)
                 gp::audio().playMusic(song); // Sound_LookupAndStart via RemapZoneIndexToAudioId; other areas keep the current song
             if (gp::shopRowForArea(a.legacyId) >= 0)
                 return; // shops use the old PendingList
@@ -4742,6 +4742,33 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 text.draw(b, 200, 20, 90, gp::Align::Right);
             }
         };
+        // What scripts put on the HUD with objective.set: up to three lines at the top left, "have/need  text" (the counter
+        // only for an item objective, counting what the player holds). Unknown items or texts (a mod that is gone) are skipped.
+        auto drawScriptObjectives = [&]
+        {
+            int y = 8, shown = 0;
+            for (const gp::ScriptObjective &o : player.objectives)
+            {
+                if (shown >= 3)
+                    break;
+                std::string line;
+                if (!o.item.empty())
+                {
+                    if (!db.item(o.item))
+                        continue;
+                    line = std::to_string(std::min(player.itemCount(o.item), o.need)) + "/" + std::to_string(o.need) + "  ";
+                }
+                if (!o.text.empty())
+                {
+                    if (!db.hasText(o.text))
+                        continue;
+                    line += gp::fmtAll(db.textOr(o.text), player.name);
+                }
+                numbers.draw(line, 8, y, 200, gp::Align::Left);
+                y += 14;
+                ++shown;
+            }
+        };
         enterAreaEvents(*cur->def, true);
         refreshBits(); // add
         bool &running = S.flow.running;
@@ -5506,6 +5533,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 tickColorMachine(zDown);
                 tickThoughtBubble();
                 quests.tick(int(gameTicks));
+                scripts.tick(); // scripts that called wait(n)
                 if (!petBusyElsewhere && !enc && !dialogue.open() && !im.open && !statsOpen && !pendingExit && !pendingScreen && !room && !showNpc)
                 {
                     const gp::NpcActor *nb = nearestNpc();
@@ -5946,6 +5974,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             else if (room)
                 drawRoom();
             drawQuestHud(barBusy == 0 && feedStep == 0 && digStep == 0 && !im.open && !statsOpen, true);
+            if (barBusy == 0 && feedStep == 0 && digStep == 0 && !im.open && !statsOpen && !minigames.active() && !room)
+                drawScriptObjectives();
             if (statNotice.visible() && !im.open && !statsOpen) // DrawStatChangeNotification
             {
                 const gp::StatNoticeSlot &sl = gp::kStatNoticeSlots[statNotice.idx];

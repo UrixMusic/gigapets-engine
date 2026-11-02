@@ -281,6 +281,109 @@ int main()
         mine.questId = "m:quest/pie";
         CHECK(h.fireQuestComplete(mine).suppress && given == 3 && said.size() == 1);
     }
+    // --- ask() and wait(): a hook runs as a coroutine ---
+    {
+        gp::ScriptHost h;
+        wire(h);
+        std::vector<std::pair<std::string, std::function<void(bool)>>> asked;
+        std::vector<std::string> flags;
+        h.api().ask = [&](const std::string &id, const gp::ScriptApi::SayVars &, std::function<void(bool)> a)
+        {
+            if (id == "m:str/none")
+                return false;
+            asked.emplace_back(id, std::move(a));
+            return true;
+        };
+        h.api().setFlag = [&](const std::string &f) { flags.push_back(f); };
+        CHECK(h.runString("m",
+                          "local T = Npc.hooks('m:npc/a')\n"
+                          "function T:onTalkStart(ctx)\n"
+                          "  if ask('m:str/q') then player.setFlag('m:yes') else player.setFlag('m:no') end\n"
+                          "  player.setFlag('m:after')\n"
+                          "end\n"));
+        const auto r = h.fireNpcTalkStart("m:npc/a", 0, 0);
+        CHECK(r.ran && r.suppress); // it waits: it has taken over
+        CHECK(asked.size() == 1 && asked[0].first == "m:str/q" && h.waiting() == 1 && flags.empty());
+        asked[0].second(true);
+        CHECK(flags.size() == 2 && flags[0] == "m:yes" && flags[1] == "m:after" && h.waiting() == 0);
+        asked[0].second(false); // a stale answer does nothing
+        CHECK(flags.size() == 2 && h.errors().empty());
+        // No
+        flags.clear();
+        asked.clear();
+        h.fireNpcTalkStart("m:npc/a", 0, 0);
+        asked[0].second(false);
+        CHECK(flags.size() == 2 && flags[0] == "m:no");
+    }
+    {
+        gp::ScriptHost h;
+        wire(h);
+        std::vector<std::string> flags;
+        h.api().setFlag = [&](const std::string &f) { flags.push_back(f); };
+        CHECK(h.runString("m",
+                          "local T = Npc.hooks('m:npc/a')\n"
+                          "function T:onTalk(ctx)\n"
+                          "  player.setFlag('m:one'); wait(3); player.setFlag('m:two'); wait(1); player.setFlag('m:three')\n"
+                          "end\n"));
+        CHECK(h.fireNpcTalk("m:npc/a", 0, 0));
+        CHECK(flags.size() == 1 && h.waiting() == 1);
+        h.tick();
+        h.tick();
+        CHECK(flags.size() == 1);
+        h.tick();
+        CHECK(flags.size() == 2 && h.waiting() == 1); // the second wait began
+        h.tick();
+        CHECK(flags.size() == 3 && h.waiting() == 0 && h.errors().empty());
+    }
+    {
+        // an unknown text answers false at once and does not wait; wait / ask outside a hook are errors
+        gp::ScriptHost h;
+        wire(h);
+        h.api().ask = [](const std::string &id, const gp::ScriptApi::SayVars &, std::function<void(bool)>) { return id != "m:str/none"; };
+        std::vector<std::string> flags;
+        h.api().setFlag = [&](const std::string &f) { flags.push_back(f); };
+        CHECK(h.runString("m",
+                          "local T = Npc.hooks('m:npc/a')\n"
+                          "function T:onTalkStart(ctx)\n"
+                          "  if ask('m:str/none') == false then player.setFlag('m:false') end\n"
+                          "end\n"));
+        const auto r = h.fireNpcTalkStart("m:npc/a", 0, 0);
+        CHECK(r.ran && !r.suppress && flags.size() == 1 && h.waiting() == 0);
+        CHECK(!h.runString("m", "wait(5)") && !h.errors().empty());
+        CHECK(!h.runString("m", "ask('m:str/q')"));
+    }
+    {
+        // wait(0) and wait(5000) are script errors; the hook is then off
+        gp::ScriptHost h;
+        wire(h);
+        CHECK(h.runString("m", "local T = Npc.hooks('m:npc/a'); function T:onTalk(ctx) wait(0) end"));
+        CHECK(h.fireNpcTalk("m:npc/a", 0, 0) == false && h.errors().size() == 1 && h.waiting() == 0);
+        CHECK(h.runString("m", "local T = Npc.hooks('m:npc/b'); function T:onTalk(ctx) wait(5000) end"));
+        CHECK(h.fireNpcTalk("m:npc/b", 0, 0) == false && h.errors().size() == 2);
+    }
+    {
+        // an error after a wait switches the hook off and frees the slot; at most 8 scripts can be waiting at once
+        gp::ScriptHost h;
+        wire(h);
+        CHECK(h.runString("m", "local T = Npc.hooks('m:npc/a'); function T:onTalk(ctx) wait(1); error('boom') end"));
+        CHECK(h.fireNpcTalk("m:npc/a", 0, 0) && h.waiting() == 1);
+        h.tick();
+        CHECK(h.waiting() == 0 && h.errors().size() == 1 && !h.fireNpcTalk("m:npc/a", 0, 0));
+        CHECK(h.runString("m", "local T = Npc.hooks('m:npc/w'); function T:onTalk(ctx) wait(100) end"));
+        int started = 0;
+        for (int i = 0; i < 10; ++i)
+            started += h.fireNpcTalk("m:npc/w", 0, 0);
+        CHECK(started == 8 && h.waiting() == 8);
+    }
+    {
+        // an endless loop after a wait still hits the instruction limit
+        gp::ScriptHost h;
+        wire(h);
+        CHECK(h.runString("m", "local T = Npc.hooks('m:npc/a'); function T:onTalk(ctx) wait(1); while true do end end"));
+        CHECK(h.fireNpcTalk("m:npc/a", 0, 0));
+        h.tick();
+        CHECK(h.waiting() == 0 && h.errors().size() == 1);
+    }
     std::printf(fails ? "FAILED: %d check(s)\n" : "script_hooks_test: all passed\n", fails);
     return fails ? 1 : 0;
 }

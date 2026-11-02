@@ -151,8 +151,14 @@ struct UiState
 struct ScriptState
 {
     std::mt19937 gen;
-    // Text from scripts' say(), already formatted, waiting to be shown one box at a time (see walk::showNextSay).
-    std::deque<std::string> sayQueue;
+    // Text from scripts' say() and ask(), already formatted, waiting to be shown one box at a time (see walk::showNextSay).
+    // `answer` is set for an ask(): the box is a yes/no question and the script waits for the reply.
+    struct SayItem
+    {
+        std::string text;
+        std::function<void(bool)> answer;
+    };
+    std::deque<SayItem> sayQueue;
 };
 
 struct WalkState

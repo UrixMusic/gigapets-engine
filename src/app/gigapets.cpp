@@ -10,6 +10,7 @@
 #define GP_NO_MAIN
 #include "walk.cpp"
 #include "frontend_demo.cpp"
+#include "../mods/export_base.hpp"
 
 int main(int argc, char **argv)
 {
@@ -62,6 +63,31 @@ int main(int argc, char **argv)
         else if (!std::strcmp(argv[i], "--area") && i + 1 < argc)
             area = std::atoi(argv[++i]);
     }
+
+    // `--export-base <folder>`: write the base game's areas, tiles and objects as JSON and PNG for editing tools, then quit
+    for (int i = 2; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--export-base"))
+        {
+            try
+            {
+                gp::Rom rom(romPath);
+                gp::ContentDB db;
+                gp::importRom(rom, db, 0);
+                const std::string why = gp::exportBase(db, argv[i + 1]);
+                if (!why.empty())
+                {
+                    std::fprintf(stderr, "export failed: %s\n", why.c_str());
+                    return 1;
+                }
+                std::printf("exported the base game to %s\n", argv[i + 1]);
+                return 0;
+            }
+            catch (const std::exception &e)
+            {
+                std::fprintf(stderr, "export failed: %s\n", e.what());
+                return 1;
+            }
+        }
 
     try
     {

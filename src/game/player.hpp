@@ -43,6 +43,14 @@ namespace gp
 
     inline std::string triggerKey(int n) { return "base:trigger/" + std::to_string(n); }
 
+    // A line a script put on the HUD with objective.set: `text` is a text id (may be empty), `item` an item id (may be empty) and
+    // `need` how many of it to show a "have/need" counter for. Kept in the save, in the order they were added.
+    struct ScriptObjective
+    {
+        std::string id, text, item;
+        int need = 0;
+    };
+
     struct Player
     {
         std::array<int, kNumPersonality> personality{};
@@ -72,6 +80,39 @@ namespace gp
         int questsCompleted = 0;
         std::map<std::string, int> inventory; // item id -> count
         std::set<std::string> flags;          // event / quest flags
+        std::vector<ScriptObjective> objectives; // what scripts show on the HUD (objective.set), oldest first
+        static constexpr size_t kMaxObjectives = 8;
+        const ScriptObjective *objective(const std::string &id) const
+        {
+            for (const ScriptObjective &o : objectives)
+                if (o.id == id)
+                    return &o;
+            return nullptr;
+        }
+        // Adds, or replaces the one with the same id in place. False if the list is full.
+        bool setObjective(ScriptObjective o)
+        {
+            for (ScriptObjective &e : objectives)
+                if (e.id == o.id)
+                {
+                    e = std::move(o);
+                    return true;
+                }
+            if (objectives.size() >= kMaxObjectives)
+                return false;
+            objectives.push_back(std::move(o));
+            return true;
+        }
+        bool clearObjective(const std::string &id)
+        {
+            for (auto it = objectives.begin(); it != objectives.end(); ++it)
+                if (it->id == id)
+                {
+                    objectives.erase(it);
+                    return true;
+                }
+            return false;
+        }
         // The furnishings of the player's home: inventory slot -> ROM item number (SetInventorySlot). Slot 0 is the
         // wall, 1 the floor, 2..4 wall pieces, 0x1b furniture, 0x1c the bed, and so on (game/room_scene.hpp).
         std::map<int, int> equip;

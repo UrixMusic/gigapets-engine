@@ -340,6 +340,7 @@ namespace gp
         std::vector<uint16_t> tiles; // row-major
         Id tileset, collision;
         int collisionYOffset = 0; // the game adds a RAM word (0x1afa) to y before testing
+        int music = -1;           // a song (0..8) to start on entering; -1 = the zone's own (base areas) or keep the current one
         int marginL = 0, marginR = 0, marginT = 0, marginB = 0;
         std::vector<ObjectDef> objects;  // import keeps ROM order (y-sorted); stable-sort by y after mods are applied
         std::vector<IPoint> spawnPoints; // flowers / random items

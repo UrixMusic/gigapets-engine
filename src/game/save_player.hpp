@@ -36,6 +36,21 @@ namespace gp
         s.setIdList("flagIds", p.flags);
         s.setMap("equip", p.equip);
         s.setInt("tutorialsShown", int(p.tutorialsShown & 0xffffu));
+        // The HUD objectives of scripts: the ids in order, then one "objective.<id>" = "text|item|need" each (ids, texts and
+        // items cannot contain a space or a |). Old objective keys are cleared first so a cleared one does not linger.
+        for (auto it = s.kv.begin(); it != s.kv.end();)
+            it = it->first.rfind("objective.", 0) == 0 ? s.kv.erase(it) : std::next(it);
+        s.kv.erase("objectives");
+        if (!p.objectives.empty())
+        {
+            std::string order;
+            for (const ScriptObjective &o : p.objectives)
+            {
+                order += (order.empty() ? "" : " ") + o.id;
+                s.setStr("objective." + o.id, o.text + "|" + o.item + "|" + std::to_string(o.need));
+            }
+            s.setStr("objectives", order);
+        }
     }
 
     // CreateNewPet's SetInventorySlot calls for this species: the home a new pet starts with.
@@ -96,6 +111,32 @@ namespace gp
         // Saves from before homes had furnishings start with what CreateNewPet gives that species.
         p.equip = s.has("equip") ? s.getMap("equip") : starterEquip(p.species);
         p.tutorialsShown = s.has("tutorialsShown") ? unsigned(s.getInt("tutorialsShown")) & 0xffffu : 0u;
+        p.objectives.clear();
+        if (s.has("objectives"))
+        {
+            const std::string order = s.getStr("objectives");
+            size_t pos = 0;
+            while (pos < order.size())
+            {
+                size_t end = order.find(' ', pos);
+                if (end == std::string::npos)
+                    end = order.size();
+                const std::string id = order.substr(pos, end - pos);
+                pos = end + 1;
+                if (id.empty() || !s.has("objective." + id))
+                    continue;
+                const std::string v = s.getStr("objective." + id);
+                const size_t a = v.find('|'), b = a == std::string::npos ? a : v.find('|', a + 1);
+                if (b == std::string::npos)
+                    continue;
+                ScriptObjective o;
+                o.id = id;
+                o.text = v.substr(0, a);
+                o.item = v.substr(a + 1, b - a - 1);
+                o.need = std::clamp(std::atoi(v.c_str() + b + 1), 0, 99);
+                p.setObjective(std::move(o));
+            }
+        }
     }
 
     inline void createNewSave(int slot, const std::string &name, int species, int colour)

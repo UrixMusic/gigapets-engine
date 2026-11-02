@@ -206,6 +206,20 @@ namespace gp
             return i == legacyArea_.end() ? nullptr : area(i->second);
         }
 
+        // Everything of a kind, for tools that list or export the content (the base export, editors). Ordered by id.
+        const std::map<Id, Tileset> &allTilesets() const { return tilesets_; }
+        const std::map<Id, CollisionSet> &allCollisions() const { return collisions_; }
+        const std::map<Id, ObjectType> &allObjectTypes() const { return objTypes_; }
+        const std::map<Id, AreaDef> &allAreas() const { return areas_; }
+        const std::map<Id, TextDef> &allTexts() const { return texts_; }
+        std::vector<const NpcDef *> allNpcs() const
+        {
+            std::vector<const NpcDef *> v;
+            for (const Id &k : npcOrder_)
+                v.push_back(&npcs_.at(k));
+            return v;
+        }
+
         const Anim *anim(const Id &id) const
         {
             auto i = anims_.find(id);
