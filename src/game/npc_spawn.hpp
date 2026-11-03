@@ -7,7 +7,7 @@
 namespace gp {
 
 constexpr int kPoolEntryCount = 0x4e;
-constexpr int kQuestGatedPoolEntry = 0x36;   // spawns in area 3 even before the quest gate
+constexpr int kQuestGatedPoolEntry = 0x36;   // the one pool entry in area 3 that is there from the start (no questMin)
 
 struct NpcSpawnInfo {
     int areaId = 0, spawnX = 0, spawnY = 0;
@@ -27,11 +27,8 @@ struct NpcInstanceInit {
     bool stationary = false;
 };
 
-// SpawnPoolEntriesForStage filter.
-inline bool npcSpawnsInArea(int entry, const NpcSpawnInfo& info, int area, int questsCompleted) {
-    if (info.areaId != area) return false;
-    return area != 3 || questsCompleted > 0x10 || entry == kQuestGatedPoolEntry;
-}
+// SpawnPoolEntriesForStage's area-3 rule (nothing spawns there until more than 16 quests are done, except entry 0x36) is data now:
+// NpcDef::questMin, set by the importer.
 
 // SpawnPoolEntryInstance.
 inline NpcInstanceInit initNpcInstance(const NpcSpawnInfo& info, int playerSpecies, int spawnParam2 = 0) {

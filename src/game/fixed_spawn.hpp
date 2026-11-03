@@ -98,9 +98,9 @@ namespace gp
         return placed;
     }
 
-    // ProcessQuestTurnIn (0x197b9), g_questTypeMode == 5: exact-equality quest counts place a persistent item.
-    // Only item 262 is buried; the others lie on the ground. The random-slot rewards at counts 26, 55, 57, 94
-    // (SpawnItemAtRandomFreeSlot) are not covered here.
+    // ProcessQuestTurnIn (0x197b9): exact-equality quest counts place a persistent item. These four are the base game's rows
+    // (imported as "base:quest_spawn/<count>" QuestSpawnDef records, which mods add to and change). Only item 262 is buried;
+    // the others lie on the ground. The random-slot rewards at counts 26, 55, 57, 94 (SpawnItemAtRandomFreeSlot) are not covered.
     struct QuestCountSpawn
     {
         int count, area, item, x, y, state;
@@ -112,19 +112,55 @@ namespace gp
         {100, 5, 236, 2380, 640, 2},
     }};
 
-    // UNCONFIRMED: whether `questsCompleted` is the value before or after this turn-in is counted. Pass the
-    // value that makes quest 15's turn-in match 15 in your quest code.
-    inline int spawnQuestCountItems(WorldItems &t, int questsCompleted, int questTypeMode)
+    // The ROM's random-slot rewards of ProcessQuestTurnIn (SpawnItemAtRandomFreeSlot), the same rows with random = true:
+    // quest 26: 2x item 250 on the ground and 2x item 246 buried (area 0); 55: 5x item 251 (area 6); 57: 3x each of items 252, 254, 255, 256,
+    // 257 and 1x item 253 (area 6); 94: 5x item 251 (area 7), 4x item 249 on the ground (area 5), 4x item 248 on the ground (area 2).
+    // state 0 there is the buried "flower marker" kind of random find (the ROM's own name for it), 2 lies on the ground.
+    struct QuestRandomSpawn
     {
-        if (questTypeMode != 5)
-            return 0;
+        int count, area, item, state, times;
+    };
+    inline constexpr std::array<QuestRandomSpawn, 12> kQuestRandomSpawns = {{
+        {26, 0, 250, 2, 2},
+        {26, 0, 246, 0, 2},
+        {55, 6, 251, 0, 5},
+        {57, 6, 252, 0, 3},
+        {57, 6, 254, 0, 3},
+        {57, 6, 255, 0, 3},
+        {57, 6, 256, 0, 3},
+        {57, 6, 257, 0, 3},
+        {57, 6, 253, 0, 1},
+        {94, 7, 251, 0, 5},
+        {94, 5, 249, 2, 4},
+        {94, 2, 248, 2, 4},
+    }};
+
+    // Place what turning in quest number `count` places. `rows` = db.questSpawnsFor(count). Returns how many were placed.
+    // A random row needs the area (areaOf) and the dice (rnd); with no area, or an area without spawn_points, it places nothing.
+    // Confirmed in the ROM (ProcessQuestTurnIn, 0x197b9): it compares g_totalQuestsCompleted, which still holds the number of the quest
+    // being handed in (LoadScriptedQuestData moves it on afterwards), so walk.cpp passes quests.counter. The ROM only does this for
+    // quest type mode 5 (scripted quests); the records do not check the type, so any quest with that number places its rows.
+    inline int spawnQuestCountItems(WorldItems &t, const std::vector<const QuestSpawnDef *> &rows,
+                                    const std::function<int(const Id &)> &itemNumber,
+                                    const std::function<const AreaDef *(int)> &areaOf = nullptr, const RandFn &rnd = nullptr)
+    {
         int placed = 0;
-        for (const QuestCountSpawn &q : kQuestCountSpawns)
+        for (const QuestSpawnDef *q : rows)
         {
-            if (q.count != questsCompleted)
+            const int item = q ? itemNumber(q->item) : -1;
+            if (item < 0)
+                continue; // the db doesn't know this item (a removed mod)
+            if (q->random)
+            {
+                const AreaDef *a = areaOf ? areaOf(q->area) : nullptr;
+                if (!a || !rnd)
+                    continue;
+                for (int k = 0; k < q->times; ++k)
+                    if (t.spawnAtFreeSlot(*a, item, static_cast<EventState>(q->state), true, rnd))
+                        ++placed;
                 continue;
-            if (t.spawn(q.area, 0xffff, q.item, q.x, q.y, static_cast<EventState>(q.state),
-                        true, false, 0xffff) >= 0)
+            }
+            if (t.spawn(q->area, 0xffff, item, q->x, q->y, static_cast<EventState>(q->state), true, false, 0xffff) >= 0)
                 ++placed;
         }
         return placed;

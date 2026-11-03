@@ -269,5 +269,85 @@ check('palette records show in the world', () => {
   const W = G.buildWorld(base, [{ id: 'm', files: [{ name: 'a.json', records: [{ type: 'palette', mode: 'add', id: 'm:pal/x', based_on: 481 }] }] }]);
   assert(W.palettes['m:pal/x'] && W.palettes['m:pal/x'].src === 'm');
 });
+
+const world = recs => G.buildWorld(base, [{ id: 'm', files: [{ name: G.EDFILE, records: recs }] }]);
+check('the export carries the tables and items', () => {
+  const W = world([]);
+  assert(W.items.length > 200 && W.items[0].src === 'base' && W.items[0].name);
+  assert.strictEqual(W.tables.find.length, 15);
+  assert.strictEqual(W.tables.gate.length, 5);
+  assert.strictEqual(W.tables.quest_spawn.length, 16);
+  const s = W.tables.spot[0]; assert(s.area.startsWith('base:area/') && s.state && s.item.startsWith('base:item/'), 'a spot names its area by id');
+  const q = W.tables.quest_spawn.find(r => r.id === 'base:quest_spawn/15');
+  assert(q.quest === 15 && q.area === 'base:area/3' && q.x === 2226 && q.state === 'buried');
+  const rnd = W.tables.quest_spawn.filter(r => r.random); assert(rnd.length === 12 && rnd.every(r => r.times >= 1 && r.x === undefined));
+  assert(W.tables.quest_spawn.find(r => r.id === 'base:quest_spawn/26/246').state === 'buried', 'a random buried reward');
+  const g = W.tables.gate.find(r => r.id === 'base:gate/5/1'); assert(g.kind === 'stat' && g.stats.join() === 'stars,lightbulbs' && g.need === 500);
+  assert(W.npcs.filter(n => n.quest_min === 17).length === 11 && W.areas['base:area/5'].diggable === true && Object.values(W.areas).some(a => a.src === 'base' && a.diggable === false));
+});
+
+check('rows: add, patch and remove, in the editor and in the world', () => {
+  const recs = [];
+  let W = world(recs);
+  const item = W.items[3].id;
+  const fid = G.edRowAdd(recs, W, 'm', 'find', { item, weight: 40 });
+  assert.strictEqual(fid, 'm:find/e1');
+  const base265 = W.tables.find.find(r => r.id === 'base:find/265');
+  G.edRowPatch(recs, 'find', base265, { weight: 7 });
+  assert.deepStrictEqual(recs[1], { type: 'find', mode: 'patch', id: 'base:find/265', weight: 7 });
+  G.edRowPatch(recs, 'find', base265, { weight: 8 });
+  assert.strictEqual(recs.length, 2); assert.strictEqual(recs[1].weight, 8); // the same patch
+  const own = W.tables.find[0]; G.edRowRemove(recs, 'find', own);
+  assert.deepStrictEqual(recs[2], { type: 'find', mode: 'remove', id: own.id });
+  W = world(recs);
+  assert.strictEqual(W.tables.find.find(r => r.id === fid).weight, 40);
+  assert.strictEqual(W.tables.find.find(r => r.id === 'base:find/265').weight, 8);
+  assert(!W.tables.find.some(r => r.id === own.id) && W.removedRows.find.some(r => r.id === own.id && r.removedBy === 'm'));
+  G.edRowRestore(recs, 'find', own.id); assert(!recs.some(r => r.mode === 'remove'));
+  G.edRowPatch(recs, 'find', base265, { weight: undefined }); assert(!recs.some(r => r.mode === 'patch'), 'an empty patch goes away');
+  G.edRowRemove(recs, 'find', W.tables.find.find(r => r.id === fid)); assert(!recs.some(r => r.id === fid), 'removing your own row deletes its record');
+});
+
+check('spots cannot be patched; quest rewards and gates can', () => {
+  const recs = [];
+  const W = world(recs);
+  const sp = W.tables.spot[0];
+  assert.throws(() => G.edRowPatch(recs, 'spot', sp, { x: 1 }), /cannot be changed/);
+  const id = G.edRowAdd(recs, W, 'm', 'spot', { area: 'base:area/0', item: W.items[0].id, x: 5, y: 6, state: 'ground' });
+  G.edRowPatch(recs, 'spot', { id }, { x: 9 }); // your own spot is edited in its add record
+  assert.deepStrictEqual(recs[0], { type: 'spot', mode: 'add', id: 'm:spot/e1', area: 'base:area/0', item: W.items[0].id, x: 9, y: 6, state: 'ground' });
+  const W2 = world(recs); assert(W2.tables.spot.some(r => r.id === id && r.x === 9));
+  const q = W2.tables.quest_spawn.find(r => r.id === 'base:quest_spawn/32');
+  G.edRowPatch(recs, 'quest_spawn', q, { quest: 33, x: 10 });
+  const g = W2.tables.gate.find(r => r.id === 'base:gate/5/22');
+  G.edRowPatch(recs, 'gate', g, { need: 3000 });
+  const W3 = world(recs);
+  assert.strictEqual(W3.tables.quest_spawn.find(r => r.id === q.id).quest, 33);
+  assert.strictEqual(W3.tables.quest_spawn.find(r => r.id === q.id).y, q.y);
+  assert.strictEqual(W3.tables.gate.find(r => r.id === g.id).need, 3000);
+  assert(W3.tables.gate.find(r => r.id === g.id).mods.some(m => m.kind === 'patch' && m.mod === 'm'));
+});
+
+check('items a mod adds can be picked', () => {
+  const W = G.buildWorld(base, [{ id: 'm', files: [{ name: 'a.json', records: [{ type: 'item', mode: 'add', id: 'm:item/pie', name: 'm:str/pie' }] }] }]);
+  assert(W.items.some(i => i.id === 'm:item/pie' && i.src === 'm'));
+});
+
+check('npc quest window and colour, area diggable, object scene', () => {
+  const recs = [];
+  let W = world(recs);
+  const n = W.npcs.find(x => x.quest_min === 17);
+  G.edSetNpcFields(recs, n, { quest_min: 20, palette: 'm:pal/x' });
+  assert.deepStrictEqual(recs[0], { type: 'npc', mode: 'replace', id: n.id, quest_min: 20, palette: 'm:pal/x' });
+  W = world(recs); assert.strictEqual(W.npcs.find(x => x.id === n.id).quest_min, 20); assert.strictEqual(W.npcs.find(x => x.id === n.id).palette, 'm:pal/x');
+  G.edSetNpcFields(recs, n, { quest_min: undefined, palette: undefined }); assert.strictEqual(recs.length, 0, 'an empty replace goes away');
+  G.edSetAreaField(recs, 'base:area/3', 'diggable', true);
+  W = world(recs); assert.strictEqual(W.areas['base:area/3'].diggable, true);
+  const o = W.areas['base:area/0'].objects[2];
+  G.edSetObjectScene(recs, o, 'm:scene/hello');
+  assert.deepStrictEqual(recs[1], { type: 'object', mode: 'patch', id: o.id, area: 'base:area/0', scene: 'm:scene/hello' });
+  W = world(recs); assert.strictEqual(W.areas['base:area/0'].objects[2].scene, 'm:scene/hello');
+  G.edSetObjectScene(recs, o, ''); assert(!recs.some(r => r.type === 'object'));
+});
 if (fails) { console.error(fails + ' failed'); process.exit(1); }
 console.log('gigaeditr_plus_test: all passed');

@@ -4,6 +4,7 @@
 #include "../src/loaders/fixed_spots.hpp"
 #include <cstdio>
 #include <map>
+#include <random>
 #include <set>
 
 using namespace gp;
@@ -168,18 +169,63 @@ static void testGrantHook() {
 }
 
 static void testQuestCount() {
+    // the base rows, as the importer makes them
+    std::vector<QuestSpawnDef> all;
+    for (const QuestCountSpawn& q : kQuestCountSpawns)
+        all.push_back({"base:quest_spawn/" + std::to_string(q.count), q.count, q.area, legacyItemId(q.item), q.x, q.y, q.state});
+    auto place = [&](WorldItems& t, int count) {
+        std::vector<const QuestSpawnDef*> rows;
+        for (const QuestSpawnDef& d : all)
+            if (d.count == count)
+                rows.push_back(&d);
+        return spawnQuestCountItems(t, rows, [](const Id& i) { return legacyItemNumber(i); });
+    };
     WorldItems t;
-    CHECK(spawnQuestCountItems(t, 15, 4) == 0);                        // only mode 5
-    CHECK(spawnQuestCountItems(t, 16, 5) == 0);                        // exact equality
-    CHECK(spawnQuestCountItems(t, 15, 5) == 1);
+    CHECK(place(t, 16) == 0);                                          // exact equality
+    CHECK(place(t, 15) == 1);
     const WorldItem* e = find(t, 262);
     CHECK(e && e->area == 3 && e->state == EventState::HiddenQuest && e->persistent && e->trigger == kEventNoTrigger);
     t.clearNonPersistent();
     CHECK(find(t, 262));                                               // survives area change
-    CHECK(spawnQuestCountItems(t, 32, 5) == 1);
+    CHECK(place(t, 32) == 1);
     CHECK(find(t, 168) && find(t, 168)->state == EventState::Visible && find(t, 168)->area == 9);
-    CHECK(spawnQuestCountItems(t, 90, 5) == 1 && find(t, 183)->x == 1636);
-    CHECK(spawnQuestCountItems(t, 100, 5) == 1 && find(t, 236)->y == 640);
+    CHECK(place(t, 90) == 1 && find(t, 183)->x == 1636);
+    CHECK(place(t, 100) == 1 && find(t, 236)->y == 640);
+    all.push_back({"m:quest_spawn/gone", 7, 1, "m:item/removed", 1, 1, 2}); // an item the db no longer knows is skipped
+    CHECK(place(t, 7) == 0);
+    { // random rows: n copies on free spawn points of the area, persistent; no area / no points places none
+        AreaDef area;
+        area.legacyId = 6;
+        area.spawnPoints = {{10, 10}, {20, 20}, {30, 30}, {40, 40}, {50, 50}};
+        std::mt19937 g(1);
+        const RandFn rnd = makeRandFn(g);
+        QuestSpawnDef d{"m:quest_spawn/rnd", 40, 6, legacyItemId(251), 0, 0, 0};
+        d.random = true;
+        d.times = 3;
+        const std::vector<const QuestSpawnDef*> rows{&d};
+        const std::function<int(const Id&)> num = [](const Id& i) { return legacyItemNumber(i); };
+        const std::function<const AreaDef*(int)> areaOf = [&](int a) { return a == 6 ? &area : nullptr; };
+        WorldItems w;
+        CHECK(spawnQuestCountItems(w, rows, num, areaOf, rnd) == 3);
+        CHECK(w.size() == 3);
+        std::set<int> slots;
+        for (const WorldItem& e : w.events())
+            slots.insert(e.spawnSlot);
+        CHECK(slots.size() == 3 && !slots.count(kEventNoSlot));        // three different spots
+        w.clearNonPersistent();
+        CHECK(w.size() == 3);                                          // they stay
+        d.times = 9;                                                   // only 2 spots left
+        CHECK(spawnQuestCountItems(w, rows, num, areaOf, rnd) == 2);
+        WorldItems none;
+        CHECK(spawnQuestCountItems(none, rows, num, nullptr, rnd) == 0 && spawnQuestCountItems(none, rows, num, areaOf, nullptr) == 0);
+        d.area = 5;
+        CHECK(spawnQuestCountItems(none, rows, num, areaOf, rnd) == 0); // area unknown
+    }
+    // the base random rows hold the ROM's counts
+    std::map<int, int> per;
+    for (const QuestRandomSpawn& q : kQuestRandomSpawns)
+        per[q.count] += q.times;
+    CHECK(per.size() == 4 && per[26] == 4 && per[55] == 5 && per[57] == 16 && per[94] == 13);
 }
 
 static void testPlayerAdapter() {

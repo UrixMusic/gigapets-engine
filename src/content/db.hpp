@@ -292,6 +292,83 @@ namespace gp
                 v.push_back(&finds_.at(k));
             return v;
         }
+        // Every dig spot / quest reward in the order they were added (the base game's first).
+        std::vector<const FixedSpotDef *> allSpots() const
+        {
+            std::vector<const FixedSpotDef *> v;
+            for (const Id &k : spotOrder_)
+                v.push_back(&spots_.at(k));
+            return v;
+        }
+        std::vector<const QuestSpawnDef *> allQuestSpawns() const
+        {
+            std::vector<const QuestSpawnDef *> v;
+            for (const Id &k : questSpawnOrder_)
+                v.push_back(&questSpawns_.at(k));
+            return v;
+        }
+        void put(QuestSpawnDef q)
+        {
+            const Id k = q.id;
+            if (!questSpawns_.count(k))
+                questSpawnOrder_.push_back(k);
+            questSpawns_[k] = std::move(q);
+        }
+        const QuestSpawnDef *questSpawn(const Id &id) const
+        {
+            const auto it = questSpawns_.find(id);
+            return it == questSpawns_.end() ? nullptr : &it->second;
+        }
+        QuestSpawnDef *questSpawnMutable(const Id &id)
+        {
+            const auto it = questSpawns_.find(id);
+            return it == questSpawns_.end() ? nullptr : &it->second;
+        }
+        void eraseQuestSpawn(const Id &id)
+        {
+            questSpawns_.erase(id);
+            questSpawnOrder_.erase(std::remove(questSpawnOrder_.begin(), questSpawnOrder_.end(), id), questSpawnOrder_.end());
+        }
+        // Everything turning in quest number `count` places, in the order the records were added.
+        std::vector<const QuestSpawnDef *> questSpawnsFor(int count) const
+        {
+            std::vector<const QuestSpawnDef *> v;
+            for (const Id &k : questSpawnOrder_)
+                if (questSpawns_.at(k).count == count)
+                    v.push_back(&questSpawns_.at(k));
+            return v;
+        }
+        void put(GateDef g)
+        {
+            const Id k = g.id;
+            if (!gates_.count(k))
+                gateOrder_.push_back(k);
+            gates_[k] = std::move(g);
+        }
+        const GateDef *gate(const Id &id) const
+        {
+            const auto it = gates_.find(id);
+            return it == gates_.end() ? nullptr : &it->second;
+        }
+        GateDef *gateMutable(const Id &id)
+        {
+            const auto it = gates_.find(id);
+            return it == gates_.end() ? nullptr : &it->second;
+        }
+        void eraseGate(const Id &id)
+        {
+            gates_.erase(id);
+            gateOrder_.erase(std::remove(gateOrder_.begin(), gateOrder_.end(), id), gateOrder_.end());
+        }
+        // The gates whose barrier is in this area (legacy id), in the order they were added.
+        std::vector<const GateDef *> gatesIn(int area) const
+        {
+            std::vector<const GateDef *> v;
+            for (const Id &k : gateOrder_)
+                if (gates_.at(k).area == area)
+                    v.push_back(&gates_.at(k));
+            return v;
+        }
         // A mod's palette: its number follows the order they were added in.
         void put(PaletteDef p)
         {
@@ -466,6 +543,10 @@ namespace gp
         std::map<Id, PaletteDef> palettes_;
         std::vector<Id> paletteOrder_;
         std::map<Id, FindWeightDef> finds_;
+        std::map<Id, GateDef> gates_;
+        std::vector<Id> gateOrder_;
+        std::map<Id, QuestSpawnDef> questSpawns_;
+        std::vector<Id> questSpawnOrder_;
         std::vector<Id> findOrder_;
         std::vector<Id> spotOrder_;
         std::vector<QuestDef> quests_;

@@ -9,6 +9,7 @@
 #include "../game/player.hpp"
 #include "../game/quest_nudge.hpp"
 #include "../game/sale.hpp"
+#include "../game/thought_bubble.hpp"
 #include <cstdio>
 
 static int fails = 0;
@@ -36,7 +37,30 @@ int main()
     CHECK(t.approachDX == EncounterSequence::kApproachDX && t.closerDX == EncounterSequence::kCloserDX &&
           t.awayDX == EncounterSequence::kAwayDX && t.giveUpTicks == EncounterSequence::kGiveUpTicks);
     CHECK(t.nudgeFirstSeconds == kNudgeFirstSeconds && t.nudgeRepeatSeconds == kNudgeRepeatSeconds);
+    CHECK(t.nudgeQuests == kNudgeQuestsCompleted && t.nudgeNpc == kNudgeMayorNpc && t.decayAfterQuests == kDecayAfterQuests);
+    CHECK(romToSim(t.tiredDecayRomTicks) == kTiredDecayLimit && romToSim(t.hungerDecayRomTicks) == kHungerDecayLimit);
     CHECK(t.tickHz == 30.0 && t.camY == 145 && t.probeDY == -4); // (these three live in walk.cpp)
+
+    { // the decay start and the reminder's quest count are read where they are used
+        long a = 0;
+        CHECK(!decayStep(a, 1, 3) && decayStep(a, 1, 4));
+        tuning().decayAfterQuests = 6;
+        a = 0;
+        CHECK(!decayStep(a, 1, 6) && decayStep(a, 1, 7));
+        tuning().decayAfterQuests = 3;
+        QuestNudge n;
+        CHECK(QuestNudge::applies(1, 0) && !QuestNudge::applies(2, 0));
+        tuning().nudgeQuests = 2;
+        CHECK(QuestNudge::applies(2, 0) && !QuestNudge::applies(1, 0) && !QuestNudge::applies(2, 1));
+        n.restart(0);
+        CHECK(n.due(60 * 31, 2, 0, -1) && !n.due(60 * 32, 2, 0, -1)); // 30 s, then the repeat limit
+        tuning().nudgeQuests = 1;
+        tuning().nudgeNpc = 7;
+        n.restart(0);
+        CHECK(!n.due(60 * 31, 1, 0, 7));   // beside the chosen npc: no reminder
+        CHECK(n.due(60 * 31, 1, 0, 0x42)); // and the old one no longer counts
+        tuning().nudgeNpc = 0x42;
+    }
 
     // the care and money caps are read where they are applied
     Player p;

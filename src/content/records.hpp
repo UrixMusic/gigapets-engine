@@ -117,6 +117,8 @@ namespace gp
         std::vector<Id> lines; // rotating dialogue for stationary NPCs: 3 text ids
         int portraitPalette = 0x28c;
         Id palette; // a mod's PaletteDef: recolours the roaming pet's animations (applyNpcPalettes); empty = the ROM's own colours
+        int questMin = 0, questMax = 0x7fffffff; // in the world while questMin <= quests completed < questMax (the base game's area 3 pets: 17..)
+        bool availableAt(int quests) const { return quests >= questMin && quests < questMax; }
     };
 
     // Classifier rules from ClassifyReactionCategory (player side) / ClassifyCompatibilityReaction (animal side).
@@ -397,6 +399,40 @@ namespace gp
         bool notOffered = false;    // skip once returned to the King
         bool notLegacyFlag = false; // skip once the legacy collected flag is set
         Id spawnOnGrantItem;        // empty = none; also spawn at once when this item is granted in `area`
+    };
+
+    // Something placed in the world when a given quest is turned in (the ROM's ProcessQuestTurnIn: quest 15 buries item 262, ...).
+    // It stays until picked up, wherever the pet goes (persistent), unlike a FixedSpotDef, which is placed again on every entry.
+    struct QuestSpawnDef
+    {
+        Id id;
+        int count = 0; // the quest number whose turn-in places it (quests.counter at that moment: quest 15 -> 15)
+        int area = 0;  // legacy area id
+        Id item;
+        int x = 0, y = 0;
+        int state = 1; // 1 = buried (dig it up), 2 = lying on the ground
+        bool random = false; // true: x / y unused; it goes on a free one of the area's random spots (spawn_points), like the random finds
+        int times = 1;       // how many copies (random only; each takes its own spot)
+    };
+
+    // A barrier that goes for good once the pet meets a condition (the five guards' barriers in Magma Mountain). The object named by
+    // `barrier` disappears (ObjectDef::goneOnFlag = the gate's id, a player flag that stays set). Checked every step while the pet is in
+    // the barrier's area.
+    enum class GateKind
+    {
+        Tricks,      // tricks known >= need
+        Personality, // any of `stats` (PersonalityStat numbers: 0 halos, 1 pitchforks, 2 stars, 3 lightbulbs) >= need
+        Money,       // money >= need
+        Quests       // quests done (the game's counter, which starts at 1) >= need
+    };
+    struct GateDef
+    {
+        Id id; // also the name of the player flag that records it opened ("base:gate/5/25" for the base game's, as in old saves)
+        int area = 0; // legacy area id of the barrier object
+        Id barrier;   // ObjectDef id
+        GateKind kind = GateKind::Personality;
+        std::vector<int> stats;
+        int need = 1;
     };
 
     // One row of the table a random dig find is drawn from (the ROM's PickRandomEventItemId table): the item turns up with

@@ -980,9 +980,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             };
             for (const gp::NpcDef *d : db.npcsInArea(area))
             {
-                gp::NpcSpawnInfo info;
-                info.areaId = area;
-                if (!gp::npcSpawnsInArea(d->index, info, area, player.questsCompleted))
+                if (!d->availableAt(player.questsCompleted)) // the base game's area 3 pets wait for quest 17; a mod's npc can set quest_min / quest_max
                     continue;
                 if (scriptNpc.removed.count(d->id))
                     continue;
@@ -1163,7 +1161,6 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         uint32_t &gameTicks = S.world.gameTicks; // the game's tick counter: +2 per 30 Hz tick
         gp::QuestNudge nudge;           // "Go see Mayor Peter!" (quest_nudge.hpp)
         nudge.restart(long(gameTicks));
-        const gp::NpcDef *mayorDef = nullptr; // NPC 0x42, set once the NPCs are indexed
         TextDrawer signText(ren, db.font(gp::fontId(1, 0x11f))); // sign text: font 1, palette 0x11f
         TextDrawer text(ren, db.font(gp::fontId(0)));            // dialogue text: font 0
         TextDrawer numbers(ren, db.font(gp::fontId(2)));         // stat numbers: font 2
@@ -2574,8 +2571,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 {
                     tutNudge = false;
                     gp::DialogueBox nb = gp::messageBox(readRomString(rom, gp::kNudgeMessageAddr));
-                    if (mayorDef)
-                        nb.portrait = gp::uiSpriteId(mayorDef->portraitSprite, mayorDef->portraitPalette);
+                    for (const gp::NpcDef *d : db.allNpcs()) // the base NPC the reminder points to (tuning.nudgeNpc: Mayor Peter)
+                        if (d->index == gp::tuning().nudgeNpc && d->id.rfind("base:", 0) == 0)
+                        {
+                            nb.portrait = gp::uiSpriteId(d->portraitSprite, d->portraitPalette);
+                            break;
+                        }
                     dialogue.show(std::move(nb));
                 }
                 else
@@ -2591,12 +2592,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             const bool calm = tutStep == 0 && !enc && !dialogue.open();
             ++stinkTicks;
             // the stats wear down (conditions 1 and 2)
-            if (gp::decayStep(tiredDecayAccum, gp::kTiredDecayLimit, player.questsCompleted))
+            if (gp::decayStep(tiredDecayAccum, gp::romToSim(gp::tuning().tiredDecayRomTicks), player.questsCompleted))
             {
                 player.adjustCare(gp::Tiredness, -gp::tiredDecayAmount(sp));
                 tiredTimer.accum = tiredTimer.limit - gp::kThoughtRetryTicks;
             }
-            if (gp::decayStep(hungerDecayAccum, gp::kHungerDecayLimit, player.questsCompleted))
+            if (gp::decayStep(hungerDecayAccum, gp::romToSim(gp::tuning().hungerDecayRomTicks), player.questsCompleted))
             {
                 const int before = player.care[gp::Hunger];
                 player.adjustCare(gp::Hunger, -gp::hungerDecayAmount(sp));
@@ -4608,7 +4609,6 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     npcByIndex[size_t(d->index)] = d;
         auto npcAt = [&](int p) -> const gp::NpcDef *
         { return p >= 0 && p < 0x4e ? npcByIndex[size_t(p)] : nullptr; };
-        mayorDef = npcAt(gp::kNudgeMayorNpc);
 
         {
             std::set<std::pair<int, int>> done;
@@ -4918,6 +4918,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             E.expose("tuning.closerDX", &T.closerDX, "... steps closer for a friend (20)");
             E.expose("tuning.awayDX", &T.awayDX, "... walks away from one that is not (30)");
             E.expose("tuning.giveUpTicks", &T.giveUpTicks, "how long the pet tries to get there (120)");
+            E.expose("tuning.decayAfterQuests", &T.decayAfterQuests, "hunger and sleepiness wear down once more than this many quests are done (3)");
+            E.expose("tuning.tiredDecayRomTicks", &T.tiredDecayRomTicks, "between drops of Sleepiness, 59.94 Hz ticks (20000)");
+            E.expose("tuning.hungerDecayRomTicks", &T.hungerDecayRomTicks, "between drops of Hunger, 59.94 Hz ticks (4000)");
+            E.expose("tuning.nudgeQuests", &T.nudgeQuests, "the reminder shows while exactly this many quests are done (1)");
+            E.expose("tuning.nudgeNpc", &T.nudgeNpc, "the base NPC record number it sends the pet to (0x42, Mayor Peter)");
             E.expose("tuning.nudgeFirstSeconds", &T.nudgeFirstSeconds, "quest reminder, first (30)");
             E.expose("tuning.nudgeRepeatSeconds", &T.nudgeRepeatSeconds, "quest reminder, repeat (180)");
         }
@@ -5052,6 +5057,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 info.giverId = g->id;
             if (const gp::NpcDef *r = npcAt(d.receiver))
                 info.receiverId = r->id;
+            // What this quest's turn-in places in the world (quest_spawn records; the quest number is the one just handed in).
+            gp::spawnQuestCountItems(events, db.questSpawnsFor(quests.counter), [&](const gp::Id &i) { return gp::legacyItemNumber(i); },
+                                    [&](int a) { return db.areaByLegacy(a); }, rnd);
             return scripts.fireQuestComplete(info).suppress;
         };
 
@@ -5980,7 +5988,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 tickHoleFills();
                 tickWash();
                 tickSwiftDrop();
-                if (cur->def->legacyId == gp::kGateArea && gp::updateStatGates(player)) // CheckStatsAndMoneyGate
+                if (gp::updateStatGates(player, db.gatesIn(cur->def->legacyId), quests.counter)) // CheckStatsAndMoneyGate
                 {
                     refreshBits();
                     saveGame();

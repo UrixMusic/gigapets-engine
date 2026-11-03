@@ -23,6 +23,12 @@
       areas: { 'base:area/0': { legacyId: 0, name: 'base:text/1', width: 4, height: 3, tileset: 'base:tileset/1', collision: 'base:collision/1', margins: [42, 42, 62, 20], y_offset: 0, max_events: 0, map: [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]], spawn_points: [], objects: [{ id: 'base:area/0/obj/0', objtype: 'base:objtype/1', x: 64, y: 64, slot: 0, box: [56, 49, 72, 65] }] } },
       npcs: [], texts: { 'base:text/1': 'Town' }
     };
+    b.items = [{ id: 'base:item/1', name: 'base:text/2', index: 1 }, { id: 'base:item/2', name: 'base:text/3', index: 2 }];
+    b.texts['base:text/2'] = 'Gem'; b.texts['base:text/3'] = 'Cookie';
+    b.finds = [{ id: 'base:find/1', item: 'base:item/1', weight: 30 }];
+    b.quest_spawns = [{ id: 'base:quest_spawn/15', quest: 15, area: 0, item: 'base:item/2', x: 10, y: 20, state: 'buried' }];
+    b.spots = [{ id: 'base:spot/2', area: 0, item: 'base:item/2', x: 5, y: 6, state: 'ground' }];
+    b.npcs = [{ id: 'base:npc/9', name: 'base:text/1', area: 0, x: 30, y: 40, stationary: false, quest_min: 17 }];
     // a tiny pets.json: one species, one palette of 4 colours, one animation of 2 frames (8x8, the colour indices 1..3)
     const idx = (a) => btoa(String.fromCharCode(...a));
     const f1 = new Array(64).fill(0), f2 = new Array(64).fill(0); for (let i = 0; i < 64; i++) { if ((i % 8) > 1 && (i % 8) < 6 && i > 15 && i < 48) { f1[i] = 1 + (i % 3); f2[i] = 1 + ((i + 1) % 3); } }
@@ -110,6 +116,44 @@
     $('cex').click();
     document.querySelector('#pcList .pcD').click(); await until(() => !S.W.palettes['m:pal/ember']);
     out.palGone = !S.recs.some(x => x.type === 'palette' || x.type === 'minigame');
+
+    // ---- Game tables: add a find row, change a base row's weight, add a quest reward on random spots, remove a base spot ----
+    const rd = async () => S.recs;
+    const setv = (id, v) => { const e = $(id); e.value = v; e.dispatchEvent(new Event('change', { bubbles: true })); };
+    const mark = t => { out.at = t; document.body.setAttribute('data-result', JSON.stringify(out)); };
+    mark('tables');
+    out.tbRows0 = document.querySelectorAll('#tbRows [data-i]').length;
+    $('tbAdd').click(); setv('tf_item', 'base:item/2'); setv('tf_weight', '55'); $('tbSave').click(); await until(() => S.W.tables.find.length === 2);
+    mark('addfind');
+    document.querySelector('#tbRows [data-i="0"] .tbE').click(); setv('tf_weight', '8'); $('tbSave').click(); await until(() => S.W.tables.find[0].weight === 8);
+    out.findRows = JSON.stringify((await rd()).filter(x => x.type === 'find'));
+    out.findText = document.querySelector('#tbRows [data-i="1"]').textContent.includes('Cookie');
+    mark('qs');
+    document.querySelector('#tbTabs input[value=quest_spawn]').click(); document.querySelector('#tbTabs input[value=quest_spawn]').dispatchEvent(new Event('change', { bubbles: true }));
+    await until(() => S.tbl === 'quest_spawn');
+    $('tbAdd').click(); setv('tf_quest', '26'); setv('tf_item', 'base:item/1'); $('tf_random').checked = true; $('tf_random').dispatchEvent(new Event('change')); setv('tf_times', '3'); $('tbSave').click();
+    await until(() => S.W.tables.quest_spawn.length === 2);
+    out.qsRec = JSON.stringify((await rd()).filter(x => x.type === 'quest_spawn'));
+    out.randHidden = true;
+    mark('spot');
+    document.querySelector('#tbTabs input[value=spot]').click(); document.querySelector('#tbTabs input[value=spot]').dispatchEvent(new Event('change', { bubbles: true }));
+    await until(() => S.tbl === 'spot');
+    out.spotEditHidden = document.querySelector('#tbRows [data-i="0"] .tbE').hidden;
+    document.querySelector('#tbRows [data-i="0"] .tbD').click(); await until(() => S.W.tables.spot.length === 0);
+    out.spotRec = JSON.stringify((await rd()).filter(x => x.type === 'spot'));
+    out.removedShown = document.querySelectorAll('#tbRemoved .tbR').length;
+    document.querySelector('#tbRemoved .tbR').click(); await until(() => S.W.tables.spot.length === 1);
+
+    // ---- an NPC's quest window, the area's diggable box, an object's scene ----
+    mark('npc');
+    S.sel = { kind: 'npc', id: 'base:npc/9' }; $('bSave').click(); await until(() => !S.dirty); $('modSel').dispatchEvent(new Event('change')); await until(() => $('nqmin'));
+    out.nqmin0 = $('nqmin').value;
+    $('nqmin').value = ''; $('nqmax').value = '40'; $('napp').click(); await until(() => (S.recs.find(x => x.type === 'npc' && x.id === 'base:npc/9') || {}).quest_max === 40);
+    out.npcRec = JSON.stringify(S.recs.find(x => x.type === 'npc' && x.id === 'base:npc/9'));
+    $('arDig').checked = true; $('arDig').dispatchEvent(new Event('change')); await until(() => S.recs.some(x => x.type === 'area' && x.diggable === true));
+    out.digRec = JSON.stringify(S.recs.find(x => x.type === 'area' && x.diggable !== undefined));
+    $('arDig').checked = false; $('arDig').dispatchEvent(new Event('change')); await until(() => !S.recs.some(x => x.type === 'area' && x.diggable !== undefined));
+    out.digGone = true;
   } catch (e) { out.error = String(e && e.stack || e); }
   document.body.setAttribute('data-result', JSON.stringify(out));
 })();

@@ -14,6 +14,7 @@
 // INFERRED: where the tired timer starts and what its limit is (the ROM never writes it, so 0 as far as the code shows).
 #pragma once
 #include "settings.hpp"
+#include "../engine/tuning.hpp"
 
 namespace gp
 {
@@ -147,7 +148,7 @@ namespace gp
     // drops. The amount depends on the species (RAM 0x1a90 = g_playerSpecies): 2 for species 0 on sleepiness, 2 for species 2
     // on hunger, 1 otherwise. Limits read from RAM 0x1e9f and 0x1ea6 in MAME. The count restarts whether or not it dropped.
     constexpr long kTiredDecayLimit = romToSim(20000), kHungerDecayLimit = romToSim(4000);
-    constexpr int kDecayAfterQuests = 3;
+    constexpr int kDecayAfterQuests = 3; // the default of tuning().decayAfterQuests
     constexpr int tiredDecayAmount(int species) { return species == 0 ? 2 : 1; }
     constexpr int hungerDecayAmount(int species) { return species == 2 ? 2 : 1; }
     inline bool decayStep(long &accum, long limit, int questsCompleted)
@@ -155,7 +156,7 @@ namespace gp
         if (++accum < limit)
             return false;
         accum = 0;
-        return questsCompleted > kDecayAfterQuests;
+        return questsCompleted > tuning().decayAfterQuests;
     }
     // Falling into "hungry" brings the hungry bubble round in 25 s; the tired bubble gets that after every drop.
     constexpr bool crossedHungry(int before, int after) { return before > kThoughtHungerAtMost && after <= kThoughtHungerAtMost; }

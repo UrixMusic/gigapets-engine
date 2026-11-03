@@ -84,6 +84,7 @@ static ContentDB baseDb()
     gem.id = "base:item/173";
     db.put(std::move(gem));
     db.put(FindWeightDef{"base:find/265", "base:item/173", 100});
+    db.put(QuestSpawnDef{"base:quest_spawn/15", 15, 0, "base:item/173", 5, 6, 1});
     NpcDef pet;
     pet.id = "base:npc/12";
     pet.area = 0;
@@ -418,6 +419,94 @@ int main()
         const auto rows = db.findWeights();
         CHECK(rows.size() == 3 && rows.back()->id == "cave:find/gem"); // new rows go last, in order
     }
+    { // gate rows: add (barrier gets its flag), patch, remove (the barrier is let go); the base game's are records too
+        TmpMods t("gates");
+        t.manifest("cave");
+        assets(t, "cave");
+        t.data("cave", "a.json", kGoodData);
+        t.data("cave", "b.json", R"([
+          {"type":"gate","mode":"add","id":"cave:gate/stars","barrier":"cave:obj/door_out","kind":"stat","stats":["stars","lightbulbs","stars"],"need":30},
+          {"type":"gate","mode":"add","id":"cave:gate/late","barrier":"cave:obj/sign","kind":"quests","need":12},
+          {"type":"gate","mode":"patch","id":"base:gate/5/25","kind":"money","need":77},
+          {"type":"gate","mode":"remove","id":"base:gate/5/15"}])");
+        ContentDB db = baseDb();
+        db.areaMutable("base:area/0")->objects.push_back(ObjectDef{});
+        {
+            ObjectDef &o1 = db.areaMutable("base:area/0")->objects.back();
+            o1.id = "base:area/0/obj/gate25";
+            o1.goneOnFlag = "base:gate/5/25";
+        }
+        db.areaMutable("base:area/0")->objects.push_back(ObjectDef{});
+        {
+            ObjectDef &o2 = db.areaMutable("base:area/0")->objects.back();
+            o2.id = "base:area/0/obj/gate15";
+            o2.goneOnFlag = "base:gate/5/15";
+        }
+        GateDef g25;
+        g25.id = "base:gate/5/25";
+        g25.area = 0;
+        g25.barrier = "base:area/0/obj/gate25";
+        g25.kind = GateKind::Tricks;
+        g25.need = 3;
+        db.put(g25);
+        GateDef g15 = g25;
+        g15.id = "base:gate/5/15";
+        g15.barrier = "base:area/0/obj/gate15";
+        db.put(g15);
+
+        ModReport r = importMods(db, t.root);
+        for (auto &e : r.errors)
+            std::cerr << e << std::endl;
+        CHECK(r.ok());
+        const GateDef *st = db.gate("cave:gate/stars"), *late = db.gate("cave:gate/late");
+        CHECK(st && st->kind == GateKind::Personality && st->stats == std::vector<int>({2, 3}) && st->need == 30 && st->barrier == "cave:obj/door_out");
+        CHECK(st && st->area == db.area("cave:area/main")->legacyId && db.gatesIn(st->area).size() == 2); // the sign is in the same area
+        CHECK(late && late->kind == GateKind::Quests && late->need == 12);
+        const AreaDef *cave = db.area("cave:area/main");
+        int flagged = 0;
+        for (const ObjectDef &o : cave->objects)
+            flagged += (o.id == "cave:obj/door_out" && o.goneOnFlag == "cave:gate/stars") + (o.id == "cave:obj/sign" && o.goneOnFlag == "cave:gate/late");
+        CHECK(flagged == 2);
+        const GateDef *pg = db.gate("base:gate/5/25");
+        CHECK(pg && pg->kind == GateKind::Money && pg->need == 77 && pg->barrier == "base:area/0/obj/gate25");
+        CHECK(!db.gate("base:gate/5/15"));
+        for (const ObjectDef &o : db.area("base:area/0")->objects)
+            CHECK(o.id != "base:area/0/obj/gate15" || o.goneOnFlag.empty()); // removing a gate frees its barrier for good
+    }
+    { // quest_spawn rows: add, patch, remove; the quest number picks which turn-in places them
+        TmpMods t("questspawns");
+        t.manifest("cave");
+        assets(t, "cave");
+        t.data("cave", "a.json", kGoodData);
+        t.data("cave", "0_qs.json", R"([
+          {"type":"quest_spawn","mode":"add","id":"cave:qs/gem","quest":15,"area":"base:area/0","item":"base:item/173","x":40,"y":50},
+          {"type":"quest_spawn","mode":"patch","id":"base:quest_spawn/32","quest":33,"state":"buried","x":7},
+          {"type":"quest_spawn","mode":"add","id":"cave:qs/rain","quest":40,"area":"base:area/0","item":"base:item/173","random":true,"times":4,"state":"ground"},
+          {"type":"quest_spawn","mode":"patch","id":"base:quest_spawn/15","random":true,"times":2},
+          {"type":"quest_spawn","mode":"remove","id":"base:quest_spawn/90"}])");
+        ContentDB db = baseDb();
+        db.put(QuestSpawnDef{"base:quest_spawn/15", 15, 3, "base:item/173", 2226, 136, 1});
+        db.put(QuestSpawnDef{"base:quest_spawn/32", 32, 9, "base:item/173", 1376, 938, 2});
+        db.put(QuestSpawnDef{"base:quest_spawn/90", 90, 5, "base:item/173", 1636, 617, 2});
+
+        ModReport r = importMods(db, t.root);
+        for (auto &e : r.errors)
+            std::cerr << e << std::endl;
+        CHECK(r.ok());
+        const QuestSpawnDef *g = db.questSpawn("cave:qs/gem");
+        CHECK(g && g->count == 15 && g->area == 0 && g->x == 40 && g->y == 50 && g->state == 1 && g->item == "base:item/173");
+        const auto at15 = db.questSpawnsFor(15);
+        CHECK(at15.size() == 2 && at15[0]->id == "base:quest_spawn/15" && at15[1]->id == "cave:qs/gem"); // base rows first
+        CHECK(db.questSpawnsFor(32).empty());
+        const auto at33 = db.questSpawnsFor(33);
+        CHECK(at33.size() == 1 && at33[0]->x == 7 && at33[0]->y == 938 && at33[0]->state == 1 && at33[0]->area == 9); // area kept
+        CHECK(!db.questSpawn("base:quest_spawn/90") && db.questSpawnsFor(90).empty());
+        const QuestSpawnDef *rn = db.questSpawn("cave:qs/rain");
+        CHECK(rn && rn->random && rn->times == 4 && rn->state == 2 && rn->count == 40);
+        const QuestSpawnDef *p15 = db.questSpawn("base:quest_spawn/15"); // a fixed row can be turned into a random one
+        CHECK(p15 && p15->random && p15->times == 2 && p15->area == 3);
+        CHECK(p15->state == 0 && rn->state == 2); // a random "buried" is the dig marker (0); the fixed row was a quest item (1)
+    }
     { // minigame patch: numbers, replace / add / remove in lists, item ids become item numbers
         TmpMods t("minigames");
         t.manifest("cave");
@@ -492,6 +581,30 @@ int main()
         CHECK(np && np->palette == "cave:pal/ember" && np->x == 100 && np->y == 120 && np->befriendOdds == 7 && np->path.size() == 2 && np->speciesOrAnim == 1);
         CHECK(np && np->area == db.area("cave:area/main")->legacyId && np->index >= 1000 && np->anim == "base:anim/139");
         CHECK(base && base->palette == "cave:pal/mono" && base->x == 10 && base->befriendOdds == 7); // a replace keeps the rest
+    }
+    { // npc quest_min / quest_max: a window of completed quests; a based_on copy keeps the original's, a replace can change it
+        TmpMods t("npcquests");
+        t.manifest("cave");
+        assets(t, "cave");
+        t.data("cave", "a.json", kGoodData);
+        t.data("cave", "b.json", R"([
+          {"type":"npc","mode":"add","id":"cave:npc/late","based_on":"base:npc/12","area":"cave:area/main","x":5,"y":6,"quest_min":3,"quest_max":9},
+          {"type":"npc","mode":"add","id":"cave:npc/copy","based_on":"base:npc/13","area":"cave:area/main","x":5,"y":6,"quest_min":0},
+          {"type":"npc","mode":"replace","id":"base:npc/12","quest_max":50}])");
+        ContentDB db = baseDb();
+        NpcDef gated = *db.npc("base:npc/12");
+        gated.id = "base:npc/13";
+        gated.questMin = 0x11; // like the area 3 pets
+        db.put(gated);
+        ModReport r = importMods(db, t.root);
+        for (auto &e : r.errors)
+            std::cerr << e << std::endl;
+        CHECK(r.ok());
+        const NpcDef *late = db.npc("cave:npc/late"), *copy = db.npc("cave:npc/copy"), *base = db.npc("base:npc/12");
+        CHECK(late && late->questMin == 3 && late->questMax == 9 && !late->availableAt(2) && late->availableAt(3) && late->availableAt(8) && !late->availableAt(9));
+        CHECK(copy && copy->questMin == 0 && copy->availableAt(1)); // quest_min 0 lifts the gate it copied
+        CHECK(base && base->questMin == 0 && base->questMax == 50 && base->availableAt(1) && !base->availableAt(50));
+        CHECK(db.npc("base:npc/13")->questMin == 0x11 && !db.npc("base:npc/13")->availableAt(16) && db.npc("base:npc/13")->availableAt(17));
     }
     { // colour machine presets take palette ids, and a palette can name its species
         TmpMods t("colours");
@@ -621,6 +734,17 @@ int main()
     bad("findunknown", R"([{"type":"find","mode":"add","id":"cave:find/t","item":"cave:item/none","weight":5}])", "unknown item");
     bad("findweight", R"([{"type":"find","mode":"add","id":"cave:find/t","item":"base:item/173"}])", "'weight' is required");
     bad("findweightrange", R"([{"type":"find","mode":"add","id":"cave:find/t","item":"base:item/173","weight":0}])", "'weight'");
+    bad("qsrequired", R"([{"type":"quest_spawn","mode":"add","id":"cave:qs/t","quest":3,"area":"base:area/0","item":"base:item/173"}])", "are required");
+    bad("qsarea", R"([{"type":"quest_spawn","mode":"add","id":"cave:qs/t","quest":3,"area":"cave:area/none","item":"base:item/173","x":1,"y":1}])", "unknown area");
+    bad("qsitem", R"([{"type":"quest_spawn","mode":"add","id":"cave:qs/t","quest":3,"area":"base:area/0","item":"cave:item/none","x":1,"y":1}])", "unknown item");
+    bad("qsstate", R"([{"type":"quest_spawn","mode":"add","id":"cave:qs/t","quest":3,"area":"base:area/0","item":"base:item/173","x":1,"y":1,"state":"hidden"}])", "'state' must be");
+    bad("qsquest", R"([{"type":"quest_spawn","mode":"add","id":"cave:qs/t","quest":0,"area":"base:area/0","item":"base:item/173","x":1,"y":1}])", "quest");
+    bad("qsrandomxy", R"([{"type":"quest_spawn","mode":"add","id":"cave:qs/t","quest":3,"area":"base:area/0","item":"base:item/173","random":true,"x":1,"y":1}])", "no 'x' / 'y'");
+    bad("qstimesfixed", R"([{"type":"quest_spawn","mode":"add","id":"cave:qs/t","quest":3,"area":"base:area/0","item":"base:item/173","x":1,"y":1,"times":2}])", "'times' only applies");
+    bad("qstimesrange", R"([{"type":"quest_spawn","mode":"add","id":"cave:qs/t","quest":3,"area":"base:area/0","item":"base:item/173","random":true,"times":0}])", "'times'");
+    bad("qsnoxy", R"([{"type":"quest_spawn","mode":"add","id":"cave:qs/t","quest":3,"area":"base:area/0","item":"base:item/173"}])", "'x' and 'y' are required");
+    bad("qspatchnone", R"([{"type":"quest_spawn","mode":"patch","id":"base:quest_spawn/none","x":3}])", "no such quest_spawn");
+    bad("qspatchempty", R"([{"type":"quest_spawn","mode":"patch","id":"base:quest_spawn/15"}])", "nothing to change");
     bad("findpatchnone", R"([{"type":"find","mode":"patch","id":"base:find/none","weight":3}])", "no such find row");
     bad("findpatchempty", R"([{"type":"find","mode":"patch","id":"base:find/265"}])", "nothing to change");
     bad("findremovefield", R"([{"type":"find","mode":"remove","id":"base:find/265","weight":3}])", "unknown field");
@@ -646,6 +770,19 @@ int main()
     bad("palsetrange", R"([{"type":"palette","mode":"add","id":"cave:pal/t","based_on":480,"set":{"3":[1,2,300]}}])", "[r, g, b]");
     bad("palsetcolors", R"([{"type":"palette","mode":"add","id":"cave:pal/t","colors":[[1,2,3]],"set":{"1":[1,2,3]}}])", "'set' goes with 'based_on'");
     bad("palcolors", R"([{"type":"palette","mode":"add","id":"cave:pal/t","colors":[]}])", "1 to 256");
+    bad("gatekind", R"([{"type":"gate","mode":"add","id":"cave:gate/t","barrier":"cave:obj/plain","kind":"luck","need":1}])", "'kind' must be");
+    bad("gatenostats", R"([{"type":"gate","mode":"add","id":"cave:gate/t","barrier":"cave:obj/plain","kind":"stat","need":1}])", "needs 'stats'");
+    bad("gatestatname", R"([{"type":"gate","mode":"add","id":"cave:gate/t","barrier":"cave:obj/plain","kind":"stat","stats":["care"],"need":1}])", "'stats' entries");
+    bad("gatestatsmoney", R"([{"type":"gate","mode":"add","id":"cave:gate/t","barrier":"cave:obj/plain","kind":"money","stats":["halos"],"need":1}])", "only goes with kind");
+    bad("gatebarrier", R"([{"type":"gate","mode":"add","id":"cave:gate/t","barrier":"cave:obj/none","kind":"money","need":1}])", "unknown object");
+    bad("gateneed", R"([{"type":"gate","mode":"add","id":"cave:gate/t","barrier":"cave:obj/plain","kind":"money"}])", "are required");
+    bad("gatetwice", R"([{"type":"gate","mode":"add","id":"cave:gate/a","barrier":"cave:obj/plain","kind":"money","need":1},
+                        {"type":"gate","mode":"add","id":"cave:gate/b","barrier":"cave:obj/plain","kind":"money","need":2}])", "already the barrier");
+    bad("gatepatchnone", R"([{"type":"gate","mode":"patch","id":"base:gate/none","need":3}])", "no such gate");
+    bad("gatepatchbarrier", R"([{"type":"gate","mode":"patch","id":"base:gate/5/25","barrier":"cave:obj/plain"}])", "unknown field");
+    bad("npcquestneg", R"([{"type":"npc","mode":"replace","id":"base:npc/12","quest_min":-1}])", "cannot be negative");
+    bad("npcquestwindow", R"([{"type":"npc","mode":"replace","id":"base:npc/12","quest_min":5,"quest_max":5}])", "must be greater");
+    bad("npcquesttype", R"([{"type":"npc","mode":"replace","id":"base:npc/12","quest_min":"3"}])", "must be an integer");
     bad("npcpalette", R"([{"type":"npc","mode":"replace","id":"base:npc/12","palette":"cave:pal/none"}])", "palette record");
     bad("npcbasedon", R"([{"type":"npc","mode":"add","id":"cave:npc/t","based_on":"base:npc/none"}])", "unknown npc");
     bad("npcbasedonmode", R"([{"type":"npc","mode":"replace","id":"base:npc/12","based_on":"base:npc/12"}])", "only goes with mode add");

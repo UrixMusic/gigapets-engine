@@ -166,9 +166,78 @@ namespace gp
         json npcs = json::array();
         for (const NpcDef *n : db.allNpcs())
             if (n->id.rfind("base:", 0) == 0)
-                npcs.push_back({{"id", n->id}, {"name", n->nameText}, {"area", n->area}, {"x", n->x}, {"y", n->y},
-                                {"stationary", n->stationary}, {"anim", n->anim}});
+            {
+                json nj = {{"id", n->id}, {"name", n->nameText}, {"area", n->area}, {"x", n->x}, {"y", n->y},
+                           {"stationary", n->stationary}, {"anim", n->anim}};
+                if (n->questMin != 0)
+                    nj["quest_min"] = n->questMin;
+                if (n->questMax != 0x7fffffff)
+                    nj["quest_max"] = n->questMax;
+                npcs.push_back(std::move(nj));
+            }
         out["npcs"] = npcs;
+
+        json gates = json::array(); // stat / money guards' barriers (the `gate` record type)
+        for (const auto &[gid, area] : db.allAreas())
+            for (const GateDef *g : db.gatesIn(area.legacyId))
+            {
+                static const char *kinds[] = {"tricks", "stat", "money", "quests"};
+                static const char *statNames[] = {"halos", "pitchforks", "stars", "lightbulbs"};
+                json gj = {{"id", g->id}, {"barrier", g->barrier}, {"kind", kinds[int(g->kind)]}, {"need", g->need}};
+                if (g->kind == GateKind::Personality)
+                {
+                    json st = json::array();
+                    for (int v : g->stats)
+                        st.push_back(statNames[v & 3]);
+                    gj["stats"] = st;
+                }
+                gates.push_back(std::move(gj));
+            }
+        out["gates"] = gates;
+
+        // the tables the editor lists: items (for the pickers), random finds, dig spots, quest rewards
+        json items = json::array();
+        for (const ItemDef &it : db.items())
+            if (it.id.rfind("base:", 0) == 0)
+                items.push_back({{"id", it.id}, {"name", it.name}, {"index", it.index}});
+        out["items"] = items;
+        json finds = json::array();
+        for (const FindWeightDef *f : db.findWeights())
+            if (f->id.rfind("base:", 0) == 0)
+                finds.push_back({{"id", f->id}, {"item", f->item}, {"weight", f->weight}});
+        out["finds"] = finds;
+        json spots = json::array();
+        for (const FixedSpotDef *s : db.allSpots())
+            if (s->id.rfind("base:", 0) == 0)
+            {
+                json sj = {{"id", s->id}, {"area", s->area}, {"item", s->item}, {"x", s->x}, {"y", s->y}, {"state", s->state == 1 ? "buried" : "ground"}};
+                if (!s->prereqItem.empty())
+                    sj["requires_item"] = s->prereqItem;
+                if (s->notWhileHeld)
+                    sj["not_while_held"] = true;
+                if (s->notOffered)
+                    sj["not_offered"] = true;
+                spots.push_back(std::move(sj));
+            }
+        out["spots"] = spots;
+        json qsp = json::array();
+        for (const QuestSpawnDef *q : db.allQuestSpawns())
+            if (q->id.rfind("base:", 0) == 0)
+            {
+                json qj = {{"id", q->id}, {"quest", q->count}, {"area", q->area}, {"item", q->item}, {"state", q->state == 2 ? "ground" : "buried"}};
+                if (q->random)
+                {
+                    qj["random"] = true;
+                    qj["times"] = q->times;
+                }
+                else
+                {
+                    qj["x"] = q->x;
+                    qj["y"] = q->y;
+                }
+                qsp.push_back(std::move(qj));
+            }
+        out["quest_spawns"] = qsp;
 
         json texts = json::object();
         for (const auto &[id, t] : db.allTexts())

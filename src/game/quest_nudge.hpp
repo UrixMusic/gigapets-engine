@@ -12,7 +12,7 @@
 namespace gp
 {
 
-    constexpr int kNudgeMayorNpc = 0x42, kNudgeQuestsCompleted = 1;
+    constexpr int kNudgeMayorNpc = 0x42, kNudgeQuestsCompleted = 1; // the defaults of tuning().nudgeNpc / nudgeQuests
     constexpr double kNudgeFirstSeconds = 30.0, kNudgeRepeatSeconds = 180.0;
     constexpr int kNudgeMessageAddr = 0xfa31; // "Go see Mayor Peter!"
     constexpr int kGameTicksPerSecond = 60;   // the game's tick counter is +2 per 30 Hz step
@@ -28,13 +28,13 @@ namespace gp
             start = nowTicks;
             limit = tuning().nudgeFirstSeconds;
         }
-        static bool applies(int questsCompleted, int questPhase) { return questsCompleted == kNudgeQuestsCompleted && questPhase == 0; }
+        static bool applies(int questsCompleted, int questPhase) { return questsCompleted == tuning().nudgeQuests && questPhase == 0; }
 
         // Call every tick the pet is free. `nearNpc` is the NPC the pet is beside (-1 for none). True when the reminder is due now;
         // the timer has then been restarted with the 180 s limit.
         bool due(long nowTicks, int questsCompleted, int questPhase, int nearNpc)
         {
-            if (!applies(questsCompleted, questPhase) || nearNpc == kNudgeMayorNpc)
+            if (!applies(questsCompleted, questPhase) || nearNpc == tuning().nudgeNpc)
                 return false;
             if (double(nowTicks - start) / kGameTicksPerSecond <= limit)
                 return false;

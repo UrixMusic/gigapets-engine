@@ -46,7 +46,14 @@ namespace gp
         int awayDX = 0x1e;     // ... walks this far away from one that is not
         int giveUpTicks = 120; // how long the pet tries to get there
 
+        // the stats wearing down
+        int decayAfterQuests = 3;        // hunger and sleepiness only wear down once MORE than this many quests are done
+        int tiredDecayRomTicks = 20000;  // between two drops of Sleepiness, in the ROM's 59.94 Hz ticks (about 5.6 minutes)
+        int hungerDecayRomTicks = 4000;  // ... of Hunger (about 67 seconds)
+
         // quest reminder
+        int nudgeQuests = 1; // shows while exactly this many quests are done (the game counts from 1) and none is active
+        int nudgeNpc = 0x42; // the base NPC (record number 0..77) it sends the pet to: no reminder beside it, and its portrait
         double nudgeFirstSeconds = 30.0;
         double nudgeRepeatSeconds = 180.0;
     };

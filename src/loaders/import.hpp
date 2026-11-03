@@ -8,6 +8,7 @@
 #include "../content/db.hpp"
 #include "../game/npc_anim_ids.hpp" // pure constants; add at the top of import.hpp
 #include "../game/fixed_spawn.hpp"
+#include "../game/npc_spawn.hpp" // kQuestGatedPoolEntry
 #include "../game/quest_strings.hpp"
 #include "../game/quest_types.hpp"
 #include "../game/befriend_rules.hpp"
@@ -161,6 +162,8 @@ namespace gp
             d.x = r.x;
             d.y = r.y;
             d.index = i;
+            if (d.area == 3 && i != kQuestGatedPoolEntry) // the area 3 pets stay away until more than 16 quests are done
+                d.questMin = 0x11;
             d.stationary = r.stationary;
             d.halos = r.halos;
             d.pitchforks = r.pitchforks;
@@ -708,12 +711,20 @@ namespace gp
 
         // The five stat / money guards in area 5 (stat_gate.hpp): the guard talks, its barrier goes once the condition holds.
         for (const StatGate &g : kStatGates)
-        {
             putInteraction(db, kGateArea, g.guard, "message", {}, {{"text", "base:text/" + std::to_string(g.text)}});
+        const std::vector<GateDef> gates = baseGateDefs();
+        for (size_t k = 0; k < gates.size(); ++k) // the barriers: gone once their gate record's flag is set
+        {
+            GateDef d = gates[k];
             if (const AreaDef *a = db.areaByLegacy(kGateArea))
                 for (ObjectDef &o : db.areaMutable(a->id)->objects)
-                    if (o.legacySlot == g.barrier)
-                        o.goneOnFlag = gateFlag(kGateArea, g.barrier);
+                    if (o.legacySlot == kStatGates[k].barrier)
+                    {
+                        o.goneOnFlag = d.id;
+                        d.barrier = o.id;
+                    }
+            if (!d.barrier.empty())
+                db.put(std::move(d));
         }
 
         // Quest-count gates: unlocked text once questsCompleted >= needed
@@ -904,6 +915,15 @@ namespace gp
         importItems(rom, db);
         for (const FixedSpotDef &s : baseFixedSpots())
             db.put(s);
+        for (const QuestCountSpawn &q : kQuestCountSpawns) // what a quest's turn-in places
+            db.put(QuestSpawnDef{"base:quest_spawn/" + std::to_string(q.count), q.count, q.area, legacyItemId(q.item), q.x, q.y, q.state});
+        for (const QuestRandomSpawn &q : kQuestRandomSpawns) // the rewards that go on free random spots
+        {
+            QuestSpawnDef d{"base:quest_spawn/" + std::to_string(q.count) + "/" + std::to_string(q.item), q.count, q.area, legacyItemId(q.item), 0, 0, q.state};
+            d.random = true;
+            d.times = q.times;
+            db.put(std::move(d));
+        }
         for (const WeightedItem &w : kEventItemTable) // the dig-find table, as records a mod can change
             db.put(FindWeightDef{"base:find/" + std::to_string(w.item), legacyItemId(w.item), w.weight});
     }

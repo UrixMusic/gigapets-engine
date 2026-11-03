@@ -93,7 +93,7 @@ namespace gp
         inline void applyNpc(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
         {
             static const std::set<std::string> allowed{"type", "mode", "id", "name", "area", "x", "y",
-                                                       "stationary", "anim", "lines", "palette", "based_on"};
+                                                       "stationary", "anim", "lines", "palette", "based_on", "quest_min", "quest_max"};
             for (auto it = rec.begin(); it != rec.end(); ++it)
                 if (!allowed.count(it.key()))
                     return err(rep, file, m.id, "unknown field '" + it.key() + "' in npc record");
@@ -179,8 +179,12 @@ namespace gp
             }
             else if (!intField("area", n.area))
                 return;
-            if (!intField("x", n.x) || !intField("y", n.y))
+            if (!intField("x", n.x) || !intField("y", n.y) || !intField("quest_min", n.questMin) || !intField("quest_max", n.questMax))
                 return;
+            if (n.questMin < 0 || n.questMax < 0)
+                return err(rep, file, m.id, "'" + id + "': 'quest_min' / 'quest_max' cannot be negative");
+            if (n.questMax <= n.questMin)
+                return err(rep, file, m.id, "'" + id + "': 'quest_max' must be greater than 'quest_min' (it is the first quest count it is gone)");
             if (rec.contains("stationary"))
             {
                 if (!rec["stationary"].is_boolean())
@@ -1605,6 +1609,202 @@ namespace gp
             rep.lastWriter[id] = m.id;
         }
 
+        // gate: a barrier object that goes for good once the pet meets a condition (the base game's five guards in Magma Mountain are
+        // "base:gate/5/25", "/15", "/7", "/1" and "/22"). { barrier = an object id, kind = "tricks" (tricks known >= need) | "stat"
+        // (any of stats - "halos", "pitchforks", "stars", "lightbulbs" - >= need) | "money" (>= need) | "quests" (quests done >= need,
+        // the game counts from 1), need }. Checked every step while the pet is in the barrier's area; once met it stays met (a saved
+        // flag named like the gate), so a mod's gate is "kind" + "need" on an object it also placed. The guard's words are an ordinary
+        // object `message`. mode "patch": change kind / stats / need; mode "remove": the barrier stays for good (fields are just { id }).
+        inline bool findObjectById(ContentDB &db, const std::string &objId, AreaDef *&area, ObjectDef *&obj)
+        {
+            for (const auto &[aid, ad] : db.allAreas())
+                for (const ObjectDef &o : ad.objects)
+                    if (o.id == objId)
+                    {
+                        area = db.areaMutable(aid);
+                        for (ObjectDef &m : area->objects)
+                            if (m.id == objId)
+                                obj = &m;
+                        return obj != nullptr;
+                    }
+            return false;
+        }
+        inline void applyGate(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
+        {
+            static const std::set<std::string> allowed{"type", "mode", "id", "barrier", "kind", "stats", "need"};
+            static const std::map<std::string, int> statNames{{"halos", 0}, {"pitchforks", 1}, {"stars", 2}, {"lightbulbs", 3}};
+            const std::string mode = rec.contains("mode") && rec["mode"].is_string() ? rec["mode"].get<std::string>() : "";
+            std::string id, why, kindName, barrierId;
+            // Reads kind / stats / need over `g`; used by add and patch.
+            auto fill = [&](GateDef &g, bool adding) -> bool
+            {
+                std::string kind = g.kind == GateKind::Tricks ? "tricks" : g.kind == GateKind::Money ? "money" : g.kind == GateKind::Quests ? "quests" : "stat";
+                if (adding && (!rec.contains("kind") || !rec.contains("need")))
+                    return why = "'kind' and 'need' are required", false;
+                if (!optStr(rec, "kind", kind, why) || !optInt(rec, "need", g.need, 0, 1000000, why))
+                    return false;
+                if (kind != "tricks" && kind != "stat" && kind != "money" && kind != "quests")
+                    return why = "'kind' must be \"tricks\", \"stat\", \"money\" or \"quests\"", false;
+                g.kind = kind == "tricks" ? GateKind::Tricks : kind == "money" ? GateKind::Money : kind == "quests" ? GateKind::Quests : GateKind::Personality;
+                if (rec.contains("stats"))
+                {
+                    if (g.kind != GateKind::Personality)
+                        return why = "'stats' only goes with kind \"stat\"", false;
+                    if (!rec["stats"].is_array() || rec["stats"].empty() || rec["stats"].size() > 4)
+                        return why = "'stats' must be a list of 1 to 4 of halos, pitchforks, stars, lightbulbs", false;
+                    g.stats.clear();
+                    for (const json &n : rec["stats"])
+                    {
+                        const auto it = n.is_string() ? statNames.find(n.get<std::string>()) : statNames.end();
+                        if (it == statNames.end())
+                            return why = "'stats' entries must be halos, pitchforks, stars or lightbulbs", false;
+                        if (std::find(g.stats.begin(), g.stats.end(), it->second) == g.stats.end())
+                            g.stats.push_back(it->second);
+                    }
+                }
+                if (g.kind == GateKind::Personality && g.stats.empty())
+                    return why = "kind \"stat\" needs 'stats'", false;
+                if (g.kind != GateKind::Personality)
+                    g.stats.clear();
+                return true;
+            };
+            if (mode == "patch" || mode == "remove")
+            {
+                for (auto it = rec.begin(); it != rec.end(); ++it)
+                    if (!allowed.count(it.key()) || it.key() == "barrier" || (mode == "remove" && it.key() != "type" && it.key() != "mode" && it.key() != "id"))
+                        return err(rep, file, m.id, "unknown field '" + it.key() + "' in a gate " + mode + " record");
+                if (!needStr(rec, "id", id, why))
+                    return err(rep, file, m.id, "gate record: " + why);
+                GateDef *g = db.gateMutable(id);
+                if (!g)
+                    return err(rep, file, m.id, mode + " '" + id + "': no such gate");
+                if (mode == "remove")
+                {
+                    AreaDef *ad = nullptr;
+                    ObjectDef *ob = nullptr;
+                    if (findObjectById(db, g->barrier, ad, ob))
+                        ob->goneOnFlag.clear();
+                    db.eraseGate(id);
+                }
+                else
+                {
+                    if (rec.size() <= 3)
+                        return err(rep, file, m.id, "patch '" + id + "': nothing to change (kind, stats, need)");
+                    GateDef n = *g;
+                    if (!fill(n, false))
+                        return err(rep, file, m.id, "patch '" + id + "': " + why);
+                    *g = std::move(n);
+                }
+                rep.lastWriter[id] = m.id;
+                return;
+            }
+            if (!beginAdd(m, file, rec, rep, "gate", allowed, [&](const std::string &i)
+                          { return db.gate(i) != nullptr; }, id))
+                return;
+            GateDef g;
+            g.id = id;
+            if (!needStr(rec, "barrier", barrierId, why) || !fill(g, true))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            AreaDef *ad = nullptr;
+            ObjectDef *ob = nullptr;
+            if (!findObjectById(db, barrierId, ad, ob))
+                return err(rep, file, m.id, "'" + id + "': unknown object '" + barrierId + "' in 'barrier'");
+            if (!ob->goneOnFlag.empty())
+                return err(rep, file, m.id, "'" + id + "': object '" + barrierId + "' is already the barrier of another gate");
+            ob->goneOnFlag = id;
+            g.barrier = barrierId;
+            g.area = ad->legacyId;
+            db.put(std::move(g));
+            rep.lastWriter[id] = m.id;
+        }
+
+        // quest_spawn: something placed when a quest is turned in. { quest = quest number (15 = the 15th story quest), area, item, x, y,
+        // state = "buried" (default; dig it up) or "ground" }. Instead of x / y, "random": true (and "times": n, default 1) puts n copies
+        // on free ones of the area's random dig spots (spawn_points; an area without any gets none). It stays in the world until picked up, wherever the pet goes. The base
+        // game's four are "base:quest_spawn/15", "/32", "/90", "/100". mode "patch": change any of the fields of a row that exists;
+        // mode "remove": take a row away (fields are then just { id }).
+        inline void applyQuestSpawn(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
+        {
+            static const std::set<std::string> allowed{"type", "mode", "id", "quest", "area", "item", "x", "y", "state", "random", "times"};
+            const std::string mode = rec.contains("mode") && rec["mode"].is_string() ? rec["mode"].get<std::string>() : "";
+            std::string id, why, areaId, state;
+            // Reads the fields present in `rec` over `n`; the area and item are checked against the db.
+            auto fill = [&](QuestSpawnDef &n, bool adding) -> bool
+            {
+                std::string itemId = n.item;
+                if (!optBool(rec, "random", n.random, why) || !optInt(rec, "times", n.times, 1, 50, why))
+                    return false;
+                if (adding && (!rec.contains("quest") || !rec.contains("area") || !rec.contains("item")))
+                    return why = "'quest', 'area' and 'item' are required", false;
+                if (adding && !n.random && (!rec.contains("x") || !rec.contains("y")))
+                    return why = "'x' and 'y' are required (or \"random\": true)", false;
+                if (n.random && (rec.contains("x") || rec.contains("y")))
+                    return why = "a random spawn has no 'x' / 'y'", false;
+                if (rec.contains("times") && !n.random)
+                    return why = "'times' only applies with \"random\": true", false;
+                if (!optInt(rec, "quest", n.count, 1, 100000, why) || !optStr(rec, "area", areaId, why) || !optStr(rec, "item", itemId, why) ||
+                    !optInt(rec, "x", n.x, -100000, 100000, why) || !optInt(rec, "y", n.y, -100000, 100000, why) ||
+                    !optStr(rec, "state", state, why))
+                    return false;
+                if (!areaId.empty())
+                {
+                    const AreaDef *ad = db.area(areaId);
+                    if (!ad)
+                        return why = "unknown area '" + areaId + "'", false;
+                    n.area = ad->legacyId;
+                }
+                if (!db.item(itemId))
+                    return why = "unknown item '" + itemId + "'", false;
+                n.item = itemId;
+                if (!state.empty())
+                {
+                    if (state != "buried" && state != "ground")
+                        return why = "'state' must be \"buried\" or \"ground\"", false;
+                    n.state = state == "buried" ? 1 : 2;
+                }
+                // "buried" is the invisible quest-item kind (1) at a fixed place, but the dig marker (0) on a random spot, as the ROM's
+                // random rewards use it
+                if (n.random && n.state == 1)
+                    n.state = 0;
+                else if (!n.random && n.state == 0)
+                    n.state = 1;
+                return true;
+            };
+            if (mode == "patch" || mode == "remove")
+            {
+                for (auto it = rec.begin(); it != rec.end(); ++it)
+                    if (!allowed.count(it.key()) || (mode == "remove" && it.key() != "type" && it.key() != "mode" && it.key() != "id"))
+                        return err(rep, file, m.id, "unknown field '" + it.key() + "' in a quest_spawn " + mode + " record");
+                if (!needStr(rec, "id", id, why))
+                    return err(rep, file, m.id, "quest_spawn record: " + why);
+                QuestSpawnDef *q = db.questSpawnMutable(id);
+                if (!q)
+                    return err(rep, file, m.id, mode + " '" + id + "': no such quest_spawn");
+                if (mode == "remove")
+                    db.eraseQuestSpawn(id);
+                else
+                {
+                    if (rec.size() <= 3) // type, mode, id
+                        return err(rep, file, m.id, "patch '" + id + "': nothing to change");
+                    QuestSpawnDef n = *q;
+                    if (!fill(n, false))
+                        return err(rep, file, m.id, "patch '" + id + "': " + why);
+                    *q = std::move(n);
+                }
+                rep.lastWriter[id] = m.id;
+                return;
+            }
+            if (!beginAdd(m, file, rec, rep, "quest_spawn", allowed, [&](const std::string &i)
+                          { return db.questSpawn(i) != nullptr; }, id))
+                return;
+            QuestSpawnDef n;
+            n.id = id;
+            if (!fill(n, true))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            db.put(std::move(n));
+            rep.lastWriter[id] = m.id;
+        }
+
         // minigame, mode "patch": change a minigame's numbers and lists. { id = "base:minigame/prize_pools", num = { key: number },
         // lists = { key: [..] } (replaces the list), list_add = { key: [..] } (appends), list_remove = { key: [..] } (removes every
         // copy) }. A list entry is a number or an item id ("base:item/114" becomes its item number). A repeat in a pool is a heavier
@@ -1786,7 +1986,7 @@ namespace gp
                 return 0;
             if (t == "area")
                 return 1;
-            return t == "spot" || t == "find" || t == "minigame" ? 3 : 2; // they name areas and items, so they come last
+            return t == "spot" || t == "find" || t == "quest_spawn" || t == "gate" || t == "minigame" ? 3 : 2; // they name areas and items, so they come last
         }
         inline constexpr int kPasses = 4;
 
@@ -1849,6 +2049,10 @@ namespace gp
                     applySpot(db, m, file, r, rep);
                 else if (type == "find")
                     applyFind(db, m, file, r, rep);
+                else if (type == "quest_spawn")
+                    applyQuestSpawn(db, m, file, r, rep);
+                else if (type == "gate")
+                    applyGate(db, m, file, r, rep);
                 else if (type == "minigame")
                     applyMinigame(db, m, file, r, rep);
                 else

@@ -8,9 +8,6 @@ static void check(const char* n, bool ok) { std::printf("%-50s %s\n", n, ok ? "o
 
 int main() {
     NpcSpawnInfo a; a.areaId = 3; a.spawnX = 100; a.spawnY = 200; a.behaviorFlags = 0x810; a.speciesId = 1;
-    check("area 3 gated until >16 quests", !npcSpawnsInArea(5, a, 3, 16) && npcSpawnsInArea(5, a, 3, 17));
-    check("entry 0x36 bypasses the gate", npcSpawnsInArea(0x36, a, 3, 0));
-    check("other areas ungated, wrong area never", npcSpawnsInArea(5, [&]{ auto b = a; b.areaId = 4; return b; }(), 4, 0) && !npcSpawnsInArea(5, a, 4, 99));
     NpcInstanceInit n = initNpcInstance(a, 2);
     check("start position and facing down", n.x == 100 && n.y == 200 && n.facing == 3 && n.style == 0);
     check("flags get 0x4000, wander starts forward at 0", n.flags == (0x810 | 0x4000) && n.wander.forward && n.wander.index == 0);

@@ -172,9 +172,22 @@
     <details>
       <summary>This area</summary>
       <div class="body">
+        <div class="row"><label><input type="checkbox" id="arDig"> the pet can dig here (Z on bare ground)</label></div>
+        <div class="hint">The base game's outdoor areas dig; a mod area can too. Random finds need spawn points (the "Spawn pts" layer shows them).</div>
         <div class="row"><label><input type="checkbox" id="arResume"> remember where the pet is when the game is saved here</label></div>
         <div class="hint">Off by default, like the base game: a save made here starts at home next time. On, a save made here starts here, at the same spot. It is an area setting, so it works on any area, mod or base.</div>
         <div class="row"><label>Music <select id="arMusic"><option value="">keep current / the zone's own</option><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></label></div>
+      </div>
+    </details>
+    <details id="tbPanel">
+      <summary>Game tables <span id="tbCount" class="hint"></span></summary>
+      <div class="body">
+        <div class="seg" id="tbTabs"></div>
+        <div id="tbHint" class="hint"></div>
+        <div id="tbRows"></div>
+        <div id="tbForm"></div>
+        <div class="row"><button id="tbAdd" class="primary">Add a row…</button></div>
+        <div id="tbRemoved"></div>
       </div>
     </details>
     <details>
@@ -196,7 +209,7 @@
     <details>
       <summary>How it works</summary>
       <div class="body hint">
-        Your edits are written to <code>data/zz_gigaeditr.json</code> in the mod you are editing, as <code>object</code> / <code>area</code> / <code>objtype</code> / <code>text</code> records
+        Your edits are written to <code>data/zz_gigaeditr.json</code> in the mod you are editing, as <code>object</code> / <code>area</code> / <code>objtype</code> / <code>text</code> / <code>npc</code> records, and, from the <b>Game tables</b> panel, <code>find</code> / <code>spot</code> / <code>quest_spawn</code> / <code>gate</code> rows
         (add, patch, remove). The file sorts last, so it wins over the mod's own files. Other files are never touched, and the ROM is never changed.
         New PNGs go to <code>assets/</code>. Mods are applied in the game's load order; a later mod overwrites an earlier one, shown in orange.
         Not yet: new areas, new NPCs, tileset editing (use Aseprite for tile art).
@@ -209,7 +222,17 @@
     // ===== core: pure data logic (no DOM). Mirrors how the game's mod loader applies records, so the editor shows the same world. =====
     const EDFILE = 'zz_gigaeditr.json';
     const PASS0 = ['text', 'anim', 'tileset', 'collision', 'objtype', 'palette'];
-    const passOf = t => PASS0.includes(t) ? 0 : (t === 'area' ? 1 : 2);
+    // The records that are rows of a list (like the game's tables). The loader reads them last (pass 3): they name areas and items.
+    //   base = the key in base.json that holds the base game's rows; fields = what a record may carry besides type / mode / id;
+    //   patch = whether the loader has a patch mode for them (a dig spot has not: remove it and add a new one).
+    const TABLES = {
+      find: { base: 'finds', fields: ['item', 'weight'], patch: true },
+      spot: { base: 'spots', fields: ['area', 'item', 'x', 'y', 'state', 'requires_item', 'not_while_held', 'not_offered'], patch: false },
+      quest_spawn: { base: 'quest_spawns', fields: ['quest', 'area', 'item', 'x', 'y', 'state', 'random', 'times'], patch: true },
+      gate: { base: 'gates', fields: ['barrier', 'kind', 'stats', 'need'], patch: true },
+    };
+    const TABLE_TYPES = Object.keys(TABLES);
+    const passOf = t => PASS0.includes(t) ? 0 : (t === 'area' ? 1 : TABLE_TYPES.includes(t) ? 3 : 2);
 
     // dependency order like the loader: required / load_after mods first, ties alphabetical
     function orderMods(mods) {
@@ -236,15 +259,21 @@
         for (const o of a.objects) { o.areaId = id; o.src = 'base'; o.mods = []; if (o.reach && o.reach[0] >= 0xffff) delete o.reach; }
       }
       for (const n of B.npcs) W.npcs.push({ ...n, areaId: legacy[n.area] || null, src: 'base', mods: [] });
+      W.items = (B.items || []).map(i => ({ ...i, src: 'base' }));
+      W.tables = {}; W.removedRows = {};
+      for (const k of TABLE_TYPES) { // the base game's rows; a spot or quest reward names its area by the ROM number in the export
+        W.tables[k] = (B[TABLES[k].base] || []).map(r => ({ ...r, area: typeof r.area === 'number' ? legacy[r.area] || r.area : r.area, src: 'base', mods: [] }));
+        W.removedRows[k] = [];
+      }
 
       const note = (key, mod, file, kind, rec, diffs) => {
         const e = { mod, file, kind, rec, key, diffs: diffs || [] };
         W.log.push(e); (W.touch[key] = W.touch[key] || []).push(e); return e;
       };
       const objKey = (aid, id) => 'o:' + aid + '|' + id;
-      const fields = ['x', 'y', 'objtype', 'reach', 'sign', 'message', 'quest_min', 'quest_max'];
+      const fields = ['x', 'y', 'objtype', 'reach', 'sign', 'message', 'scene', 'quest_min', 'quest_max'];
 
-      for (const m of mods) for (let pass = 0; pass < 3; pass++) for (const f of m.files) for (const r of f.records) {
+      for (const m of mods) for (let pass = 0; pass < 4; pass++) for (const f of m.files) for (const r of f.records) {
         if (!r || passOf(r.type) !== pass) continue;
         const mode = r.mode;
         switch (r.type) {
@@ -270,12 +299,12 @@
           case 'area': {
             if (mode === 'add') {
               const map = clone(r.map || [[0]]);
-              W.areas[r.id] = { id: r.id, src: m.id, legacyId: null, name: r.name || '', width: map[0].length, height: map.length, tileset: r.tileset, collision: r.collision, map, objects: [], spawn_points: r.spawn_points || [], margins: r.margins || [42, 42, 62, 20], y_offset: r.y_offset || 0, max_events: r.max_events || 0, music: r.music, resume: !!r.resume };
+              W.areas[r.id] = { id: r.id, src: m.id, legacyId: null, name: r.name || '', width: map[0].length, height: map.length, tileset: r.tileset, collision: r.collision, map, objects: [], spawn_points: r.spawn_points || [], margins: r.margins || [42, 42, 62, 20], y_offset: r.y_offset || 0, max_events: r.max_events || 0, music: r.music, resume: !!r.resume, diggable: !!r.diggable };
               note('a:' + r.id, m.id, f.name, 'add', r);
             } else if (mode === 'patch') {
               const a = W.areas[r.id]; if (!a) { note('a:' + r.id, m.id, f.name, 'skipped', r); break; }
               const diffs = [];
-              for (const k of ['name', 'tileset', 'collision', 'music', 'y_offset', 'max_events', 'margins', 'spawn_points', 'resume']) if (r[k] !== undefined) { diffs.push([k, a[k], r[k]]); a[k] = clone(r[k]); }
+              for (const k of ['name', 'tileset', 'collision', 'music', 'y_offset', 'max_events', 'margins', 'spawn_points', 'resume', 'diggable']) if (r[k] !== undefined) { diffs.push([k, a[k], r[k]]); a[k] = clone(r[k]); }
               if (r.map) { diffs.push(['map', a.width + 'x' + a.height, r.map[0].length + 'x' + r.map.length]); a.map = clone(r.map); a.width = a.map[0].length; a.height = a.map.length; }
               for (const [c, rw, t] of r.set_tiles || []) {
                 if (rw < 0 || rw >= a.height || c < 0 || c >= a.width) continue;
@@ -293,7 +322,7 @@
             if (!a) { note(key, m.id, f.name, 'skipped', r); break; }
             if (mode === 'add') {
               const o = { id: r.id, areaId: r.area, objtype: r.objtype, x: r.x, y: r.y, slot: -1, src: m.id, added: true, mods: [] };
-              for (const k of ['reach', 'sign', 'message', 'quest_min', 'quest_max']) if (r[k] !== undefined) o[k] = clone(r[k]);
+              for (const k of ['reach', 'sign', 'message', 'scene', 'quest_min', 'quest_max']) if (r[k] !== undefined) o[k] = clone(r[k]);
               a.objects.push(o); o.mods.push({ mod: m.id, kind: 'add' }); note(key, m.id, f.name, 'add', r);
             } else {
               const i = a.objects.findIndex(o => o.id === r.id);
@@ -315,7 +344,7 @@
           case 'npc': {
             const aidOf = v => typeof v === 'string' ? v : legacy[v] || null;
             if (mode === 'add') {
-              W.npcs.push({ id: r.id, name: r.name, areaId: aidOf(r.area), x: r.x, y: r.y, stationary: !!r.stationary, anim: r.anim, lines: r.lines || [], src: m.id, added: true, mods: [{ mod: m.id, kind: 'add' }] });
+              W.npcs.push({ id: r.id, name: r.name, areaId: aidOf(r.area), x: r.x, y: r.y, stationary: !!r.stationary, anim: r.anim, lines: r.lines || [], quest_min: r.quest_min, quest_max: r.quest_max, palette: r.palette, src: m.id, added: true, mods: [{ mod: m.id, kind: 'add' }] });
               note('n:' + r.id, m.id, f.name, 'add', r);
             } else {
               const i = W.npcs.findIndex(n => n.id === r.id);
@@ -324,11 +353,28 @@
               if (mode === 'remove') { W.npcs.splice(i, 1); note('n:' + r.id, m.id, f.name, 'remove', r, [['npc', '@' + n.x + ',' + n.y, 'removed']]); }
               else {
                 const diffs = [];
-                for (const k of ['x', 'y', 'name', 'anim', 'stationary', 'lines']) if (r[k] !== undefined) { diffs.push([k, n[k], r[k]]); n[k] = clone(r[k]); }
+                for (const k of ['x', 'y', 'name', 'anim', 'stationary', 'lines', 'quest_min', 'quest_max', 'palette']) if (r[k] !== undefined) { diffs.push([k, n[k], r[k]]); n[k] = clone(r[k]); }
                 if (r.area !== undefined) { diffs.push(['area', n.areaId, aidOf(r.area)]); n.areaId = aidOf(r.area); }
                 n.mods.push({ mod: m.id, kind: 'patch' }); note('n:' + r.id, m.id, f.name, 'patch', r, diffs);
               }
             }
+            break;
+          }
+          case 'item': // (only enough to offer the item in a picker)
+            if (mode === 'add' && !W.items.some(i => i.id === r.id)) W.items.push({ id: r.id, name: r.name, src: m.id });
+            note('x:' + r.id, m.id, f.name, mode, r); break;
+          case 'find': case 'spot': case 'quest_spawn': case 'gate': {
+            const T = W.tables[r.type], i = T.findIndex(x => x.id === r.id), key = 'r:' + r.type + ':' + r.id;
+            const body = {}; for (const k of TABLES[r.type].fields) if (r[k] !== undefined) body[k] = clone(r[k]);
+            if (mode === 'add') {
+              if (i >= 0) { note(key, m.id, f.name, 'skipped', r); break; }
+              T.push({ id: r.id, ...body, src: m.id, added: true, mods: [{ mod: m.id, kind: 'add' }] }); note(key, m.id, f.name, 'add', r);
+            } else if (i < 0) note(key, m.id, f.name, 'skipped', r);
+            else if (mode === 'remove') { W.removedRows[r.type].push({ ...T[i], removedBy: m.id }); T.splice(i, 1); note(key, m.id, f.name, 'remove', r); }
+            else if (mode === 'patch') {
+              const diffs = []; for (const k in body) { diffs.push([k, T[i][k], body[k]]); T[i][k] = body[k]; }
+              T[i].mods.push({ mod: m.id, kind: 'patch' }); note(key, m.id, f.name, 'patch', r, diffs);
+            } else note(key, m.id, f.name, 'skipped', r);
             break;
           }
           default: note('x:' + (r.id || r.type), m.id, f.name, mode || '?', r);
@@ -518,6 +564,46 @@
       }
       setOffered(recs, id, false);
     }
+    // ---- the list-like records (TABLES): find, spot, quest_spawn, gate ----
+    // `row` = a row of W.tables[kind]. Your own rows are edited in place in their add record; any other row (the base game's, another mod's)
+    // gets a patch record that carries only what you changed. A value of undefined takes a field back out.
+    function edRowAdd(recs, W, modId, kind, fields) {
+      const id = nextId(recs, W, modId, kind);
+      const r = { type: kind, mode: 'add', id };
+      for (const k of TABLES[kind].fields) if (fields[k] !== undefined) r[k] = fields[k];
+      recs.push(r); return id;
+    }
+    function edRowPatch(recs, kind, row, fields) {
+      const add = find(recs, kind, 'add', row.id);
+      let r = add;
+      if (!r) {
+        if (!TABLES[kind].patch) throw new Error('a ' + kind + ' cannot be changed, only removed or replaced by a new one');
+        r = find(recs, kind, 'patch', row.id);
+        if (!r) { r = { type: kind, mode: 'patch', id: row.id }; recs.push(r); }
+      }
+      for (const k of TABLES[kind].fields) if (k in fields) { if (fields[k] === undefined) delete r[k]; else r[k] = fields[k]; }
+      if (!add && Object.keys(r).length <= 3) recs.splice(recs.indexOf(r), 1); // (nothing left to patch)
+    }
+    function edRowRemove(recs, kind, row) {
+      const had = find(recs, kind, 'add', row.id);
+      for (let i = recs.length - 1; i >= 0; i--) if (recs[i].type === kind && recs[i].id === row.id) recs.splice(i, 1);
+      if (!had) recs.push({ type: kind, mode: 'remove', id: row.id });
+    }
+    function edRowRestore(recs, kind, id) { const i = recs.findIndex(r => r.type === kind && r.mode === 'remove' && r.id === id); if (i >= 0) recs.splice(i, 1); }
+    // a base or mod NPC's quest window and colour (a base npc: a `replace` record with just those fields)
+    function edSetNpcFields(recs, n, fields) {
+      let r = find(recs, 'npc', 'add', n.id);
+      if (!r) { r = find(recs, 'npc', 'replace', n.id); if (!r) { r = { type: 'npc', mode: 'replace', id: n.id }; recs.push(r); } }
+      for (const k of ['quest_min', 'quest_max', 'palette']) if (k in fields) { if (fields[k] === undefined) delete r[k]; else r[k] = fields[k]; }
+      if (r.mode === 'replace' && Object.keys(r).length <= 3) recs.splice(recs.indexOf(r), 1);
+    }
+    // the scene an object opens when Z is pressed (a scene id; '' takes it away). A scene and a sign / message exclude each other.
+    function edSetObjectScene(recs, o, scene) {
+      const add = find(recs, 'object', 'add', o.id);
+      if (!scene) { const r = add || find(recs, 'object', 'patch', o.id); if (r) delete r.scene; if (r && !add && Object.keys(r).length <= 4) recs.splice(recs.indexOf(r), 1); return; }
+      const r = add || find(recs, 'object', 'patch', o.id) || (recs.push({ type: 'object', mode: 'patch', id: o.id, area: o.areaId }), recs[recs.length - 1]);
+      delete r.sign; delete r.message; r.scene = scene;
+    }
     // ===== pixel helpers for the sprite editor. `arr` has one element per pixel: a Uint32Array over RGBA bytes (art) or a Uint8Array (collision mask). =====
     const packRGBA = (r, g, b, a) => ((a << 24) | (b << 16) | (g << 8) | r) >>> 0; // (little-endian: the same layout as the RGBA bytes)
     const unpackRGBA = v => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
@@ -619,7 +705,7 @@
       if (r.mode === 'patch' && !r.shadow && !r.shadow_png) recs.splice(recs.indexOf(r), 1); // (a patch must change something)
     }
     function nextSlot(recs, W, modId, kind) { return nextId(recs, W, modId, kind).split('/e').pop(); }
-    if (typeof module !== 'undefined') module.exports = { packRGBA, unpackRGBA, fillRegion, lineCells, brushCells, rectCells, flipArr, resizeArr, colorsOf, maskFromRGBA, collisionLayer, edSetAreaLook, edSetAreaField, edAddObjTypeFull, edSetShadow, nextSlot, EDFILE, wordToRgb, wordToRgbRound, rgbToWord, paletteSet, paletteWords, edSavePalette, edDeletePalette, offeredIds, SPECIES, orderMods, buildWorld, edMoveObject, edPatchObject, edDeleteObject, edAddObject, edPaint, edSetText, edAddObjType, edMoveNpc, edDeleteNpc, edAddNpc, edNewArea, edAddExit, edRemoveExit, find };
+    if (typeof module !== 'undefined') module.exports = { packRGBA, unpackRGBA, fillRegion, lineCells, brushCells, rectCells, flipArr, resizeArr, colorsOf, maskFromRGBA, collisionLayer, edSetAreaLook, edSetAreaField, edAddObjTypeFull, edSetShadow, nextSlot, EDFILE, wordToRgb, wordToRgbRound, rgbToWord, paletteSet, paletteWords, edSavePalette, edDeletePalette, offeredIds, SPECIES, orderMods, buildWorld, edMoveObject, edPatchObject, edDeleteObject, edAddObject, edPaint, edSetText, edAddObjType, edMoveNpc, edDeleteNpc, edAddNpc, edNewArea, edAddExit, edRemoveExit, find, TABLES, TABLE_TYPES, edRowAdd, edRowPatch, edRowRemove, edRowRestore, edSetNpcFields, edSetObjectScene };
   </script>
 
   <script id="sprite">
@@ -1155,7 +1241,7 @@
         if (!S.base) return;
         S.W = buildWorld(S.base, modList());
         if (S.area && !S.W.areas[S.area]) S.area = null;
-        refreshAreaList(); renderChanges(); renderSelected(); renderPalette(); renderAreaProps(); renderColours(); S.needDraw = true;
+        refreshAreaList(); renderChanges(); renderSelected(); renderPalette(); renderAreaProps(); renderColours(); renderTables(); S.needDraw = true;
       }
       function refreshAreaList() {
         const sel = $('area'), keep = S.area || sel.value;
@@ -1375,9 +1461,20 @@
           b.innerHTML = `<div><b>${esc(S.W.texts[n.name] || n.id)}</b> <span class="hint">${esc(n.id)}</span></div><div>${tags}</div>
             <div class="hint">NPC${n.stationary ? ' (stationary)' : ''}. Moving a base NPC moves where it starts; a wandering one keeps its route relative to that.</div>
             <div class="row"><label>x <input id="nx" type="number" value="${n.x}" style="width:5.5em" ${ed}></label><label>y <input id="ny" type="number" value="${n.y}" style="width:5.5em" ${ed}></label></div>
+            <div class="row"><label>In the world from quest <input id="nqmin" type="number" min="0" value="${n.quest_min > 0 ? n.quest_min : ''}" placeholder="always" style="width:6.5em" ${ed}></label><label>until <input id="nqmax" type="number" min="1" value="${n.quest_max !== undefined && n.quest_max < 2e9 ? n.quest_max : ''}" placeholder="never leaves" style="width:6em" ${ed}></label></div>
+            <div class="hint">Quests done: a new game has done 1. "from 17" is how the base game keeps the Vacation Island pets away until then.</div>
+            <div class="row"><label>Colour <select id="npal" ${ed}><option value="">the game's own</option>${Object.keys(S.W.palettes || {}).map(id => `<option value="${esc(id)}"${n.palette === id ? ' selected' : ''}>${esc(id)}</option>`).join('')}</select></label><span class="hint">only roaming pets (colours are made in Pet colours)</span></div>
             <div class="row"><button id="napp" ${ed}>Apply</button><button id="ndel" ${ed}>Delete NPC</button><button id="nart" ${ed}>Edit picture…</button></div>`;
           $('fSel').textContent = `${n.id} @ ${n.x},${n.y}`;
-          $('napp').onclick = () => { if (!canEdit()) return; snap(); edMoveNpc(S.recs, n, +$('nx').value, +$('ny').value); changed(); };
+          $('napp').onclick = () => {
+            if (!canEdit()) return;
+            const qa = $('nqmin').value, qb = $('nqmax').value, orig = (S.base.npcs || []).find(x => x.id === n.id) || {}, own = !!find(S.recs, 'npc', 'add', n.id);
+            const lo = qa === '' ? 0 : Math.max(0, +qa | 0), hi = qb === '' ? undefined : Math.max(1, +qb | 0);
+            if (hi !== undefined && hi <= lo) return toast('"until" must be later than "from" (it is the first quest count they are gone).');
+            const origLo = own ? 0 : orig.quest_min || 0, origHi = own ? undefined : orig.quest_max;
+            const f = { quest_min: lo === origLo ? undefined : lo, quest_max: hi === origHi ? undefined : hi === undefined ? 2147483647 : hi, palette: $('npal').value || undefined };
+            snap(); if (+$('nx').value !== n.x || +$('ny').value !== n.y) edMoveNpc(S.recs, n, +$('nx').value, +$('ny').value); edSetNpcFields(S.recs, n, f); changed();
+          };
           $('ndel').onclick = () => deleteSelected();
           $('nart').onclick = () => editNpcPicture(n);
           return;
@@ -1391,6 +1488,8 @@
           <div class="row"><label>reach <input id="srx" type="number" value="${o.reach ? o.reach[0] : ''}" placeholder="none" style="width:5em" ${ed}> × <input id="sry" type="number" value="${o.reach ? o.reach[1] : ''}" placeholder="none" style="width:5em" ${ed}></label></div>
           <div class="row"><label>Sign text<br><textarea id="ssign" rows="2" style="width:340px" ${ed}>${esc(o.sign ? S.W.texts[o.sign] || '' : '')}</textarea></label></div>
           <div class="row"><label>Message text<br><textarea id="smsg" rows="2" style="width:340px" ${ed}>${esc(o.message ? S.W.texts[o.message] || '' : '')}</textarea></label></div>
+          <div class="row"><label>Opens scene <input id="ssc" value="${esc(o.scene || '')}" placeholder="mymod:scene/shop" size="26" ${ed}></label></div>
+          <div class="hint">Z on this object opens that scene (a script's <code>Scene.hooks</code>). A scene replaces the sign and message text.</div>
           <div class="row"><button id="sapp" ${ed}>Apply</button><button id="sdel" ${ed}>Delete object</button><button id="sart" ${ed}>Edit art…</button></div>
           <div class="row"><b>Shadow</b><select id="shm" ${ed}>${[['default', "the game's own"], ['none', 'none'], ['auto', 'auto (blob to fit)'], ['picture', 'my picture']].map(([v, t]) => `<option value="${v}"${v === shMode ? ' selected' : ''}>${t}</option>`).join('')}</select><button id="shd" ${ed}>Draw / edit shadow…</button></div>
           <div class="hint">This is a property of the object type, so every object of type ${esc(o.objtype)} changes. Shadows are drawn about 70% opaque. The game's own shadow is the base game's; mod types have none until you choose.</div>
@@ -1412,6 +1511,8 @@
           if (!canEdit()) return; snap();
           const x = +$('sx').value, y = +$('sy').value; if (x !== o.x || y !== o.y) edMoveObject(S.recs, o, x, y);
           const rx = $('srx').value, ry = $('sry').value; if (rx !== '' && ry !== '' && (!o.reach || +rx !== o.reach[0] || +ry !== o.reach[1])) edPatchObject(S.recs, o, { reach: [Math.max(1, +rx | 0), Math.max(1, +ry | 0)] });
+          const sc = $('ssc').value.trim();
+          if (sc !== (o.scene || '')) { if (sc && !/^[a-z0-9_]+:scene\/[A-Za-z0-9_.\/-]+$/.test(sc)) { S.undo.pop(); return toast('A scene id looks like mymod:scene/name.'); } edSetObjectScene(S.recs, o, sc); changed(); return; }
           const st = $('ssign').value.trim(), mt = $('smsg').value.trim();
           if (st && st !== (S.W.texts[o.sign] || '')) edSetText(S.recs, S.W, S.cur, o, 'sign', st);
           else if (mt && mt !== (S.W.texts[o.message] || '')) edSetText(S.recs, S.W, S.cur, o, 'message', mt);
@@ -1720,13 +1821,123 @@
         else if (ev.target.classList.contains('pcD') && confirm(`Delete ${id}? Pet NPCs that use it go back to the game's colours.`)) { snap(); edDeletePalette(S.recs, id); finishEdit('Colour deleted.'); }
       };
 
+      // game tables: random finds, dig spots, quest rewards, barriers (the list-like records)
+      const TBL = {
+        find: { label: 'Random finds', hint: 'What a random dig turns up (after the 15% chance of nothing). The chance of a row is its weight out of all the weights. Only areas with spawn points have random finds.' },
+        spot: { label: 'Dig spots', hint: 'Something placed in an area every time the pet enters it: buried (dig it up) or lying there. A spot cannot be edited, only removed; make a new one instead.' },
+        quest_spawn: { label: 'Quest rewards', hint: 'Placed when a quest number is handed in, and kept until picked up. Fixed place, or a number of random free spots of the area. The game counts quests from 1.' },
+        gate: { label: 'Barriers', hint: 'An object that goes for good once the pet meets a condition. The guard\'s words are an ordinary object message.' },
+      };
+      const STATS = ['halos', 'pitchforks', 'stars', 'lightbulbs'];
+      S.tbl = 'find'; S.tbEdit = null;
+      const itemLabel = id => { const it = S.W.items.find(i => i.id === id); return it ? (S.W.texts[it.name] || id) : id || '—'; };
+      const areaLabel = id => { const a = S.W.areas[id]; return a ? (S.W.texts[a.name] || id) : id || '—'; };
+      const gateText = r => ({ tricks: `${r.need} tricks known`, money: `${r.need} Bucks`, quests: `${r.need} quests done` }[r.kind] || `${(r.stats || []).join(' or ')} ≥ ${r.need}`);
+      function rowText(kind, r) {
+        if (kind === 'find') { const tot = S.W.tables.find.reduce((a, x) => a + (x.weight || 0), 0); return `<b>${esc(itemLabel(r.item))}</b> · weight ${r.weight} <span class="hint">(${tot ? (100 * r.weight / tot).toFixed(1) : 0}% of finds)</span>`; }
+        if (kind === 'spot') return `<b>${esc(itemLabel(r.item))}</b> in ${esc(areaLabel(r.area))} @${r.x},${r.y} · ${r.state === 'ground' ? 'lying there' : 'buried'}${r.requires_item ? ' · only while holding ' + esc(itemLabel(r.requires_item)) : ''}${r.not_while_held ? ' · once' : ''}${r.not_offered ? ' · until given to the King' : ''}`;
+        if (kind === 'quest_spawn') return `quest ${r.quest}: <b>${esc(itemLabel(r.item))}</b> in ${esc(areaLabel(r.area))} ${r.random ? '× ' + (r.times || 1) + ' on random spots' : '@' + r.x + ',' + r.y} · ${r.state === 'ground' ? 'lying there' : 'buried'}`;
+        return `<b>${esc(r.barrier || '?')}</b> goes at ${esc(gateText(r))}`;
+      }
+      function objectOpts(areaId, sel) {
+        const a = S.W.areas[areaId]; if (!a) return '';
+        return a.objects.map(o => `<option value="${esc(o.id)}"${o.id === sel ? ' selected' : ''}>${esc(o.id.split('/').slice(-1)[0])} · ${esc(o.objtype.split('/').slice(-1)[0])} @${o.x},${o.y}</option>`).join('');
+      }
+      const itemOpts = (sel, none) => (none ? `<option value="">${none}</option>` : '') + S.W.items.map(i => `<option value="${esc(i.id)}"${i.id === sel ? ' selected' : ''}>${esc(S.W.texts[i.name] || i.id)} (${esc(i.id.replace(/^base:item\//, '#'))})</option>`).join('');
+      const areaOpts = sel => Object.keys(S.W.areas).map(id => `<option value="${esc(id)}"${id === sel ? ' selected' : ''}>${esc(S.W.areas[id].src === 'base' ? S.W.areas[id].legacyId + ': ' : '[' + S.W.areas[id].src + '] ')}${esc(areaLabel(id))}</option>`).join('');
+      function tbFormHtml(kind, r) {
+        r = r || {};
+        const num = (k, label, v, w) => `<label>${label} <input id="tf_${k}" type="number" value="${v === undefined ? '' : v}" style="width:${w || 6}em"></label>`;
+        const state = `<label>State <select id="tf_state"><option value="buried"${r.state !== 'ground' ? ' selected' : ''}>buried (dig it up)</option><option value="ground"${r.state === 'ground' ? ' selected' : ''}>lying there</option></select></label>`;
+        if (kind === 'find') return `<div class="row"><label>Item <select id="tf_item">${itemOpts(r.item)}</select></label>${num('weight', 'Weight', r.weight === undefined ? 10 : r.weight)}</div>`;
+        if (kind === 'spot') return `<div class="row"><label>Area <select id="tf_area">${areaOpts(r.area || S.area)}</select></label><label>Item <select id="tf_item">${itemOpts(r.item)}</select></label></div>
+          <div class="row">${num('x', 'x', r.x)}${num('y', 'y', r.y)}${state}</div>
+          <div class="row"><label>Only while holding <select id="tf_requires_item">${itemOpts(r.requires_item, 'nothing needed')}</select></label></div>
+          <div class="row"><label><input type="checkbox" id="tf_not_while_held"${r.not_while_held ? ' checked' : ''}> not once the pet holds the item (a find that happens once)</label></div>
+          <div class="row"><label><input type="checkbox" id="tf_not_offered"${r.not_offered ? ' checked' : ''}> not once the item was given to the King</label></div>`;
+        if (kind === 'quest_spawn') return `<div class="row">${num('quest', 'When quest', r.quest, 5)} <span class="hint">is handed in</span><label>Area <select id="tf_area">${areaOpts(r.area || S.area)}</select></label></div>
+          <div class="row"><label>Item <select id="tf_item">${itemOpts(r.item)}</select></label>${state}</div>
+          <div class="row"><label><input type="checkbox" id="tf_random"${r.random ? ' checked' : ''}> on random free spots of the area</label></div>
+          <div class="row" id="tf_fixed">${num('x', 'x', r.x)}${num('y', 'y', r.y)}</div>
+          <div class="row" id="tf_rand">${num('times', 'How many', r.times === undefined ? 1 : r.times, 4)}</div>`;
+        const barArea = Object.keys(S.W.areas).find(id => S.W.areas[id].objects.some(o => o.id === r.barrier)) || S.area;
+        return `<div class="row"><label>Barrier in <select id="tf_barea">${areaOpts(barArea)}</select></label><label>object <select id="tf_barrier">${objectOpts(barArea, r.barrier)}</select></label></div>
+          <div class="row"><label>Goes when <select id="tf_kind">${[['tricks', 'tricks known ≥'], ['stat', 'a personality stat ≥'], ['money', 'Bucks ≥'], ['quests', 'quests done ≥']].map(([v, t]) => `<option value="${v}"${v === (r.kind || 'stat') ? ' selected' : ''}>${t}</option>`).join('')}</select></label>${num('need', '', r.need === undefined ? 1 : r.need, 6)}</div>
+          <div class="row" id="tf_statrow">${STATS.map(t => `<label><input type="checkbox" data-st="${t}"${(r.stats || []).includes(t) ? ' checked' : ''}> ${t}</label>`).join(' ')} <span class="hint">any one is enough</span></div>`;
+      }
+      function tbValues(kind) {
+        const v = k => $('tf_' + k).value, n = (k, lo, hi, label) => { const x = Number(v(k)); if (v(k) === '' || !Number.isInteger(x) || x < lo || x > hi) throw new Error(label + ' must be a whole number from ' + lo + ' to ' + hi + '.'); return x; };
+        if (kind === 'find') return { item: v('item'), weight: n('weight', 1, 100000, 'Weight') };
+        if (kind === 'spot') return { area: v('area'), item: v('item'), x: n('x', -100000, 100000, 'x'), y: n('y', -100000, 100000, 'y'), state: v('state'), requires_item: v('requires_item') || undefined, not_while_held: $('tf_not_while_held').checked || undefined, not_offered: $('tf_not_offered').checked || undefined };
+        if (kind === 'quest_spawn') {
+          const rnd = $('tf_random').checked, f = { quest: n('quest', 1, 100000, 'The quest number'), area: v('area'), item: v('item'), state: v('state'), random: rnd || undefined };
+          if (rnd) { f.times = n('times', 1, 50, 'How many'); f.x = f.y = undefined; } else { f.x = n('x', -100000, 100000, 'x'); f.y = n('y', -100000, 100000, 'y'); f.times = undefined; }
+          return f;
+        }
+        const kindV = v('kind'), stats = [...document.querySelectorAll('#tf_statrow input:checked')].map(c => c.dataset.st);
+        if (!v('barrier')) throw new Error('Choose the barrier object.');
+        if (kindV === 'stat' && !stats.length) throw new Error('Tick at least one personality stat.');
+        return { barrier: v('barrier'), kind: kindV, stats: kindV === 'stat' ? stats : undefined, need: n('need', 0, 1000000, 'The amount') };
+      }
+      function tbWire(kind) {
+        const showQ = () => { const r = $('tf_random'); if (r) { $('tf_fixed').style.display = r.checked ? 'none' : ''; $('tf_rand').style.display = r.checked ? '' : 'none'; } };
+        if (kind === 'quest_spawn') { $('tf_random').onchange = showQ; showQ(); }
+        if (kind === 'gate') {
+          const showS = () => { $('tf_statrow').style.display = $('tf_kind').value === 'stat' ? '' : 'none'; };
+          $('tf_kind').onchange = showS; showS();
+          $('tf_barea').onchange = () => { $('tf_barrier').innerHTML = objectOpts($('tf_barea').value); };
+        }
+      }
+      function renderTables() {
+        const W = S.W; if (!W) { $('tbRows').innerHTML = $('tbForm').innerHTML = $('tbRemoved').innerHTML = $('tbTabs').innerHTML = ''; $('tbCount').textContent = ''; return; }
+        const kind = S.tbl, rows = W.tables[kind], ed = S.cur ? '' : 'disabled';
+        $('tbCount').textContent = '(' + Object.keys(TBL).map(k => W.tables[k].length).join(' · ') + ')';
+        $('tbTabs').innerHTML = Object.keys(TBL).map(k => `<label class="chip"><input type="radio" name="tbk" value="${k}"${k === kind ? ' checked' : ''}><span>${TBL[k].label}</span></label>`).join('');
+        $('tbHint').textContent = TBL[kind].hint;
+        $('tbRows').innerHTML = rows.map((r, i) => {
+          const mine = r.src === S.cur, tags = (r.mods || []).map(m => `<span class="tag ${m.kind}">${m.kind} · ${esc(m.mod)}</span>`).join('');
+          return `<div class="row" data-i="${i}">${r.src === 'base' ? '<span class="tag patch">base</span>' : ''}${tags}<span>${rowText(kind, r)}</span>`
+            + `<button class="tbE" ${ed}${kind === 'spot' && !mine ? ' hidden' : ''}>Edit</button><button class="tbD" ${ed}>${mine && r.added ? 'Delete' : 'Remove'}</button></div>`;
+        }).join('') || '<div class="hint">No rows.</div>';
+        const gone = (W.removedRows[kind] || []).filter(r => r.removedBy === S.cur);
+        $('tbRemoved').innerHTML = gone.length ? '<div class="hint">Removed by this mod:</div>' + gone.map(r => `<div class="row" data-id="${esc(r.id)}"><span class="tag rem">removed</span><span>${rowText(kind, r)}</span><button class="tbR">Put back</button></div>`).join('') : '';
+        const f = S.tbEdit; $('tbForm').innerHTML = f && f.kind === kind ? `<div class="ch">${tbFormHtml(kind, f.row)}<div class="row"><button id="tbSave" class="primary">${f.row ? 'Save row' : 'Add row'}</button><button id="tbCancel">Cancel</button></div></div>` : '';
+        $('tbAdd').disabled = !S.cur;
+        if (f && f.kind === kind) { tbWire(kind); $('tbCancel').onclick = () => { S.tbEdit = null; renderTables(); }; $('tbSave').onclick = () => tbSave(kind, f.row); }
+      }
+      function tbSave(kind, row) {
+        if (!canEdit()) return;
+        let v; try { v = tbValues(kind); } catch (e) { return toast(e.message); }
+        snap();
+        try {
+          if (!row) edRowAdd(S.recs, S.W, S.cur, kind, v);
+          else if (find(S.recs, kind, 'add', row.id)) edRowPatch(S.recs, kind, row, v);
+          else { const d = {}; for (const k of TABLES[kind].fields) if (JSON.stringify(v[k]) !== JSON.stringify(row[k]) && !(v[k] === undefined && row[k] === undefined)) d[k] = v[k]; edRowPatch(S.recs, kind, row, d); }
+        } catch (e) { S.undo.pop(); return toast(e.message); }
+        S.tbEdit = null; changed(); toast('Saved. The game checks the rest (like unknown items) when it loads the mod.');
+      }
+      $('tbTabs').onchange = ev => { S.tbl = ev.target.value; S.tbEdit = null; renderTables(); };
+      $('tbAdd').onclick = () => { if (!canEdit()) return; S.tbEdit = { kind: S.tbl, row: null }; renderTables(); };
+      $('tbRows').onclick = ev => {
+        const el = ev.target.closest('[data-i]'); if (!el) return; const row = S.W.tables[S.tbl][+el.dataset.i];
+        if (ev.target.classList.contains('tbE')) { if (!canEdit()) return; S.tbEdit = { kind: S.tbl, row }; renderTables(); }
+        else if (ev.target.classList.contains('tbD')) { if (!canEdit()) return; snap(); edRowRemove(S.recs, S.tbl, row); S.tbEdit = null; changed(); }
+      };
+      $('tbRemoved').onclick = ev => { const el = ev.target.closest('[data-id]'); if (!el || !ev.target.classList.contains('tbR') || !canEdit()) return; snap(); edRowRestore(S.recs, S.tbl, el.dataset.id); changed(); };
+
       // this area: resume + music
       function renderAreaProps() {
         const a = curArea(); if (!a) return;
+        $('arDig').checked = !!a.diggable; $('arDig').disabled = !S.cur;
         $('arResume').checked = !!a.resume; $('arMusic').value = a.music === undefined || a.music === null ? '' : String(a.music);
         $('arResume').disabled = $('arMusic').disabled = !S.cur;
       }
       $('arResume').onchange = () => { if (!canEdit()) return renderAreaProps(); const a = curArea(); snap(); edSetAreaField(S.recs, a.id, 'resume', $('arResume').checked); changed(); };
+      $('arDig').onchange = () => {
+        if (!canEdit()) return renderAreaProps(); const a = curArea(); snap();
+        const was = a.src === 'base' ? !!(S.base.areas[a.id] || {}).diggable : false, now = $('arDig').checked;
+        edSetAreaField(S.recs, a.id, 'diggable', find(S.recs, 'area', 'add', a.id) ? now : now === was ? undefined : now); changed();
+      };
       $('arMusic').onchange = () => { if (!canEdit()) return renderAreaProps(); const a = curArea(); snap(); edSetAreaField(S.recs, a.id, 'music', $('arMusic').value === '' ? undefined : +$('arMusic').value); changed(); };
       // new area
       function fillLook() {
