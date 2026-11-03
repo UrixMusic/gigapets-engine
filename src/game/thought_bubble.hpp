@@ -13,8 +13,10 @@
 //
 // INFERRED: where the tired timer starts and what its limit is (the ROM never writes it, so 0 as far as the code shows).
 #pragma once
+#include <algorithm>
 #include "settings.hpp"
 #include "../engine/tuning.hpp"
+#include "npc_anim_ids.hpp" // the species records: bubble offsets, decay amounts
 
 namespace gp
 {
@@ -104,21 +106,22 @@ namespace gp
     {
         int dx, dy;
     };
-    // The panda's raised art (anims 0xed, 0xee, 0xf0..0xf3, 0xe4, 0xe5) lifts a bubble another 0x14.
-    constexpr bool pandaRaised(int anim)
+    // The record lists the animations that lift a bubble further (the panda's raised art: anims 0xed, 0xee, 0xf0..0xf3, 0xe4, 0xe5).
+    inline int bubbleRaised(const SpeciesArt &art, int anim)
     {
-        return anim == 0xed || anim == 0xee || anim == 0xf0 || anim == 0xf1 || anim == 0xf2 || anim == 0xf3 || anim == 0xe4 || anim == 0xe5;
+        return std::find(art.raisedAnims.begin(), art.raisedAnims.end(), anim) != art.raisedAnims.end() ? art.bubbleRaise : 0;
     }
-    constexpr BubbleOffset thoughtOffset(int species, int dir, int anim)
+    inline bool pandaRaised(int anim) { return bubbleRaised(artOf(2), anim) > 0; } // (the third base species' record)
+    inline BubbleOffset thoughtOffset(int species, int dir, int anim)
     {
-        if (species == 0)
-            return {dir == 1 ? 0x25 : dir == 0 ? 0 : 0x14, -0x32};
-        return {dir == 1 ? 0x16 : dir == 0 ? 0xf : 0x14, -0x46 - (species == 2 && pandaRaised(anim) ? 0x14 : 0)};
+        const SpeciesArt &art = artOf(species);
+        return {art.thoughtDX[dir == 1 ? 1 : dir == 0 ? 0 : 2], art.thoughtDY - bubbleRaised(art, anim)};
     }
-    constexpr BubbleOffset overheadOffset(int species, int dir, int anim)
+    inline BubbleOffset overheadOffset(int species, int dir, int anim)
     {
+        const SpeciesArt &art = artOf(species);
         const int dx = dir == 1 ? 0x12 : dir == 0 ? -0x12 : 0;
-        return {dx, species == 0 ? -0x32 : -0x4b - (species == 2 && pandaRaised(anim) ? 0x14 : 0)};
+        return {dx, art.overheadDY - bubbleRaised(art, anim)};
     }
 
     // ---- the stink cloud (UpdateIdleBehaviorTick 0x0148d8): Cleanliness below 0x1a keeps anim 6 looping over the pet ----
@@ -126,7 +129,7 @@ namespace gp
     // Pixels to move every overhead bubble down, tuned by eye (both the cloud and the thought bubbles sat about 10 px high with
     // the ROM offsets, so the pet's feet are probably not quite where its ROM position is).
     // It differs by species, all tuned by eye: dog 15, monkey 20, panda 21.
-    constexpr int bubbleLower(int species) { return species == 0 ? 15 : species == 2 ? 21 : 20; }
+    inline int bubbleLower(int species) { return artOf(species).bubbleLower; }
 
     // ---- the personality bubbles (UpdateIdleBehaviorTick 0x0148d8) ----
     // With the pet clean (a stinky pet shows the cloud instead), one bubble loops over its head when its personality leans far
@@ -149,8 +152,8 @@ namespace gp
     // on hunger, 1 otherwise. Limits read from RAM 0x1e9f and 0x1ea6 in MAME. The count restarts whether or not it dropped.
     constexpr long kTiredDecayLimit = romToSim(20000), kHungerDecayLimit = romToSim(4000);
     constexpr int kDecayAfterQuests = 3; // the default of tuning().decayAfterQuests
-    constexpr int tiredDecayAmount(int species) { return species == 0 ? 2 : 1; }
-    constexpr int hungerDecayAmount(int species) { return species == 2 ? 2 : 1; }
+    inline int tiredDecayAmount(int species) { return artOf(species).tiredDecay; }
+    inline int hungerDecayAmount(int species) { return artOf(species).hungerDecay; }
     inline bool decayStep(long &accum, long limit, int questsCompleted)
     {
         if (++accum < limit)

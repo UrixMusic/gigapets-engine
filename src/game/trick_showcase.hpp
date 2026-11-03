@@ -30,6 +30,8 @@
 #pragma once
 #include <functional>
 #include <initializer_list>
+#include <vector>
+#include "npc_anim_ids.hpp" // the animations come from the species' record (SpeciesArt)
 
 namespace gp
 {
@@ -95,50 +97,35 @@ namespace gp
             std::function<double()> seconds;                                     // a clock, in seconds
         };
 
-        // The trick animation for level 1..3 and the performer's species 0..2.
-        static int mainAnim(int level, int species)
-        {
-            static const int t[3][3] = {{0x1b, 0x81, 0xfc}, {0x24, 0x84, 0xe7}, {0x21, 0x89, 0xf0}};
-            return valid(level, species) ? t[level - 1][species] : -1;
-        }
+        // The trick animation for level 1..3 and the performer's species (its record holds them; the base values are the ROM's tables).
+        static int mainAnim(int level, int species) { return valid(level, species) ? artOf(species).trickMain[level - 1] : -1; }
         // The intro animation, or -1 for none (the ROM's 0xffff entries).
-        static int introAnim(int level, int species)
-        {
-            static const int t[3][3] = {{-1, -1, -1}, {-1, 0x83, -1}, {0x33, 0x88, 0x102}};
-            return valid(level, species) ? t[level - 1][species] : -1;
-        }
+        static int introAnim(int level, int species) { return valid(level, species) ? artOf(species).trickIntro[level - 1] : -1; }
         // PlayReactionAnim_State2's table: the animation after the repeats, or -1 for none.
-        static int closingAnim(int level, int species)
-        {
-            static const int t[3][3] = {{-1, -1, -1}, {-1, 0x85, -1}, {0x1e, 0x8a, 0x102}};
-            return valid(level, species) ? t[level - 1][species] : -1;
-        }
+        static int closingAnim(int level, int species) { return valid(level, species) ? artOf(species).trickClosing[level - 1] : -1; }
         // PlayTurnAroundIdleAnim (0x015144), PlayDirectionalIdleAnim (0x0150f1) and PlayActorReactionAnimation (0x01505b, the
         // overworld table), by species.
-        static int turnAroundAnim(int species) { static const int t[3] = {0x34, 0x9b, 0x105}; return species >= 0 && species <= 2 ? t[species] : -1; }
-        static int directionalAnim(int species) { static const int t[3] = {0x35, 0x9c, 0x106}; return species >= 0 && species <= 2 ? t[species] : -1; }
-        static int actorReactionAnim(int species) { static const int t[3] = {0x31, 0x82, 0xea}; return species >= 0 && species <= 2 ? t[species] : -1; }
+        static int turnAroundAnim(int species) { return knownSpecies(species) ? artOf(species).trickTurnAround : -1; }
+        static int directionalAnim(int species) { return knownSpecies(species) ? artOf(species).trickDirectional : -1; }
+        static int actorReactionAnim(int species) { return knownSpecies(species) ? artOf(species).trickActorReaction : -1; }
         // PlayReactionAnim (0x014e97): 2 -> 0xf1, 3 -> 0xf2, anything else 0xf3.
         static int reactionAnim(int n) { return n == 2 ? 0xf1 : n == 3 ? 0xf2 : 0xf3; }
 
         // How many times the teacher's trick plays. The ROM keys this on the PLAYER's species (g_playerSpecies).
         static int repeats(int level, int playerSpecies)
         {
-            if (level == 2)
-                return playerSpecies == 1 ? 5 : 1;
-            if (level == 3)
-                return playerSpecies == 2 ? 3 : 5;
-            return 1;
+            return valid(level, playerSpecies) ? artOf(playerSpecies).trickRules[level - 1].teacherRepeats : 1;
         }
 
         // How many times the player's pet repeats the trick (TickActor_NPCEncounterSequence): the dog at level 3 and the
         // monkey at levels 2 and 3 do it more the more Light Bulbs the pet has; the panda at level 3 too; others once.
-        // rand(lo, hi) is the game's RandRange: hi exclusive (so 1..2 for (1, 3)).
+        // rand(lo, hi) is the game's RandRange: hi exclusive (so 1..2 for (1, 3)). The species' record says which rule it follows.
         static int petRepeats(int level, int species, int lightbulbs, const std::function<int(int, int)> &rand)
         {
-            if ((species == 0 && level == 3) || (species == 1 && (level == 2 || level == 3)))
+            const int scale = valid(level, species) ? artOf(species).trickRules[level - 1].bulbScale : 0;
+            if (scale == 1)
                 return lightbulbs <= 99 ? rand(1, 3) : lightbulbs > 999 ? rand(6, 11) : rand(3, 6);
-            if (species == 2 && level == 3)
+            if (scale == 2)
                 return lightbulbs <= 99 ? rand(1, 3) : lightbulbs > 999 ? 5 : rand(3, 5);
             return 1;
         }
@@ -168,10 +155,10 @@ namespace gp
             case State::Main: // ROM state 3
                 h.play(mainAnim(level_, species_), kMainRate);
                 timerSet_ = false;
-                if (h.full && species_ == 1 && level_ == 1 && h.seconds)
+                if (h.full && rules().startSound >= 0 && h.seconds)
                 {
                     timerStart_ = h.seconds();
-                    timerDur_ = 0.6;
+                    timerDur_ = rules().startSoundDelay;
                     timerSet_ = true;
                 }
                 state_ = State::Repeat;
@@ -179,8 +166,8 @@ namespace gp
             case State::Repeat: // ROM state 4
                 return h.full ? repeatFull(h) : repeatPlain(h);
             case State::Closing: // ROM state 5
-                if (species_ == 2 && level_ == 3 && h.stopSound)
-                    for (int id : {0x35, 0x36, 0x37, 0x3a})
+                if (h.stopSound)
+                    for (int id : rules().stopOnClose)
                         h.stopSound(id);
                 if (playClosing(h))
                 {
@@ -208,7 +195,8 @@ namespace gp
         }
 
     private:
-        static bool valid(int level, int species) { return level >= 1 && level <= 3 && species >= 0 && species <= 2; }
+        static bool valid(int level, int species) { return level >= 1 && level <= 3 && knownSpecies(species); }
+        const TrickRules &rules() const { return artOf(species_).trickRules[level_ >= 1 && level_ <= 3 ? level_ - 1 : 0]; }
         enum class State
         {
             Idle,
@@ -240,7 +228,7 @@ namespace gp
         // What follows the closing animation (or its absence): ROM states 6 and 9.
         bool afterClosing(const Host &h)
         {
-            if (species_ == 1 && level_ == 2)
+            if (rules().turnAroundAfter)
             {
                 const int r = h.rand ? h.rand(1, 3) : 2; // 1 turns left, 2 right
                 if (h.setFacing)
@@ -251,7 +239,7 @@ namespace gp
                     return false;
                 }
             }
-            else if (species_ == 2 && level_ == 1 && h.play(actorReactionAnim(species_), kIntroRate))
+            else if (rules().actorReactionExit && h.play(actorReactionAnim(species_), kIntroRate))
             {
                 state_ = State::Exit;
                 return false;
@@ -277,12 +265,12 @@ namespace gp
             const int id = closingAnim(level_, species_);
             if (id < 0)
                 return false;
-            if (species_ == 2 && h.playReverse) // the panda's plays last frame to first
+            if (rules().closingReversed && h.playReverse) // the panda's plays last frame to first
                 return h.playReverse(id, kIntroRate, true);
             return h.play(id, kIntroRate);
         }
 
-        bool soundingAny(const Host &h, std::initializer_list<int> ids) const
+        bool soundingAny(const Host &h, const std::vector<int> &ids) const
         {
             if (!h.soundActive)
                 return false;
@@ -301,55 +289,57 @@ namespace gp
                 if (h.sound)
                     h.sound(id, vol);
             };
+            const TrickRules &r = rules();
             bool handled = false;
-            if (species_ == 1 && level_ == 1 && timerSet_ && h.seconds)
+            if (r.startSound >= 0 && timerSet_ && h.seconds)
             {
                 if (h.seconds() - timerStart_ > timerDur_)
                 {
-                    sound(0x5b, 0xbe);
+                    sound(r.startSound, r.startSoundVolume);
                     timerSet_ = false;
                     handled = true;
                 }
             }
             if (!handled)
             {
-                if (species_ == 2 && level_ == 2 && h.frame && h.frame() == 0xc)
+                if (r.soundFrame >= 0 && h.frame && h.frame() == r.soundFrame)
                 {
-                    if (h.cameraPan)
+                    if (r.cameraPan && h.cameraPan)
                         h.cameraPan();
-                    if (!(h.soundActive && h.soundActive(0x2e)))
-                        sound(0x2e, 0xff);
+                    if (r.frameSound >= 0 && !(h.soundActive && h.soundActive(r.frameSound)))
+                        sound(r.frameSound, r.frameSoundVolume);
                 }
-                else if (cur == 0xf0)
+                else if (r.chainAnim >= 0 && cur == r.chainAnim)
                 {
-                    if (h.busy() && !soundingAny(h, {0x35, 0x36, 0x37}) && h.rand)
+                    if (h.busy() && !soundingAny(h, r.chainSounds) && h.rand && !r.chainSounds.empty())
                     {
-                        const int r = h.rand(1, 4);
-                        sound(r == 1 ? 0x35 : r == 2 ? 0x36 : 0x37, 0xbe);
+                        const int roll = h.rand(1, int(r.chainSounds.size()) + 1);
+                        sound(r.chainSounds[size_t(roll - 1)], 0xbe);
                     }
                 }
-                else if (cur == 0x89)
+                else if (r.loopSoundAnim >= 0 && cur == r.loopSoundAnim)
                 {
-                    if (!(h.soundActive && h.soundActive(0x1a)))
-                        sound(0x1a, 0xbe);
+                    if (!(h.soundActive && h.soundActive(r.loopSound)))
+                        sound(r.loopSound, r.loopSoundVolume);
                 }
             }
             if (h.busy())
                 return false;
-            if (cur == 0xf0 && h.rand)
+            if (r.chainAnim >= 0 && cur == r.chainAnim && h.rand)
             {
-                const int r = h.rand(1, 4);
-                if (r == 2 || r == 3)
-                {
-                    h.play(reactionAnim(r), kReactionRate);
-                    if (h.stopSound)
-                        for (int id : {0x35, 0x36, 0x37})
-                            h.stopSound(id);
-                    r == 2 ? sound(0x3a, 0xbe) : sound(0x38, 0xff);
-                    return false;
-                }
+                const int roll = h.rand(1, 4);
+                for (const TrickReaction &c : r.chainReactions)
+                    if (c.roll == roll)
+                    {
+                        h.play(c.anim, kReactionRate);
+                        if (h.stopSound)
+                            for (int id : r.chainSounds)
+                                h.stopSound(id);
+                        sound(c.sound, c.volume);
+                        return false;
+                    }
             }
-            else if (cur == 0xf2 && h.seconds && h.rand)
+            else if (r.chainWaitAnim >= 0 && cur == r.chainWaitAnim && h.seconds && h.rand)
             {
                 if (!timerSet_)
                 {
@@ -359,8 +349,8 @@ namespace gp
                 }
                 else if (h.seconds() - timerStart_ > timerDur_)
                 {
-                    h.play(reactionAnim(4), kReactionRate);
-                    sound(0x39, 0xff);
+                    h.play(r.chainFinalAnim, kReactionRate);
+                    sound(r.chainFinalSound, r.chainFinalVolume);
                     timerSet_ = false;
                 }
                 return false;

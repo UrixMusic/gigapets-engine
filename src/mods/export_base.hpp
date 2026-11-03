@@ -312,10 +312,10 @@ namespace gp
             j["presets"] = presets;
             j["palettes"] = palettes;
 
-            std::vector<Named> list = {{"idle", kIdleBase[sp]}, {"idle sideways", kIdleSide[sp]}, {"walk down", kWalkDown[sp]}, {"walk up", kWalkUp[sp]},
-                                       {"walk sideways", kWalkSide[sp]}, {"turn around", kTurn180[sp]}, {"turn sideways", kTurn90[sp]},
-                                       {"settled", kSettled[sp]}, {"call (front)", kCallFront[sp]}, {"call (side)", kCallSide[sp]},
-                                       {"idle (sick)", kIdleFlagB[sp]}, {"idle (sad)", kIdleFlagA[sp]}};
+            std::vector<Named> list = {{"idle", gp::artOf(sp).idleBase}, {"idle sideways", gp::artOf(sp).idleSide}, {"walk down", gp::artOf(sp).walkDown}, {"walk up", gp::artOf(sp).walkUp},
+                                       {"walk sideways", gp::artOf(sp).walkSide}, {"turn around", gp::artOf(sp).turn180}, {"turn sideways", gp::artOf(sp).turn90},
+                                       {"settled", gp::artOf(sp).settled}, {"call (front)", gp::artOf(sp).callFront}, {"call (side)", gp::artOf(sp).callSide},
+                                       {"idle (sick)", gp::artOf(sp).idleFlagB}, {"idle (sad)", gp::artOf(sp).idleFlagA}};
             static const char *kReactNames[] = {"reaction"};
             for (int rid : reactIdsForTier(sp))
                 list.push_back({kReactNames[0], rid});

@@ -824,57 +824,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         // petPal is defined at the top of runWalk (saved colour, else the species default)
 
         std::vector<int> petIds;
-        auto addAll = [&](const int (&t)[3])
-        { petIds.push_back(t[sp]); };
-        addAll(gp::kWalkUp);
-        addAll(gp::kWalkDown);
-        addAll(gp::kWalkSide);
-        addAll(gp::kWalkSideStyle);
-        addAll(gp::kSitDown);
-        addAll(gp::kSitAlt);
-        addAll(gp::kEat);
-        addAll(gp::kBowlBite);
-        addAll(gp::kEatStyle);
-        addAll(gp::kActionStyle);
-        addAll(gp::kPositiveStyle);
-        if (sp == 2)
-            petIds.push_back(gp::kPandaFrameStyle);
-        addAll(gp::kBoredStyle);
-        addAll(gp::kBedGetIn);
-        addAll(gp::kSleepCycle);
-        addAll(gp::kBedGetOut);
-        addAll(gp::kIdleBase);
-        addAll(gp::kIdleSide);
-        addAll(gp::kIdleStyle);
-        addAll(gp::kTurn180);
-        addAll(gp::kTurn90);
-        addAll(gp::kTurn90Style);
-        addAll(gp::kTurn180Style);
-        addAll(gp::kSettled);
-        addAll(gp::kSettledStyle);
-        addAll(gp::kIdleFlagA);
-        addAll(gp::kIdleFlagAStyle);
-        addAll(gp::kIdleFlagB);
-        addAll(gp::kIdleFlagBStyle);
-        addAll(gp::kCallFront);
-        addAll(gp::kCallSide);
-        addAll(gp::kCallStyle);
-        petIds.push_back(0x1c);
-        petIds.push_back(0x80);
-        petIds.push_back(0xe9);
-        for (int id : gp::reactIdsForTier(sp))
+        for (int id : gp::artOf(sp).all()) // every role of this species' art
             petIds.push_back(id);
-
-        for (int level = 1; level <= 3; ++level) // the tricks (trick_showcase.hpp)
-            for (int id : {gp::TrickShowcase::introAnim(level, sp), gp::TrickShowcase::mainAnim(level, sp), gp::TrickShowcase::closingAnim(level, sp)})
-                if (id >= 0)
-                    petIds.push_back(id);
-        if (sp == 2)
-            for (int n : {2, 3, 4})
-                petIds.push_back(gp::TrickShowcase::reactionAnim(n));
-        petIds.push_back(gp::TrickShowcase::turnAroundAnim(sp));
-        petIds.push_back(gp::TrickShowcase::directionalAnim(sp));
-        petIds.push_back(gp::TrickShowcase::actorReactionAnim(sp));
+        // (the reactions, tricks, the chain of the panda's level 3 trick and the dig are in all() above)
         std::sort(petIds.begin(), petIds.end());
         petIds.erase(std::unique(petIds.begin(), petIds.end()), petIds.end());
         auto importPetAnims = [&] // under the current petPal; again after a wash changes the colour
@@ -911,7 +863,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             }
             return {a, animTextures(id)};
         };
-        const int kWalkAnim[3] = {gp::kWalkUp[sp], gp::kWalkDown[sp], gp::kWalkSide[sp]}; // 0 = up, 1 = down, 2 = sideways
+        const int kWalkAnim[3] = {gp::artOf(sp).walkUp, gp::artOf(sp).walkDown, gp::artOf(sp).walkSide}; // 0 = up, 1 = down, 2 = sideways
 
         // ---- objects: drawn as sprites (not baked into the background) so they can sort against NPCs and the pet ----
         auto drawObject = [&](const gp::ObjectDef &o, float camX, float camY)
@@ -1058,7 +1010,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             // Keys 0..3, 7, 8 and 9 (idles and walks) loop; 4/5 (turns) and 6 (reactions) are one-shots. The sick and sad idles
             // run at 7 fps (the dog's sick one at 14), like the pet's.
             const int npcSp = n.def->speciesOrAnim == 0xfffe ? playerSpecies : n.def->speciesOrAnim;
-            const int rate = key == 6 ? n.forcedRate : key == 9 || (key == 8 && npcSp != 0) ? 7 : 14;
+            const int rate = key == 6 ? n.forcedRate : key == 9 ? 7 : key == 8 ? gp::artOf(npcSp).idleFlagBRate : 14;
             n.setAnim(key, frames, rate, key < 4 || key >= 7, key == 6 && n.forcedReverse);
             n.advanceAnim(frames);
         };
@@ -1081,7 +1033,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             const int key = n.animKey();
             // Key 7 (idle toward the pet): dog and monkey art faces left, panda art faces right (PlayIdleAnim_Scripted).
             const int npcSp = n.def->speciesOrAnim == 0xfffe ? playerSpecies : n.def->speciesOrAnim;
-            const bool sideIdleFlip = n.body.facing == (npcSp == 2 ? gp::FaceLeft : gp::FaceRight);
+            const bool sideIdleFlip = n.body.facing == (gp::artOf(npcSp).facesRight ? gp::FaceLeft : gp::FaceRight);
             const bool flip = key == 3                 ? n.body.facing == gp::FaceLeft
                               : (key == 4 || key == 5) ? n.body.facing == gp::FaceRight
                               : key == 6               ? n.forcedFlip
@@ -1862,7 +1814,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             const int fr = std::min(n.anim.currentFrame, int(A.size()) - 1);
             const int nsp = n.def->speciesOrAnim == 0xfffe ? playerSpecies : n.def->speciesOrAnim;
             const auto np = npcPosF(n);
-            drawShadow(A.anim->frames[fr].w, np.first, np.second, nsp == 2, camX, camY);
+            drawShadow(A.anim->frames[fr].w, np.first, np.second, gp::artOf(nsp).wideShadow, camX, camY);
         };
         auto drawItemShadow = [&](int item, int wx, int wy, float camX, float camY)
         {
@@ -2219,12 +2171,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         // The standing idle by how the pet is (TickPlayerActorIdleBehavior): sick -> FlagB, unhappy -> FlagA, else the base one.
         auto restIdleId = [&]
         {
-            return !player.isHealthy()                                    ? gp::kIdleFlagB[sp]
-                   : player.care[gp::Happiness] < gp::kUnhappyBelow ? gp::kIdleFlagA[sp]
-                                                                       : gp::kIdleBase[sp];
+            return !player.isHealthy()                                    ? gp::artOf(sp).idleFlagB
+                   : player.care[gp::Happiness] < gp::kUnhappyBelow ? gp::artOf(sp).idleFlagA
+                                                                       : gp::artOf(sp).idleBase;
         };
-        auto restIdleRate = [&] { return restIdleId() == gp::kIdleBase[sp] || (restIdleId() == gp::kIdleFlagB[sp] && sp == 0) ? 14 : 7; };
-        auto isRestIdle = [&](int aid) { return aid == gp::kIdleBase[sp] || aid == gp::kIdleFlagA[sp] || aid == gp::kIdleFlagB[sp]; };
+        auto restIdleRate = [&] { return restIdleId() == gp::artOf(sp).idleBase ? 14 : restIdleId() == gp::artOf(sp).idleFlagB ? gp::artOf(sp).idleFlagBRate : 7; };
+        auto isRestIdle = [&](int aid) { return aid == gp::artOf(sp).idleBase || aid == gp::artOf(sp).idleFlagA || aid == gp::artOf(sp).idleFlagB; };
 
         auto playAnim = [&](int aid, bool loop, int rate, Pose p,
                             std::vector<AnimStep> next = {})
@@ -2360,10 +2312,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 if (facing == 0)
                 {
                     faceLeft = (std::rand() % 3) == 0;
-                    playAnim(gp::kTurn180[sp], false, 14, Pose::Settle, {{gp::kTurn90[sp], false, 14}, {restIdleId(), true, restIdleRate()}});
+                    playAnim(gp::artOf(sp).turn180, false, 14, Pose::Settle, {{gp::artOf(sp).turn90, false, 14}, {restIdleId(), true, restIdleRate()}});
                 }
                 else
-                    playAnim(gp::kTurn90[sp], false, 14, Pose::Settle, {{restIdleId(), true, restIdleRate()}});
+                    playAnim(gp::artOf(sp).turn90, false, 14, Pose::Settle, {{restIdleId(), true, restIdleRate()}});
                 settlePhase = 1;
                 return false;
             }
@@ -2380,7 +2332,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (facing == 1)
                 playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
             else if (facing == 2)
-                playAnim(gp::kIdleSide[sp], true, 14, Pose::Idle); // kIdleSide[0]
+                playAnim(gp::artOf(sp).idleSide, true, 14, Pose::Idle); // gp::artOf(0).idleSide
             else
             {
                 pose = Pose::Move; // up: no idle art, keep the old hold
@@ -2397,7 +2349,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 facing = 2;
                 faceLeft = pos.x >= encNpc->x();
             }
-            playAnim(gp::kIdleSide[sp], true, 14, Pose::Idle); // kIdleSide[0]
+            playAnim(gp::artOf(sp).idleSide, true, 14, Pose::Idle); // gp::artOf(0).idleSide
         };
 
         host.npcIdle = [&]
@@ -2447,7 +2399,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             encNpc->forcedReverse = gp::playsReversed(a);
             const bool neg = a == gp::ReactAnim::Negative || a == gp::ReactAnim::NegIntro ||
                              a == gp::ReactAnim::NegOutro;
-            const bool panda = sp == 2;
+            const bool panda = gp::artOf(sp).facesRight; // the art faces right (the panda's)
             if (neg)
                 encNpc->forcedFlip = panda ? (f == gp::FaceLeft) : (f != gp::FaceLeft);
             else
@@ -2476,7 +2428,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             walkTicks = 0;
             feedFood = true;
             feedStep = 1;
-            playAnim(gp::kEat[sp], false, 14, Pose::Special);
+            playAnim(gp::artOf(sp).eat, false, 14, Pose::Special);
         };
 
         auto startMedicine = [&](int curedIllness)
@@ -2501,14 +2453,14 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 feedRepeats = 4 + std::rand() % 6; // RandRange(4,9)
                 feedCount = 1;
                 feedStep = 2;
-                playAnim(gp::kEat[sp], false, 14, Pose::Special);
+                playAnim(gp::artOf(sp).eat, false, 14, Pose::Special);
                 chewSound();
             }
             else if (feedStep == 2)
             {
                 if (++feedCount <= feedRepeats)
                 {
-                    playAnim(gp::kEat[sp], false, 14, Pose::Special);
+                    playAnim(gp::artOf(sp).eat, false, 14, Pose::Special);
                     chewSound();
                 }
                 else
@@ -2556,9 +2508,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 facing = 1;
                 walkTicks = 0;
                 if (!player.isHealthy())
-                    playAnim(gp::kIdleFlagB[sp], true, sp == 0 ? 14 : 7, Pose::Idle);
+                    playAnim(gp::artOf(sp).idleFlagB, true, gp::artOf(sp).idleFlagBRate, Pose::Idle);
                 else if (player.care[gp::Happiness] < gp::kUnhappyBelow)
-                    playAnim(gp::kIdleFlagA[sp], true, 7, Pose::Idle);
+                    playAnim(gp::artOf(sp).idleFlagA, true, 7, Pose::Idle);
                 else
                     playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
                 tutTicks = 0;
@@ -2903,7 +2855,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 const gp::SitPhase ph = gp::sitPhase(sp, animId, pose == Pose::Idle, pose == Pose::Special, animDone);
                 if (ph == gp::SitPhase::Sitting)
                 {
-                    playAnim(gp::kSitAlt[sp], false, 14, Pose::Special);
+                    playAnim(gp::artOf(sp).sitAlt, false, 14, Pose::Special);
                     break;
                 }
                 if (ph != gp::SitPhase::None) // sitting down or getting up: wait
@@ -3058,7 +3010,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                                 r->visitPal = pd->number;
                         try
                         {
-                            gp::importAnim(rom, db, gp::kSettledStyle[other.species], r->visitPal);
+                            gp::importAnim(rom, db, gp::artOf(other.species).settledStyle, r->visitPal);
                         }
                         catch (const std::exception &)
                         {
@@ -3122,7 +3074,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             r.eatStep = 20;
             r.eatGivesHappy = false;
             r.eatWash = true;
-            r.eatAnim = gp::kIdleStyle[sp]; // front-on, any facing
+            r.eatAnim = gp::artOf(sp).idleStyle; // front-on, any facing
             r.eatFlip = false;
             r.eatLoop = true;
             r.animTicks = 0;
@@ -3137,7 +3089,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             r.eatGivesHappy = false;
             r.eatWash = false;
             r.sleepQuit = quitting;
-            r.eatAnim = gp::kBoredStyle[sp];
+            r.eatAnim = gp::artOf(sp).boredStyle;
             r.eatFlip = false;
             r.eatLoop = false;
             r.eatFps = 7; // PlayBoredReactionAnim plays at 7
@@ -3166,7 +3118,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             r.eatStep = 17; // the hop, with the panda's intro and outro
             r.eatGivesHappy = false;
             r.eatWash = false;
-            r.eatAnim = gp::kIdleStyle[sp]; // held for the one step before the hop starts
+            r.eatAnim = gp::artOf(sp).idleStyle; // held for the one step before the hop starts
             r.eatFlip = false;
             r.eatLoop = true;
             r.eatFps = 14;
@@ -3181,7 +3133,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         {
             player.tutorialsShown = gp::markShown(player.tutorialsShown, r.tutorialEvent);
             saveGame();
-            r.eatAnim = gp::kIdleStyle[sp]; // front-on
+            r.eatAnim = gp::artOf(sp).idleStyle; // front-on
             r.eatFlip = false;
             r.eatLoop = true;
             r.eatFps = 14;
@@ -3200,7 +3152,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             r.overId = -1;
             if (turn) // it was walking: it settles to face the front first
             {
-                r.eatAnim = gp::kTurn90Style[sp];
+                r.eatAnim = gp::artOf(sp).turn90Style;
                 r.eatFlip = !r.faceLeft; // the art faces left
                 r.eatLoop = false;
                 r.eatFps = 14;
@@ -3255,14 +3207,14 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             };
             auto walk = [&] // the sideways walk, mirrored for left
             {
-                if (r.eatAnim != gp::kWalkSideStyle[sp] || r.eatFlip != r.faceLeft)
-                    play(gp::kWalkSideStyle[sp], r.faceLeft, true);
+                if (r.eatAnim != gp::artOf(sp).walkSideStyle || r.eatFlip != r.faceLeft)
+                    play(gp::artOf(sp).walkSideStyle, r.faceLeft, true);
             };
             // The bite, chew and action art is played unmirrored: the dog's and monkey's faces left (the bowl is on their left)
             // and the panda's faces right (it stands to the bowl's left).
             auto bite = [&]
             {
-                play(gp::kBowlBite[sp], false, false);
+                play(gp::artOf(sp).bowlBite, false, false);
                 r.eatStep = 9;
             };
             ++r.animTicks;
@@ -3289,37 +3241,37 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
                 r.x = t.x;
                 r.y = t.y;
-                r.faceLeft = sp != 2; // the bowl is to the left of everyone but the panda
+                r.faceLeft = gp::artOf(sp).bowlSlope > 0; // the bowl is to the left of everyone but the panda
                 r.eatRepeat = 2 + std::rand() % 2; // RandRange(2,4): 2 or 3 bites
-                if (sp == 2) // the panda starts with an action animation
+                if (gp::artOf(sp).bowlStartsWithAction) // the panda starts with an action animation
                 {
-                    play(gp::kActionStyle[sp], false, false);
+                    play(gp::artOf(sp).actionStyle, false, false);
                     r.eatStep = 8;
                 }
                 else
                     bite();
                 break;
             case 8:
-                if (done(gp::kActionStyle[sp]))
+                if (done(gp::artOf(sp).actionStyle))
                     bite();
                 break;
             case 9: // lean in; the food drops as the bites go
                 setBowl(r, gp::bowlSpriteForBites(r.eatRepeat));
-                if (done(gp::kBowlBite[sp]))
+                if (done(gp::artOf(sp).bowlBite))
                 {
                     --r.eatRepeat;
                     r.eatChews = 2 + std::rand() % 3; // RandRange(2,5): 2..4 chews
-                    play(gp::kEatStyle[sp], false, false);
+                    play(gp::artOf(sp).eatStyle, false, false);
                     chewSound(); // GUESS: the bowl's chews sound like the outdoor ones
                     r.eatStep = 10;
                 }
                 break;
             case 10: // chew, then a short pause holding the last frame
-                if (done(gp::kEatStyle[sp]))
+                if (done(gp::artOf(sp).eatStyle))
                 {
                     if (--r.eatChews > 0)
                     {
-                        play(gp::kEatStyle[sp], false, false);
+                        play(gp::artOf(sp).eatStyle, false, false);
                         chewSound();
                     }
                     else
@@ -3334,7 +3286,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     break;
                 if (r.eatRepeat < 1)
                 {
-                    r.eatSX = (gp::kRoomFloorY - r.y) * (sp == 2 ? -2 : 2) + r.x; // back to the floor
+                    r.eatSX = (gp::kRoomFloorY - r.y) * gp::artOf(sp).bowlSlope + r.x; // back to the floor
                     r.eatStep = 12;
                 }
                 else
@@ -3351,15 +3303,15 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
                 r.x = r.eatSX;
                 r.y = gp::kRoomFloorY;
-                play(gp::kTurn90Style[sp], !r.faceLeft, false); // art faces left, so mirrored for right
+                play(gp::artOf(sp).turn90Style, !r.faceLeft, false); // art faces left, so mirrored for right
                 r.eatStep = 13;
                 break;
             case 13: // turn to the front
-                if (done(gp::kTurn90Style[sp]))
+                if (done(gp::artOf(sp).turn90Style))
                     r.eatStep = 17;
                 break;
             case 40: // a first-time message: the pet turns to the front first (TickActor_SettleFacing)
-                if (done(gp::kTurn90Style[sp]))
+                if (done(gp::artOf(sp).turn90Style))
                     tutorialBegin(r);
                 break;
             case 41: // marked shown and idle: after 0.25 s the message opens (TickFirstNPCEncounterSequence)
@@ -3374,7 +3326,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
                 break;
             case 30: // the yawn (the bored reaction), then off to the bed
-                if (done(gp::kBoredStyle[sp]))
+                if (done(gp::artOf(sp).boredStyle))
                 {
                     r.eatSX = gp::bedApproachX(r.y);
                     r.eatStep = 31;
@@ -3401,27 +3353,27 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
                 r.x = gp::kBedX;
                 r.y = gp::kBedY;
-                play(gp::kBedGetIn[sp], false, false);
+                play(gp::artOf(sp).bedGetIn, false, false);
                 r.eatStep = 33;
                 break;
             case 33:
-                if (done(gp::kBedGetIn[sp]))
+                if (done(gp::artOf(sp).bedGetIn))
                 {
                     r.eatRepeat = gp::kSleepCycles;
-                    play(gp::kSleepCycle[sp], false, false, gp::sleepCycleFps(sp));
+                    play(gp::artOf(sp).sleepCycle, false, false, gp::sleepCycleFps(sp));
                     sfx(6, 0xbe); // the sleeping sound: sound 6 (browser #11); GUESS: once per cycle
                     r.eatStep = 34;
                 }
                 break;
             case 34: // sleep cycles: +10 Tiredness each (not when quitting), on until 3 are done and the pet is rested
-                if (done(gp::kSleepCycle[sp]))
+                if (done(gp::artOf(sp).sleepCycle))
                 {
                     if (!r.sleepQuit)
                         player.adjustCare(gp::Tiredness, gp::kSleepTiredness);
                     --r.eatRepeat;
                     if (!gp::sleepOver(r.eatRepeat, player.care[gp::Tiredness], r.sleepQuit))
                     {
-                        play(gp::kSleepCycle[sp], false, false, gp::sleepCycleFps(sp));
+                        play(gp::artOf(sp).sleepCycle, false, false, gp::sleepCycleFps(sp));
                         sfx(6, 0xbe);
                     }
                     else if (r.sleepQuit) // the ROM halts here; the game saves and goes back to the menu
@@ -3432,13 +3384,13 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     }
                     else
                     {
-                        play(gp::kBedGetOut[sp], false, false);
+                        play(gp::artOf(sp).bedGetOut, false, false);
                         r.eatStep = 35;
                     }
                 }
                 break;
             case 35: // out of bed, back down the diagonal (step 12), turn to the front (13) and the happy hop (14)
-                if (done(gp::kBedGetOut[sp]))
+                if (done(gp::artOf(sp).bedGetOut))
                 {
                     r.eatSX = (gp::kRoomFloorY - r.y) * -2 + r.x;
                     r.eatWash = true; // the same +10 Happiness top-up as after a wash
@@ -3464,21 +3416,21 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             }
             case 17: // PlayPositiveReactionAnim(pet, 3, 2) begins: the panda's intro first, the others go straight to the hop
                 r.eatHappy = 0;
-                if (sp == 2)
+                if (gp::artOf(sp).hopIntro >= 0)
                 {
-                    play(gp::kPandaFrameStyle, false, false);
+                    play(gp::artOf(sp).hopIntro, false, false);
                     r.eatStep = 15;
                 }
                 else
                 {
-                    play(gp::kPositiveStyle[sp], false, false), petSound(4, 0xbe); // PlayPositiveReactionAnim: the happy panting
+                    play(gp::artOf(sp).positiveStyle, false, false), petSound(4, 0xbe); // PlayPositiveReactionAnim: the happy panting
                     r.eatStep = 14;
                 }
                 break;
             case 15: // the panda's intro is over
-                if (done(gp::kPandaFrameStyle))
+                if (done(gp::artOf(sp).hopIntro))
                 {
-                    play(gp::kPositiveStyle[sp], false, false), petSound(4, 0xbe); // PlayPositiveReactionAnim: the happy panting
+                    play(gp::artOf(sp).positiveStyle, false, false), petSound(4, 0xbe); // PlayPositiveReactionAnim: the happy panting
                     r.eatStep = 14;
                 }
                 break;
@@ -3487,9 +3439,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 {
                     if (++r.eatHappy < 3)
                         play(r.eatAnim, false, false), petSound(4, 0xbe);
-                    else if (sp == 2) // then the panda's outro: its intro played last frame to first
+                    else if (gp::artOf(sp).hopIntro >= 0) // then the panda's outro: its intro played last frame to first
                     {
-                        play(gp::kPandaFrameStyle, false, false);
+                        play(gp::artOf(sp).hopIntro, false, false);
                         r.eatReverse = true;
                         r.eatStep = 16;
                     }
@@ -3693,7 +3645,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
                 else if (r.phase == P::Turning)
                 {
-                    const int n = int(getAnim(gp::kTurn90Style[sp]).size());
+                    const int n = int(getAnim(gp::artOf(sp).turn90Style).size());
                     if (n == 0 || ++r.animTicks * kFrameRate / 30 >= n)
                     {
                         r.phase = P::Idle;
@@ -3826,7 +3778,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             }
 
             const bool walking = r.phase == P::Entering || r.phase == P::Walking || r.phase == P::Settling || r.phase == P::Leaving;
-            int id = gp::kIdleStyle[sp];
+            int id = gp::artOf(sp).idleStyle;
             bool flip = false;
             int frame = 0;
             auto frameOf = [&](int anim, int ticks, bool loop, int rate = 14) // 14 is kFrameRate
@@ -3839,13 +3791,13 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             };
             if (walking)
             {
-                id = gp::kWalkSideStyle[sp]; // art faces right: mirrored for left
+                id = gp::artOf(sp).walkSideStyle; // art faces right: mirrored for left
                 flip = r.faceLeft;
                 frame = frameOf(id, r.walkTicks, true);
             }
             else if (r.phase == P::Turning)
             {
-                id = gp::kTurn90Style[sp]; // art faces left: mirrored for right
+                id = gp::artOf(sp).turn90Style; // art faces left: mirrored for right
                 flip = !r.faceLeft;
                 frame = frameOf(id, r.animTicks, false);
             }
@@ -3864,7 +3816,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 const int n = int(A.size());
                 const int f = std::min(frame, n - 1);
                 const gp::SpriteFrame &s = A.anim->frames[size_t(f)];
-                drawShadow(s.w, rx, ry, sp == 2, scrollF, 0.f);
+                drawShadow(s.w, rx, ry, gp::artOf(sp).wideShadow, scrollF, 0.f);
                 const float px = rx - scrollF;
                 float x = flip ? px + s.anchorX - s.dx - s.w : px - s.anchorX + s.dx;
                 float y = ry - s.anchorY + s.dy;
@@ -3930,7 +3882,6 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         // PlayDigForItemRoutine, simplified: settle, bubble + sounded task, then the hit test.
         int &digAnimDY = S.pet.digAnimDY; // 0 = anchor sits at the pet's feet; tune with 9 / 0
         int &digStep = S.pet.digStep, &digTicks = S.pet.digTicks;
-        constexpr int kDigAnimId[3] = {0x1c, 0x80, 0xe9}; // PlayTaskAnimationVariant table, by species
         constexpr int kDigTicks = 30;                     // placeholder: length of sound 0xbe (SFX category 9)
 
         // The oldest hole filling in when a sixth is dug (UpdateDigHoleVisuals 0x03fa5f): the dig animation (bubble 0x16) played
@@ -3988,9 +3939,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             case 2: // bubble + RunSoundedAnimationTask
                 overId = 0x16;
                 overTicks = 0;
-                player.adjustCare(gp::Cleanliness, sp == 1 ? -2 : -1);
+                player.adjustCare(gp::Cleanliness, -gp::artOf(sp).digDirt);
                 player.adjustCare(gp::Tiredness, -1); // check this direction in-game
-                playAnim(kDigAnimId[sp], true, 14, Pose::Special);
+                playAnim(gp::artOf(sp).dig, true, 14, Pose::Special); // PlayTaskAnimationVariant
                 sfx(9, 0xbe); // RunSoundedAnimationTask: PlaySoundEffect(9, 0xbe)
                 digTicks = 0;
                 digStep = 3;
@@ -4638,13 +4589,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (d && !d->stationary && (d->behaviorFlags & 0xe0) && d->speciesOrAnim <= 2)
             {
                 const int s = d->speciesOrAnim;
-                std::vector<int> ids{gp::TrickShowcase::turnAroundAnim(s), gp::TrickShowcase::directionalAnim(s), gp::TrickShowcase::actorReactionAnim(s)};
-                for (int level = 1; level <= 3; ++level)
-                    for (int id : {gp::TrickShowcase::introAnim(level, s), gp::TrickShowcase::mainAnim(level, s), gp::TrickShowcase::closingAnim(level, s)})
-                        ids.push_back(id);
-                if (s == 2)
-                    for (int n : {2, 3, 4})
-                        ids.push_back(gp::TrickShowcase::reactionAnim(n));
+                const std::vector<int> ids = gp::artOf(s).trickAnims(); // the trick art of this species, the panda's reaction chain too
                 for (int id : ids)
                     if (id >= 0)
                         try
@@ -5235,14 +5180,14 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         playAnim(29, false, 14, Pose::Special); // eat
                         break;
                     case SDLK_b:
-                        playAnim(gp::kCallFront[sp], false, 14, Pose::Special); // bark
+                        playAnim(gp::artOf(sp).callFront, false, 14, Pose::Special); // bark
                         break;
                     case SDLK_n:
                         player.illnessId = (player.illnessId + 1) % 11; // line 1460, the N key
                         std::printf("illness %d\n", player.illnessId);
                         break;
                     case SDLK_s:
-                        playAnim(46, false, 14, Pose::Special, {{gp::kSettled[sp], true, sp == 0 ? 7 : 5}}); // action 7 in the game: 46 once, then sit idle 45 at rate 7
+                        playAnim(46, false, 14, Pose::Special, {{gp::artOf(sp).settled, true, gp::artOf(sp).settledRate}}); // action 7 in the game: 46 once, then sit idle 45 at rate 7
                         break;
                     case SDLK_p:
                     {
@@ -5664,7 +5609,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 auto sitNow = [&]
                 { return gp::sitPhase(sp, animId, pose == Pose::Idle, pose == Pose::Special, animDone); };
                 if (!petBusyElsewhere && gp::startsGetUp(sitNow(), rawDirs != 0, zPressed))
-                    playAnim(gp::kSitAlt[sp], false, 14, Pose::Special); // PlayActorReactionAnimation: one-shot at 14
+                    playAnim(gp::artOf(sp).sitAlt, false, 14, Pose::Special); // PlayActorReactionAnimation: one-shot at 14
                 const bool petLocked = petBusyElsewhere || gp::blocksInput(sitNow());
                 const uint8_t dirs = petLocked ? 0 : rawDirs;
                 if (xPressed && !petLocked && !bar.isOpen() && !dialogue.open() && !enc && !im.open && !pendingExit && !pendingScreen)
@@ -5741,7 +5686,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     if (n.activity != gp::kActivityTrick)
                         return;
                     const int s = n.def->speciesOrAnim == 0xfffe ? sp : n.def->speciesOrAnim;
-                    if (n.locked || n.def->stationary || s < 0 || s > 2 || n.trickLevel < 1 || n.trickLevel > 3)
+                    if (n.locked || n.def->stationary || !gp::knownSpecies(s) || n.trickLevel < 1 || n.trickLevel > 3)
                     {
                         n.endTrick(npcRng);
                         return;
@@ -5925,10 +5870,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         {
                             // the game picks the turn side at random: RandRange(1,3) == 1 -> left (1/3), otherwise right (2/3)
                             faceLeft = (std::rand() % 3) == 0;
-                            playAnim(gp::kTurn180[sp], false, 14, Pose::Settle, {{gp::kTurn90[sp], false, 14}, {restIdleId(), true, restIdleRate()}});
+                            playAnim(gp::artOf(sp).turn180, false, 14, Pose::Settle, {{gp::artOf(sp).turn90, false, 14}, {restIdleId(), true, restIdleRate()}});
                         }
                         else
-                            playAnim(gp::kTurn90[sp], false, 14, Pose::Settle, {{restIdleId(), true, restIdleRate()}});
+                            playAnim(gp::artOf(sp).turn90, false, 14, Pose::Settle, {{restIdleId(), true, restIdleRate()}});
                     }
                 }
 
@@ -5938,8 +5883,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
                 // ---- idle timer: after 3-6 s of base idle the pet sits (action 7: 46 once, then 45 looping) ----
                 if (pose == Pose::Idle && isRestIdle(animId) && !enc && !digStep && !washStep && ++idleTicks >= idleThreshold)
-                    playAnim(gp::kSitDown[sp], false, 14, Pose::Special,
-                             {{gp::kSettled[sp], true, sp == 0 ? 7 : 5}});
+                    playAnim(gp::artOf(sp).sitDown, false, 14, Pose::Special,
+                             {{gp::artOf(sp).settled, true, gp::artOf(sp).settledRate}});
 
                 // ---- advance the current animation (rate = frames per second, same rule as walking) ----
                 if (pose != Pose::Move && pose != Pose::Wait)
@@ -6176,18 +6121,18 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             auto drawPet = [&]()
             {
                 const bool faceRight = !(facing == 2 && faceLeft);
-                const bool panda = sp == 2;
+                const bool panda = gp::artOf(sp).facesRight; // the art faces right (the panda's)
                 const bool walking = pose == Pose::Move || pose == Pose::Wait;
                 bool flip = false;
                 const bool negClass = animId == gp::reactId(gp::ReactAnim::Negative, sp, 1, true) ||
                                       animId == gp::reactId(gp::ReactAnim::Negative, sp, 2, true) ||
                                       animId == gp::reactId(gp::ReactAnim::NegIntro, sp, 0, true);
                 // Includes the intro/outro art around the happy hop, which the ROM mirrors with the same rule.
-                const bool sideClass = animId == gp::kIdleSide[sp] || animId == gp::kCallSide[sp] ||
+                const bool sideClass = animId == gp::artOf(sp).idleSide || animId == gp::artOf(sp).callSide ||
                                        gp::isSideReactArt(sp, animId);
                 if (walking)
                     flip = facing == 2 && faceLeft;
-                else if (animId == gp::kTurn180[sp] || animId == gp::kTurn90[sp])
+                else if (animId == gp::artOf(sp).turn180 || animId == gp::artOf(sp).turn90)
                     flip = !faceLeft;
                 else if (negClass)
                     flip = panda ? !faceRight : faceRight; // same rule host.npc.play uses
@@ -6200,7 +6145,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 const int f = walking ? (walkTicks * kFrameRate / 30) % n
                                       : std::min(animFrame, n - 1);
                 const gp::SpriteFrame &s = A.anim->frames[f];
-                drawShadow(s.w, petFX, petFY, sp == 2, camX, camY); // DrawEntitySpriteWithShadow
+                drawShadow(s.w, petFX, petFY, gp::artOf(sp).wideShadow, camX, camY); // DrawEntitySpriteWithShadow
 
                 const int ax = s.anchorX, ay = s.anchorY;
                 float x;

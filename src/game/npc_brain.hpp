@@ -11,6 +11,7 @@
 // 0x17 = wander along the path. 0x19 / 0x1b / 0x1d = default idles (picked by flag bit 1 / bit 2 / neither).
 #pragma once
 #include "../engine/tuning.hpp"
+#include "npc_anim_ids.hpp" // the species' records (how often an NPC repeats a trick)
 #include <cstdint>
 
 namespace gp {
@@ -54,9 +55,10 @@ inline ActivityPick pickActivity(int roll, int flags) {
 // How many times an idle NPC repeats the trick (the g_petActionParam TickAllPets rolls, RandRange with an exclusive hi):
 // level 1 once; level 2 the monkey 2..5 times, the others once; level 3 the panda 1..3 times, the others 2..5.
 inline int trickRepeatCount(int level, int species, Rng& rng) {
-    if (level == 2) return species == 1 ? rng.range(2, 6) : 1;
-    if (level == 3) return species == 2 ? rng.range(1, 4) : rng.range(2, 6);
-    return 1;
+    if (level < 2 || level > 3) return 1;
+    const gp::SpeciesArt& a = gp::artOf(species);
+    const int lo = a.trickRepeatLo[level - 1], hi = a.trickRepeatHi[level - 1];
+    return hi > lo ? rng.range(lo, hi) : lo;
 }
 
 // Nothing chosen: 0x1b (flag 1), 0x1d (flag 2), else 0x19. Same rule as SpawnPoolEntryInstance.

@@ -28,13 +28,13 @@ namespace gp
     // species sp, the pet's current animation id and pose. idlePose = a resting pose, specialPose = a one-shot activity.
     inline SitPhase sitPhase(int sp, int animId, bool idlePose, bool specialPose, bool animDone)
     {
-        if (sp < 0 || sp > 2)
+        if (!knownSpecies(sp))
             return SitPhase::None;
-        if (specialPose && animId == kSitDown[sp])
+        if (specialPose && animId == gp::artOf(sp).sitDown)
             return SitPhase::SittingDown;
-        if (specialPose && animId == kSitAlt[sp] && !animDone)
+        if (specialPose && animId == gp::artOf(sp).sitAlt && !animDone)
             return SitPhase::GettingUp;
-        if (idlePose && animId == kSettled[sp])
+        if (idlePose && animId == gp::artOf(sp).settled)
             return SitPhase::Sitting;
         return SitPhase::None;
     }

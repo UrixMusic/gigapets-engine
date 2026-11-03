@@ -78,8 +78,8 @@ namespace gp
 
     inline void importPetAnims(const Rom &rom, ContentDB &db, int sp)
     {
-        for (int id : {kWalkUp[sp], kWalkDown[sp], kWalkSide[sp], kIdleBase[sp], kIdleSide[sp],
-                       kTurn180[sp], kTurn90[sp], kSettled[sp], kCallFront[sp], kCallSide[sp]})
+        for (int id : {gp::artOf(sp).walkUp, gp::artOf(sp).walkDown, gp::artOf(sp).walkSide, gp::artOf(sp).idleBase, gp::artOf(sp).idleSide,
+                       gp::artOf(sp).turn180, gp::artOf(sp).turn90, gp::artOf(sp).settled, gp::artOf(sp).callFront, gp::artOf(sp).callSide})
             importAnim(rom, db, id, -1, 0x1e1);
         for (int rid : reactIdsForTier(sp))
             importAnim(rom, db, rid, -1, 0x1e1);
@@ -199,14 +199,14 @@ namespace gp
                 {
                     for (int rid : reactIdsForTier(sp))
                         importAnim(rom, db, rid, r.appearancePalette);
-                    d.walkAnim[0] = importAnim(rom, db, kWalkUp[sp], r.appearancePalette);
-                    d.walkAnim[1] = importAnim(rom, db, kWalkDown[sp], r.appearancePalette);
-                    d.walkAnim[2] = importAnim(rom, db, kWalkSide[sp], r.appearancePalette);
-                    d.turn180Anim = importAnim(rom, db, kTurn180[sp], r.appearancePalette);
-                    d.turn90Anim = importAnim(rom, db, kTurn90[sp], r.appearancePalette);
-                    d.idleSideAnim = importAnim(rom, db, kIdleSide[sp], r.appearancePalette); // PlayIdleAnim_Scripted, sideways
-                    d.sickIdleAnim = importAnim(rom, db, kIdleFlagB[sp], r.appearancePalette); // UpdateNPCIdleActivity: flag bit 1
-                    d.sadIdleAnim = importAnim(rom, db, kIdleFlagA[sp], r.appearancePalette);  // flag bit 2
+                    d.walkAnim[0] = importAnim(rom, db, gp::artOf(sp).walkUp, r.appearancePalette);
+                    d.walkAnim[1] = importAnim(rom, db, gp::artOf(sp).walkDown, r.appearancePalette);
+                    d.walkAnim[2] = importAnim(rom, db, gp::artOf(sp).walkSide, r.appearancePalette);
+                    d.turn180Anim = importAnim(rom, db, gp::artOf(sp).turn180, r.appearancePalette);
+                    d.turn90Anim = importAnim(rom, db, gp::artOf(sp).turn90, r.appearancePalette);
+                    d.idleSideAnim = importAnim(rom, db, gp::artOf(sp).idleSide, r.appearancePalette); // PlayIdleAnim_Scripted, sideways
+                    d.sickIdleAnim = importAnim(rom, db, gp::artOf(sp).idleFlagB, r.appearancePalette); // UpdateNPCIdleActivity: flag bit 1
+                    d.sadIdleAnim = importAnim(rom, db, gp::artOf(sp).idleFlagA, r.appearancePalette);  // flag bit 2
                 }
             }
             if (i >= 0x33)
@@ -276,14 +276,14 @@ namespace gp
             {
                 for (int rid : reactIdsForTier(sp))
                     importAnim(rom, db, rid, p->number);
-                d->walkAnim[0] = importAnim(rom, db, kWalkUp[sp], p->number);
-                d->walkAnim[1] = importAnim(rom, db, kWalkDown[sp], p->number);
-                d->walkAnim[2] = importAnim(rom, db, kWalkSide[sp], p->number);
-                d->turn180Anim = importAnim(rom, db, kTurn180[sp], p->number);
-                d->turn90Anim = importAnim(rom, db, kTurn90[sp], p->number);
-                d->idleSideAnim = importAnim(rom, db, kIdleSide[sp], p->number);
-                d->sickIdleAnim = importAnim(rom, db, kIdleFlagB[sp], p->number);
-                d->sadIdleAnim = importAnim(rom, db, kIdleFlagA[sp], p->number);
+                d->walkAnim[0] = importAnim(rom, db, gp::artOf(sp).walkUp, p->number);
+                d->walkAnim[1] = importAnim(rom, db, gp::artOf(sp).walkDown, p->number);
+                d->walkAnim[2] = importAnim(rom, db, gp::artOf(sp).walkSide, p->number);
+                d->turn180Anim = importAnim(rom, db, gp::artOf(sp).turn180, p->number);
+                d->turn90Anim = importAnim(rom, db, gp::artOf(sp).turn90, p->number);
+                d->idleSideAnim = importAnim(rom, db, gp::artOf(sp).idleSide, p->number);
+                d->sickIdleAnim = importAnim(rom, db, gp::artOf(sp).idleFlagB, p->number);
+                d->sadIdleAnim = importAnim(rom, db, gp::artOf(sp).idleFlagA, p->number);
             }
             ++done;
         }

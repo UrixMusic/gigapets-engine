@@ -18,6 +18,7 @@
 #include <functional>
 #include <vector>
 #include "rom.hpp"
+#include "npc_anim_ids.hpp" // the species' records: bowl, sleep speed
 #include "../content/records.hpp"
 
 namespace gp
@@ -190,11 +191,11 @@ namespace gp
     {
         int x, y;
     };
-    constexpr BowlTarget bowlTarget(int species) { return species == 2 ? BowlTarget{0x1c3, 0xa1} : BowlTarget{0x208, 0xad}; }
+    inline BowlTarget bowlTarget(int species) { const SpeciesArt &a = artOf(species); return BowlTarget{a.bowlX, a.bowlY}; }
     // Where the pet first walks to along the floor: the foot of the diagonal that ends on the bowl (2 px in x per 1 in y).
-    constexpr int bowlApproachX(int species, int petY)
+    inline int bowlApproachX(int species, int petY)
     {
-        return (petY - bowlTarget(species).y) * (species == 2 ? -2 : 2) + bowlTarget(species).x;
+        return (petY - bowlTarget(species).y) * artOf(species).bowlSlope + bowlTarget(species).x;
     }
     // The bowl's sprite while a bite is eaten, by the bites left (g_petRepeatCount); -1 = leave it as it is.
     constexpr int bowlSpriteForBites(int bitesLeft)
@@ -222,7 +223,7 @@ namespace gp
         return cyclesLeft < 1 && (quitting || tiredness > kRestedTiredness);
     }
     // The sleep cycle animation runs at 5 fps for the dog and 7 for the others.
-    constexpr int sleepCycleFps(int species) { return species == 0 ? 5 : 7; }
+    inline int sleepCycleFps(int species) { return artOf(species).sleepFps; }
 
     // ---- another save slot's home (EnterActivityAndRunLoop 0x04ab19) ----
     // Entering home 0..2 that isn't your own: if that slot has a save, its pet is there at (0x28a, 0xb0) in the indoor
