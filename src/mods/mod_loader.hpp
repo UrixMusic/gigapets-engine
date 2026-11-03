@@ -1,6 +1,7 @@
 // mod_loader.hpp - importMods: scan mods/, sort, apply records on top of the db (after importRom).
 // Phase 1: only the "text" record type exists. Every other type is a loud error, so typos can't pass silently.
 #pragma once
+#include "../game/npc_anim_ids.hpp" // a species' art and the numbers of a mod's animations
 #include "../content/db.hpp"
 #include "../game/item_use.hpp"  // itemActions(): the registry an item's use.action is checked against
 #include "../game/menu_draw.hpp" // kMenuPalette
@@ -1975,6 +1976,306 @@ namespace gp
             rep.lastWriter[id] = m.id;
         }
 
+        // ---- species: a pet species of the mod's own (pass 3: it names anims, texts and items) ----
+        //   { type: "species", mode: "add", id: "mymod:species/fox",
+        //     based_on: "base:species/0",          // optional: start as a copy of another species (art and start values)
+        //     default_palette, own_illness, start: { health, hunger, happiness, cleanliness, tiredness }, money: [lo, hi],
+        //     starter_items: [ { item, count } ],
+        //     art: { walkUp: "mymod:anim/fox_up" | 123, ... } }   // every field of SpeciesArt by its name, see npc_anim_ids.hpp
+        // An animation field takes a ROM animation number or the id of a mod's anim record. Without based_on the art starts empty:
+        // walkUp, walkDown, walkSide and idleBase are required, the rest are optional (a role with no animation is skipped).
+        struct ArtField
+        {
+            const char *name;
+            bool anim;   // may be given as a mod anim id
+            int n;       // 1 = a number, more = an array of exactly n
+            std::function<int *(SpeciesArt &, int)> at;
+        };
+        inline const std::vector<ArtField> &artFields()
+        {
+            static std::vector<ArtField> v;
+            if (!v.empty())
+                return v;
+#define GP_ROLE(f) v.push_back({#f, true, 1, [](SpeciesArt &a, int) { return &a.f; }})
+#define GP_STYLE(f) v.push_back({#f, false, 1, [](SpeciesArt &a, int) { return &a.f; }})
+#define GP_ARR(f, anim, N) v.push_back({#f, anim, N, [](SpeciesArt &a, int i) { return &a.f[i]; }})
+            GP_ROLE(walkUp); GP_ROLE(walkDown); GP_ROLE(walkSide); GP_ROLE(sitDown); GP_ROLE(sitAlt); GP_ROLE(eat); GP_ROLE(bowlBite);
+            GP_ROLE(bedGetIn); GP_ROLE(sleepCycle); GP_ROLE(bedGetOut); GP_ROLE(idleBase); GP_ROLE(idleSide); GP_ROLE(turn180); GP_ROLE(turn90);
+            GP_ROLE(settled); GP_ROLE(idleFlagA); GP_ROLE(idleFlagB); GP_ROLE(callFront); GP_ROLE(callSide);
+            GP_ROLE(posSide); GP_ROLE(posDown); GP_ROLE(emoSide); GP_ROLE(emoDown); GP_ROLE(shkSide); GP_ROLE(shkDown); GP_ROLE(neg1); GP_ROLE(neg2);
+            GP_ROLE(negIO); GP_ROLE(sad); GP_ROLE(bored); GP_ROLE(reactIdleSide); GP_ROLE(reactIdleDown); GP_ROLE(introSide); GP_ROLE(introDown);
+            GP_ROLE(trickTurnAround); GP_ROLE(trickDirectional); GP_ROLE(trickActorReaction); GP_ROLE(dig); GP_ROLE(hopIntro);
+            GP_STYLE(walkSideStyle); GP_STYLE(eatStyle); GP_STYLE(actionStyle); GP_STYLE(boredStyle); GP_STYLE(positiveStyle); GP_STYLE(idleStyle);
+            GP_STYLE(turn90Style); GP_STYLE(turn180Style); GP_STYLE(settledStyle); GP_STYLE(idleFlagAStyle); GP_STYLE(idleFlagBStyle); GP_STYLE(callStyle);
+            GP_STYLE(bowlX); GP_STYLE(bowlY); GP_STYLE(bowlSlope); GP_STYLE(digDirt); GP_STYLE(idleFlagBRate); GP_STYLE(settledRate); GP_STYLE(sleepFps);
+            GP_STYLE(tiredDecay); GP_STYLE(hungerDecay); GP_STYLE(thoughtDY); GP_STYLE(overheadDY); GP_STYLE(bubbleLower); GP_STYLE(bubbleRaise);
+            GP_STYLE(colorBase); GP_STYLE(menuPortrait); GP_STYLE(npcPortraitTile);
+            GP_ARR(trickMain, true, 3); GP_ARR(trickIntro, true, 3); GP_ARR(trickClosing, true, 3);
+            GP_ARR(voice, false, kPetVoiceCategories); GP_ARR(thoughtDX, false, 3); GP_ARR(trickRepeatLo, false, 3); GP_ARR(trickRepeatHi, false, 3);
+            GP_ARR(trickIcons, false, 3); GP_ARR(potions, false, 5); GP_ARR(namePortrait, false, 3); GP_ARR(npcPortraitPal, false, 3);
+#undef GP_ROLE
+#undef GP_STYLE
+#undef GP_ARR
+            return v;
+        }
+
+        // One number of a species' art: an integer, or (where `anim`) the id of a mod's anim record.
+        inline bool artNumber(const ContentDB &db, const json &v, bool anim, int &out, std::string &why)
+        {
+            if (v.is_number_integer())
+            {
+                const long long x = v.get<long long>();
+                if (x < -1000000 || x > 10000000)
+                    return why = "a number out of range", false;
+                out = int(x);
+                return true;
+            }
+            if (anim && v.is_string())
+            {
+                const std::string s = v.get<std::string>();
+                if (!db.hasAnim(s))
+                    return why = "no anim '" + s + "'", false;
+                out = modAnimNumber(s);
+                return true;
+            }
+            why = anim ? "must be a number or the id of an anim" : "must be a number";
+            return false;
+        }
+        inline bool artIntList(const ContentDB &db, const json &v, bool anim, std::vector<int> &out, std::string &why)
+        {
+            if (!v.is_array() || v.size() > 64)
+                return why = "must be a list of numbers", false;
+            std::vector<int> r;
+            for (const json &e : v)
+            {
+                int x = 0;
+                if (!artNumber(db, e, anim, x, why))
+                    return false;
+                r.push_back(x);
+            }
+            out = r;
+            return true;
+        }
+        inline bool readTrickRules(const ContentDB &db, const json &o, TrickRules &t, std::string &why)
+        {
+            if (!o.is_object())
+                return why = "each of 'trickRules' must be an object", false;
+            struct F { const char *k; int *p; bool anim; };
+            const F ints[] = {{"teacherRepeats", &t.teacherRepeats, false}, {"bulbScale", &t.bulbScale, false}, {"startSound", &t.startSound, false},
+                              {"startSoundVolume", &t.startSoundVolume, false}, {"soundFrame", &t.soundFrame, false}, {"frameSound", &t.frameSound, false},
+                              {"frameSoundVolume", &t.frameSoundVolume, false}, {"loopSoundAnim", &t.loopSoundAnim, true}, {"loopSound", &t.loopSound, false},
+                              {"loopSoundVolume", &t.loopSoundVolume, false}, {"chainAnim", &t.chainAnim, true}, {"chainWaitAnim", &t.chainWaitAnim, true},
+                              {"chainFinalAnim", &t.chainFinalAnim, true}, {"chainFinalSound", &t.chainFinalSound, false}, {"chainFinalVolume", &t.chainFinalVolume, false}};
+            const struct { const char *k; bool *p; } bools[] = {{"cameraPan", &t.cameraPan}, {"closingReversed", &t.closingReversed},
+                                                                {"turnAroundAfter", &t.turnAroundAfter}, {"actorReactionExit", &t.actorReactionExit}};
+            for (auto it = o.begin(); it != o.end(); ++it)
+            {
+                const std::string k = it.key();
+                bool done = false;
+                for (const F &f : ints)
+                    if (k == f.k)
+                    {
+                        if (!artNumber(db, it.value(), f.anim, *f.p, why))
+                            return why = "'" + k + "' " + why, false;
+                        done = true;
+                    }
+                for (const auto &b : bools)
+                    if (k == b.k)
+                    {
+                        if (!it.value().is_boolean())
+                            return why = "'" + k + "' must be true or false", false;
+                        *b.p = it.value().get<bool>();
+                        done = true;
+                    }
+                if (done)
+                    continue;
+                if (k == "startSoundDelay")
+                {
+                    if (!it.value().is_number() || it.value().get<double>() < 0 || it.value().get<double>() > 60)
+                        return why = "'startSoundDelay' must be seconds, 0 to 60", false;
+                    t.startSoundDelay = it.value().get<double>();
+                }
+                else if (k == "stopOnClose" || k == "chainSounds")
+                {
+                    if (!artIntList(db, it.value(), false, k == "stopOnClose" ? t.stopOnClose : t.chainSounds, why))
+                        return why = "'" + k + "' " + why, false;
+                }
+                else if (k == "chainReactions")
+                {
+                    if (!it.value().is_array() || it.value().size() > 8)
+                        return why = "'chainReactions' must be a list of { roll, anim, sound, volume }", false;
+                    std::vector<TrickReaction> rs;
+                    for (const json &e : it.value())
+                    {
+                        if (!e.is_object())
+                            return why = "'chainReactions' must be a list of objects", false;
+                        TrickReaction r;
+                        for (auto q = e.begin(); q != e.end(); ++q)
+                        {
+                            int *dst = q.key() == "roll" ? &r.roll : q.key() == "anim" ? &r.anim : q.key() == "sound" ? &r.sound : q.key() == "volume" ? &r.volume : nullptr;
+                            if (!dst)
+                                return why = "unknown field '" + q.key() + "' in a chain reaction", false;
+                            if (!artNumber(db, q.value(), q.key() == "anim", *dst, why))
+                                return why = "'" + q.key() + "' " + why, false;
+                        }
+                        rs.push_back(r);
+                    }
+                    t.chainReactions = rs;
+                }
+                else
+                    return why = "unknown field '" + k + "' in trickRules", false;
+            }
+            return true;
+        }
+        inline bool readSpeciesArt(const ContentDB &db, const json &o, SpeciesArt &a, std::string &why)
+        {
+            if (!o.is_object())
+                return why = "'art' must be an object", false;
+            for (auto it = o.begin(); it != o.end(); ++it)
+            {
+                const std::string k = it.key();
+                const json &v = it.value();
+                bool found = false;
+                for (const ArtField &f : artFields())
+                {
+                    if (k != f.name)
+                        continue;
+                    found = true;
+                    if (f.n == 1)
+                    {
+                        int x = 0;
+                        if (!artNumber(db, v, f.anim, x, why))
+                            return why = "'" + k + "' " + why, false;
+                        *f.at(a, 0) = x;
+                    }
+                    else
+                    {
+                        if (!v.is_array() || int(v.size()) != f.n)
+                            return why = "'" + k + "' must be a list of exactly " + std::to_string(f.n), false;
+                        for (int i = 0; i < f.n; ++i)
+                        {
+                            int x = 0;
+                            if (!artNumber(db, v[size_t(i)], f.anim, x, why))
+                                return why = "'" + k + "' " + why, false;
+                            *f.at(a, i) = x;
+                        }
+                    }
+                    break;
+                }
+                if (found)
+                    continue;
+                if (k == "facesRight" || k == "bowlStartsWithAction" || k == "wideShadow")
+                {
+                    if (!v.is_boolean())
+                        return why = "'" + k + "' must be true or false", false;
+                    (k == "facesRight" ? a.facesRight : k == "wideShadow" ? a.wideShadow : a.bowlStartsWithAction) = v.get<bool>();
+                }
+                else if (k == "raisedAnims")
+                {
+                    if (!artIntList(db, v, true, a.raisedAnims, why))
+                        return why = "'raisedAnims' " + why, false;
+                }
+                else if (k == "trickNames")
+                {
+                    if (!v.is_array() || v.size() != 3)
+                        return why = "'trickNames' must be three text ids", false;
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        if (!v[size_t(i)].is_string() || !db.hasText(v[size_t(i)].get<std::string>()))
+                            return why = "'trickNames' entry " + std::to_string(i + 1) + " is not the id of a text", false;
+                        a.trickNames[i] = v[size_t(i)].get<std::string>();
+                    }
+                }
+                else if (k == "trickRules")
+                {
+                    if (!v.is_array() || v.size() > 3)
+                        return why = "'trickRules' must be a list of up to three objects (levels 1 to 3)", false;
+                    for (size_t i = 0; i < v.size(); ++i)
+                        if (!readTrickRules(db, v[i], a.trickRules[i], why))
+                            return why = "trickRules " + std::to_string(i + 1) + ": " + why, false;
+                }
+                else
+                    return why = "unknown art field '" + k + "'", false;
+            }
+            return true;
+        }
+
+        inline void applySpecies(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
+        {
+            static const std::set<std::string> allowed{"type", "mode", "id", "based_on", "default_palette", "own_illness", "start", "money", "starter_items", "art"};
+            std::string id, why;
+            if (!beginAdd(m, file, rec, rep, "species", allowed, [&](const std::string &i)
+                          { return db.species(i) != nullptr; }, id))
+                return;
+            SpeciesArt art;
+            SpeciesDef def;
+            const bool clone = rec.contains("based_on");
+            if (clone)
+            {
+                const SpeciesDef *b = rec["based_on"].is_string() ? db.species(rec["based_on"].get<std::string>()) : nullptr;
+                if (!b || b->legacyIndex < 0 || !knownSpecies(b->legacyIndex))
+                    return err(rep, file, m.id, "'" + id + "': 'based_on' must be the id of a species (like \"base:species/0\")");
+                art = artOf(b->legacyIndex);
+                def = *b;
+            }
+            else
+            {
+                def.startHealth = 0x41; def.startHunger = 0x34; def.startHappiness = 0x50; def.startCleanliness = 0x4b; def.startTiredness = 0x4b;
+                def.startMoneyMin = 0x28; def.startMoneyMax = 0x3d;
+                def.defaultPalette = 0x1df;
+            }
+            def.id = id;
+            if (!optInt(rec, "default_palette", def.defaultPalette, 0, 0x7ffff, why) || !optInt(rec, "own_illness", def.ownIllness, 0, 9, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            if (rec.contains("start"))
+            {
+                const json &s = rec["start"];
+                if (!s.is_object())
+                    return err(rep, file, m.id, "'" + id + "': 'start' must be an object");
+                for (auto it = s.begin(); it != s.end(); ++it)
+                {
+                    int *dst = it.key() == "health" ? &def.startHealth : it.key() == "hunger" ? &def.startHunger : it.key() == "happiness" ? &def.startHappiness
+                               : it.key() == "cleanliness" ? &def.startCleanliness : it.key() == "tiredness" ? &def.startTiredness : nullptr;
+                    if (!dst)
+                        return err(rep, file, m.id, "'" + id + "': unknown field '" + it.key() + "' in 'start'");
+                    if (!it.value().is_number_integer() || it.value().get<int>() < 0 || it.value().get<int>() > 255)
+                        return err(rep, file, m.id, "'" + id + "': start " + it.key() + " must be 0 to 255");
+                    *dst = it.value().get<int>();
+                }
+            }
+            if (!optPair(rec, "money", def.startMoneyMin, def.startMoneyMax, 0, 9999, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            if (def.startMoneyMax < def.startMoneyMin)
+                return err(rep, file, m.id, "'" + id + "': 'money' must be [low, high]");
+            if (rec.contains("starter_items"))
+            {
+                if (!rec["starter_items"].is_array() || rec["starter_items"].size() > 64)
+                    return err(rep, file, m.id, "'" + id + "': 'starter_items' must be a list of { item, count }");
+                def.starterItems.clear();
+                for (const json &e : rec["starter_items"])
+                {
+                    if (!e.is_object() || !e.contains("item") || !e["item"].is_string() || !db.item(e["item"].get<std::string>()))
+                        return err(rep, file, m.id, "'" + id + "': a starter item needs the id of an item");
+                    StarterItem si;
+                    si.item = e["item"].get<std::string>();
+                    if (!optInt(e, "count", si.count, 1, 99, why))
+                        return err(rep, file, m.id, "'" + id + "': " + why);
+                    def.starterItems.push_back(si);
+                }
+            }
+            if (rec.contains("art") && !readSpeciesArt(db, rec["art"], art, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            if (!clone)
+                for (int role : {art.walkUp, art.walkDown, art.walkSide, art.idleBase})
+                    if (role < 0)
+                        return err(rep, file, m.id, "'" + id + "': a species with no 'based_on' needs art.walkUp, walkDown, walkSide and idleBase");
+            def.legacyIndex = int(speciesArts().size()); // its runtime number (not saved: a save keeps the id)
+            art.id = id;
+            speciesArts().push_back(art);
+            db.put(std::move(def));
+            rep.lastWriter[id] = m.id;
+        }
+
         // Records that others refer to are applied first, so item.json may load before text.json or anim.json
         // and still find its references (file names sort alphabetically, which used to decide this by luck).
         //   pass 0: text, anim, tileset, collision, objtype (and every file-level error)
@@ -1986,7 +2287,7 @@ namespace gp
                 return 0;
             if (t == "area")
                 return 1;
-            return t == "spot" || t == "find" || t == "quest_spawn" || t == "gate" || t == "minigame" ? 3 : 2; // they name areas and items, so they come last
+            return t == "spot" || t == "find" || t == "quest_spawn" || t == "gate" || t == "minigame" || t == "species" ? 3 : 2; // they name areas and items, so they come last
         }
         inline constexpr int kPasses = 4;
 
@@ -2055,6 +2356,8 @@ namespace gp
                     applyGate(db, m, file, r, rep);
                 else if (type == "minigame")
                     applyMinigame(db, m, file, r, rep);
+                else if (type == "species")
+                    applySpecies(db, m, file, r, rep);
                 else
                     err(rep, file, m.id, "unknown record type '" + type + "'");
             }

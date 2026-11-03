@@ -179,7 +179,7 @@ inline bool tryTrickTeacher(WalkServices &svc, gp::NpcActor &n)
         player.rerollTrickCode([&](int lo, int hi)
                                { return svc.S.world.npcRng.range(lo, hi); });
 
-    const std::string name = db.textOr("base:str/trick_" + std::to_string(level) + "_" + std::to_string(std::clamp(player.species, 0, 2)), "?");
+    const std::string name = db.textOr(gp::artOf(player.species).trickNames[std::clamp(level, 1, 3) - 1], "?");
     // "Would you like to learn this trick?" (TickLearnTrickEncounterSequenceN's last step), after the showcase.
     auto offerLesson = [&svc, dp = &d, level, name]
     {

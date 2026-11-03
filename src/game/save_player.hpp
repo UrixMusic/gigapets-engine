@@ -5,6 +5,7 @@
 #include <string>
 #include <map>
 #include "frontend.hpp" // starterKit
+#include "npc_anim_ids.hpp" // the species ids
 #include "player.hpp"
 #include "save.hpp"
 
@@ -17,13 +18,32 @@ namespace gp
         return p == std::string::npos ? -1 : std::atoi(id.c_str() + p + 1);
     }
 
+    // A save keeps a base species as its number and a mod's species as its id (its number depends on the mods that are loaded); the number
+    // saved beside the id is 0, what a game without that mod falls back to.
+    inline void saveSpecies(SaveData &s, int species)
+    {
+        s.setInt("species", species >= 0 && species <= 2 ? species : 0);
+        if (species > 2 && knownSpecies(species))
+            s.setStr("speciesId", artOf(species).id);
+        else
+            s.kv.erase("speciesId");
+    }
+    inline int loadSpecies(const SaveData &s)
+    {
+        const std::string id = s.getStr("speciesId");
+        if (!id.empty())
+            if (const int n = speciesNumber(id); n >= 0)
+                return n;
+        return std::clamp(s.getInt("species", 0), 0, 2);
+    }
+
     // Make sure p.questsCompleted == quests.counter before calling this.
     inline void savePlayer(const Player &p, SaveData &s)
     {
         s.setStr("name", p.name);
         s.setInt("questsCompleted", p.questsCompleted);
         s.setInt("money", p.money);
-        s.setInt("species", p.species);
+        saveSpecies(s, p.species);
         s.setInt("colour", p.baseColour);
         s.setInt("appearance", p.appearance);
         s.setInt("illness", p.illnessId);
@@ -87,7 +107,7 @@ namespace gp
                 if (s.getUInt("eventTriggers") >> n & 1u)
                     p.setTrigger(n);
         if (s.has("species"))
-            p.species = std::clamp(s.getInt("species"), 0, 2);
+            p.species = loadSpecies(s);
         if (s.has("colour"))
             p.baseColour = s.getIntStrict("colour", p.baseColour);
         p.appearance = s.has("appearance") ? s.getIntStrict("appearance", p.baseColour) : p.baseColour;

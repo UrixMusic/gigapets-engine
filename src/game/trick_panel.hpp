@@ -11,6 +11,7 @@
 // then bubble 9. Choosing a learned one runs activity 0xd, the pet performing it (trick_showcase.hpp), unless the prize roll
 // (RollPetPrizeId(3)) gives an item first.
 #pragma once
+#include "npc_anim_ids.hpp" // the species' tricks icons
 
 namespace gp
 {
@@ -33,18 +34,17 @@ namespace gp
     };
 
     // The tile drawn for slot 0..2 (left, top, right). `known` is the pet's tricksKnown.
-    constexpr TrickIcon trickIcon(int species, int slot, int known)
+    inline TrickIcon trickIcon(int species, int slot, int known)
     {
-        const int s = species < 0 ? 0 : species > 2 ? 2 : species;
         const bool have = known > slot;
         switch (slot)
         {
         case 0:
-            return have ? TrickIcon{kTrickIcons[s][0], 0x73, 0xdc} : TrickIcon{kTrickUnknownSprite[0], 0x69, 0xdc};
+            return have ? TrickIcon{artOf(species).trickIcons[0], 0x73, 0xdc} : TrickIcon{kTrickUnknownSprite[0], 0x69, 0xdc};
         case 1:
-            return {have ? kTrickIcons[s][1] : kTrickUnknownSprite[1], 0x9d, 0xb4};
+            return {have ? artOf(species).trickIcons[1] : kTrickUnknownSprite[1], 0x9d, 0xb4};
         default:
-            return {have ? kTrickIcons[s][2] : kTrickUnknownSprite[2], 199, 0xdc};
+            return {have ? artOf(species).trickIcons[2] : kTrickUnknownSprite[2], 199, 0xdc};
         }
     }
 

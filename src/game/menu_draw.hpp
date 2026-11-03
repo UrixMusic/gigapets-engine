@@ -6,6 +6,7 @@
 // Draw only: no input, no state. Rom::u16 takes WORD addresses here, same as item.hpp.
 // DrawTile/DrawTextBox parameter names are guesses from call sites until those are decompiled.
 #pragma once
+#include "npc_anim_ids.hpp" // the species' portrait tile
 #include <functional>
 #include <string>
 #include <vector>
@@ -231,7 +232,7 @@ namespace gp
     inline void drawPetStats(Gfx &g, const Rom &rom, const StatsView &v, const std::string &illnessHeader)
     {
         drawSlotScene(g, rom, kStatsSlot);
-        g.drawTile(0x982 + (v.species > 2 ? 2 : v.species), v.petPalette, 0x3b, 0x5c, 0x3000);
+        g.drawTile(artOf(v.species).menuPortrait, v.petPalette, 0x3b, 0x5c, 0x3000);
 
         auto label = [&](int x, int y, const std::string &t, int w = 0x69)
         { g.drawTextBox(2, kMenuPalette, x, y, t, w, 1, 0x3000); };

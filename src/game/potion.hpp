@@ -7,6 +7,7 @@
 // half second it plays the shocked reaction. A wash puts the original colour back (pet_wash.hpp).
 #pragma once
 #include <cstdint>
+#include "npc_anim_ids.hpp" // the species' potion colours
 
 namespace gp
 {
@@ -23,9 +24,9 @@ namespace gp
     };
 
     // The appearance a potion gives a pet of this species; -1 for a potion number or species outside the table.
-    constexpr int potionPalette(int species, int potion)
+    inline int potionPalette(int species, int potion)
     {
-        return species >= 0 && species < kPotionSpecies && potion >= 0 && potion < kPotionCount ? kPotionPalettes[species][potion] : -1;
+        return knownSpecies(species) && potion >= 0 && potion < kPotionCount ? artOf(species).potions[potion] : -1;
     }
 
     // Game ticks until the exclamation has finished: the intro, then the outro, each once at kExclaimFps.

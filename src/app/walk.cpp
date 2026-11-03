@@ -282,7 +282,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
     const std::string savePath = gp::slotPath(slot);
     gp::SaveData sd;
     const bool haveSave = gp::loadFromFile(savePath, sd);
-    const int playerSpecies = haveSave ? std::clamp(sd.getInt("species", 0), 0, 2) : 0;
+    int playerSpecies = haveSave ? std::clamp(sd.getInt("species", 0), 0, 2) : 0; // a mod's species is found once the mods are loaded
     player.money = 500;        // stand-in until Player has money (near `inventory`)
     int &money = player.money; // replaces: int money = 500;
     bool statsOpen = false;
@@ -291,7 +291,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
     uint16_t gardenFlags = haveSave ? uint16_t(sd.getInt("gardenFlags") & 0xfff) : 0;
     std::function<void()> refreshBits, saveGame;
     uint32_t lastSaveTick = 0;
-    const int sp = playerSpecies;
+    int sp = playerSpecies;
     try
     {
         // ---- 1. LOAD ----
@@ -315,6 +315,15 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             std::printf("loaded mod %s\n", id.c_str());
         if (!rep.ok())
             return 1;
+        if (haveSave) // the saved species may be a mod's: it exists now
+        {
+            const int real = gp::loadSpecies(sd);
+            if (real != playerSpecies)
+            {
+                playerSpecies = sp = real;
+                std::fprintf(stderr, "species of this pet: %s (%d), %d npcs redrawn\n", gp::artOf(real).id.c_str(), real, gp::retargetPlayerSpeciesNpcs(rom, db, real));
+            }
+        }
         for (const gp::Id &bad : gp::resolveModPalettes(rom, db))
             std::fprintf(stderr, "mod palette %s: its ROM palette does not exist, so it is left out\n", bad.c_str());
         if (const int n = gp::applyNpcPalettes(rom, db, playerSpecies))
@@ -847,9 +856,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
         auto petAnimId = [&](int n) -> gp::Id
         {
-            char b[48];
-            std::snprintf(b, sizeof b, "base:anim/%d@%x", n, petPal);
-            gp::Id withPal = b;
+            if (gp::isModAnim(n))
+                return gp::modAnimName(n);
+            gp::Id withPal = gp::animKey(n, petPal);
             return db.anim(withPal) ? withPal : gp::Id("base:anim/" + std::to_string(n));
         };
         auto getAnim = [&](int n) -> AnimRef
@@ -978,9 +987,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
         auto reactAnimId = [](int id, int pal)
         {
-            char b[48];
-            std::snprintf(b, sizeof b, "base:anim/%d@%x", id, pal);
-            return gp::Id(b);
+            return gp::Id(gp::animKey(id, pal));
         };
 
         // NPC animation key: 0 = idle (def->anim), 1 = walk up, 2 = walk down, 3 = walk sideways
@@ -1062,11 +1069,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 if (K.size())
                 {
                     const int dir = key == 3 ? (n.body.facing == gp::FaceLeft ? 0 : 1) : 2;
-                    const gp::BubbleOffset bo = gp::overheadOffset(std::clamp(npcSp, 0, 2), dir, 0);
+                    const gp::BubbleOffset bo = gp::overheadOffset(npcSp, dir, 0);
                     const int f = (stinkTicks * gp::kStinkFps / 30) % int(K.size());
                     const gp::SpriteFrame &ks = K.anim->frames[size_t(f)];
                     SDL_FRect kc{np.first - camX + bo.dx - ks.anchorX + ks.dx,
-                                 np.second - camY + bo.dy + gp::bubbleLower(std::clamp(npcSp, 0, 2)) - ks.anchorY + ks.dy, float(ks.w), float(ks.h)};
+                                 np.second - camY + bo.dy + gp::bubbleLower(npcSp) - ks.anchorY + ks.dy, float(ks.w), float(ks.h)};
                     SDL_RenderCopyF(ren, (*K.tex)[size_t(f)], nullptr, &kc);
                 }
             }
@@ -4777,7 +4784,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             gp::SaveData s = sd; // keep keys we don't own (whatever createNewSave wrote: colour, starter stats...)
             s.setInt("version", 3);
             s.setInt("statsInit", 1);
-            s.setInt("species", sp);
+            gp::saveSpecies(s, sp);
             s.kv.erase("kingFlags");
             s.kv.erase("gardenFlags");
             gp::savePlayer(player, s);

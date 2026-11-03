@@ -14,6 +14,7 @@
 #include <functional>
 #include <vector>
 #include "../content/records.hpp"
+#include "npc_anim_ids.hpp" // the species' colour ranges
 
 namespace gp
 {
@@ -28,13 +29,13 @@ namespace gp
     // Eight ROM ticks (59.94 Hz) between two colours is 4.004 steps of the 30 Hz sim.
     constexpr int kColorStepTicks = 4;
 
-    constexpr int colorBase(int species) { return species >= 0 && species < 3 ? kColorBase[species] : kColorBase[0]; }
+    inline int colorBase(int species) { return artOf(species).colorBase; }
 
     // The colour for a preset number.
-    constexpr int machinePalette(int species, int index) { return colorBase(species) + kColorPresetTable[((index % kColorPresets) + kColorPresets) % kColorPresets]; }
+    inline int machinePalette(int species, int index) { return colorBase(species) + kColorPresetTable[((index % kColorPresets) + kColorPresets) % kColorPresets]; }
 
     // Where the pet's colour sits among the presets, or -1 when it is not one of them (a potion's, say).
-    constexpr int resyncIndex(int species, int appearance)
+    inline int resyncIndex(int species, int appearance)
     {
         const int v = appearance - colorBase(species);
         for (int i = 0; i < kColorPresets; ++i)

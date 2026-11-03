@@ -30,9 +30,9 @@ namespace gp
     // palOverride < 0 uses the animation's own default palette (record word 2).
     inline Id importAnim(const Rom &rom, ContentDB &db, int animId, int palOverride = -1, int fallbackPal = -1)
     {
-        char buf[48];
-        std::snprintf(buf, sizeof buf, palOverride >= 0 ? "base:anim/%d@%x" : "base:anim/%d", animId, palOverride);
-        const Id id = buf;
+        if (isModAnim(animId)) // a mod's own frames: coloured already, nothing to decode
+            return db.anim(modAnimName(animId)) ? Id(modAnimName(animId)) : Id();
+        const Id id = animKey(animId, palOverride);
         if (db.anim(id))
             return id;
 
@@ -177,11 +177,9 @@ namespace gp
             int portrait = r.portraitSprite, portraitPal = r.appearancePalette;
             if (i >= 0x30 && i <= 0x32) // ResolveStarterOrSpeciesDialogueTextId / ResolveSpeciesTextId
             {
-                static const int kTile[3] = {0x8ae, 0x8ba, 0x8bc};
-                static const int kPal[3][3] = {{0x1e3, 0x2a2, 0x322}, {0x1e4, 0x2a3, 0x323}, {0x1fe, 0x2bd, 0x33d}};
-                const int sp = std::clamp(playerSpecies, 0, 2);
-                portrait = kTile[sp];
-                portraitPal = kPal[i - 0x30][sp];
+                const gp::SpeciesArt &art = gp::artOf(playerSpecies);
+                portrait = art.npcPortraitTile;
+                portraitPal = art.npcPortraitPal[i - 0x30];
             }
             d.portraitSprite = portrait;
             d.portraitPalette = portraitPal;
@@ -284,6 +282,48 @@ namespace gp
                 d->idleSideAnim = importAnim(rom, db, gp::artOf(sp).idleSide, p->number);
                 d->sickIdleAnim = importAnim(rom, db, gp::artOf(sp).idleFlagB, p->number);
                 d->sadIdleAnim = importAnim(rom, db, gp::artOf(sp).idleFlagA, p->number);
+            }
+            ++done;
+        }
+        return done;
+    }
+
+    // The pets that stand in for the player's own species (a roaming npc with speciesOrAnim 0xfffe, and the three portraits of npcs 0x30..0x32)
+    // were drawn for the species the save held when the ROM was imported. Once the mods are loaded the real one may be a mod's species (it only
+    // exists then): draw them again for it. Returns how many npcs changed.
+    inline int retargetPlayerSpeciesNpcs(const Rom &rom, ContentDB &db, int species)
+    {
+        if (!knownSpecies(species))
+            return 0;
+        const SpeciesArt &art = artOf(species);
+        int done = 0;
+        for (const NpcDef *seen : db.allNpcs())
+        {
+            const bool starter = seen->index >= 0x30 && seen->index <= 0x32;
+            const bool roaming = seen->speciesOrAnim == 0xfffe && !seen->stationary;
+            if (!starter && !roaming)
+                continue;
+            NpcDef *d = db.npcMutable(seen->id);
+            const int pal = d->appearancePalette;
+            if (starter)
+            {
+                d->portraitSprite = art.npcPortraitTile;
+                d->portraitPalette = art.npcPortraitPal[d->index - 0x30];
+                importUiSprite(db, rom, d->portraitSprite, d->portraitPalette);
+            }
+            if (roaming)
+            {
+                for (int rid : reactIdsForTier(species))
+                    importAnim(rom, db, rid, pal);
+                d->anim = importAnim(rom, db, art.idleBase, pal);
+                d->walkAnim[0] = importAnim(rom, db, art.walkUp, pal);
+                d->walkAnim[1] = importAnim(rom, db, art.walkDown, pal);
+                d->walkAnim[2] = importAnim(rom, db, art.walkSide, pal);
+                d->turn180Anim = importAnim(rom, db, art.turn180, pal);
+                d->turn90Anim = importAnim(rom, db, art.turn90, pal);
+                d->idleSideAnim = importAnim(rom, db, art.idleSide, pal);
+                d->sickIdleAnim = importAnim(rom, db, art.idleFlagB, pal);
+                d->sadIdleAnim = importAnim(rom, db, art.idleFlagA, pal);
             }
             ++done;
         }

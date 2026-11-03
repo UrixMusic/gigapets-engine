@@ -1,6 +1,7 @@
 // name_entry.hpp -- state 0x12 (ShowPetNameEntryScreen / HandleNameEntryInput), see front-end notes section 3.
 // Depends only on gp::Gfx (menu_draw.hpp). NameEntry itself is pure logic.
 #pragma once
+#include "npc_anim_ids.hpp" // the species' portraits
 #include <string>
 
 #include "menu_draw.hpp"
@@ -153,12 +154,8 @@ namespace gp
             g.drawTile(0x65e, BG, 0xd7, 0xcc, L);
 
         // portrait: species 3 ("none") falls into the species-2 branch like the game
-        if (species == 0)
-            g.drawTile(0x65d, BG, 0x22, 0x16, L);
-        else if (species == 1)
-            g.drawTile(0x65c, BG, 0x0e, 0x19, L);
-        else
-            g.drawTile(0x65b, BG, 0x0d, 0x05, L);
+        const SpeciesArt &art = artOf(knownSpecies(species) ? species : 2);
+        g.drawTile(art.namePortrait[0], BG, art.namePortrait[1], art.namePortrait[2], L);
 
         g.drawTextBox(3, 0x104, 0, 0x36, n.name, 0x140, 1, L);
     }

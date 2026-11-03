@@ -99,6 +99,15 @@ int main()
         CHECK(TrickShowcase::petRepeats(3, 0, 50, rnd) == 2 && TrickShowcase::petRepeats(3, 0, 500, rnd) == 5 && TrickShowcase::petRepeats(3, 0, 5000, rnd) == 10);
         CHECK(TrickShowcase::petRepeats(3, 2, 5000, rnd) == 5 && TrickShowcase::petRepeats(3, 2, 500, rnd) == 4 && TrickShowcase::petRepeats(1, 1, 500, rnd) == 1 && TrickShowcase::petRepeats(2, 0, 500, rnd) == 1);
     }
+    { // the interface numbers (the ROM's tables)
+        const SpeciesArt &d = artOf(0), &m = artOf(1), &p = artOf(2);
+        CHECK(d.trickIcons[0] == 0x58 && m.trickIcons[1] == 0x5a && p.trickIcons[2] == 0x57);
+        CHECK(d.colorBase == 0x1df && m.colorBase == 0x29e && p.colorBase == 0x31e);
+        CHECK(m.potions[2] == 0x2ab && p.potions[4] == 0x33d && d.potions[0] == 0x1df);
+        CHECK(d.menuPortrait == 0x982 && p.menuPortrait == 0x984 && m.namePortrait[0] == 0x65c && p.namePortrait[2] == 0x05);
+        CHECK(m.npcPortraitTile == 0x8ba && p.npcPortraitPal[2] == 0x33d && m.npcPortraitPal[0] == 0x2a2);
+        CHECK(d.trickNames[0] == "base:str/trick_1_0" && p.trickNames[2] == "base:str/trick_3_2");
+    }
     CHECK(&artOf(-1) == &artOf(0) && &artOf(99) == &artOf(0)); // out of range: the first species
 
     // a species added at run time is what the code asks for (a mod's, later): the sit logic and the walk choice follow it

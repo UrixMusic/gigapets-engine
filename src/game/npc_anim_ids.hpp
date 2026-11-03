@@ -8,6 +8,8 @@
 #pragma once
 #include "npc_walk.hpp"
 #include "reaction_seq.hpp"
+#include <cstdio>
+#include <string>
 #include <vector>
 #include <algorithm>
 
@@ -49,6 +51,7 @@ namespace gp
     // The base game's three are built from those tables; artOf(species) is what the code asks, so a mod's species can have its own.
     struct SpeciesArt
     {
+        std::string id; // the species' id ("base:species/0", a mod's own): what a save keeps, as the numbers of mod species change with the mods
         int walkUp = -1;
         int walkDown = -1;
         int walkSide = -1;
@@ -117,6 +120,15 @@ namespace gp
         int bubbleLower = 20;            // pixels every overhead bubble is moved down (tuned by eye)
         int bubbleRaise = 0;             // extra lift of a bubble while one of raisedAnims plays
         std::vector<int> raisedAnims;
+        // the user interface
+        int trickIcons[3] = {-1, -1, -1}; // the tricks panel's sprite for each known trick (left, top, right)
+        int colorBase = 0x1df;            // first palette of this species' colour range: the colour machine and the potions add to it
+        int potions[5] = {-1, -1, -1, -1, -1}; // the colour each potion (item w9 0..4) gives: palette numbers
+        int namePortrait[3] = {0x65d, 0x22, 0x16}; // the name screen's portrait: tile, x, y
+        int npcPortraitTile = 0x8ae;      // the portrait of the NPCs that stand in for the pet's own species (dialogue)
+        int npcPortraitPal[3] = {0x1e3, 0x1e4, 0x1fe}; // ... and its palettes for the three of them
+        std::string trickNames[3];        // text keys of the three tricks' names (the teacher says them)
+        int menuPortrait = 0x982;         // the menu's portrait tile
         int trickRepeatLo[3] = {1, 1, 1}, trickRepeatHi[3] = {1, 1, 1}; // how many times an NPC of this species repeats a trick, by level: lo..hi-1 (hi <= lo: always lo)
 
         // The animations its tricks use: per level the main, intro and closing ones and the chain's reactions, and the three single ones.
@@ -156,6 +168,45 @@ namespace gp
     const SpeciesArt &artOf(int species); // out of range = the first species
     std::vector<SpeciesArt> &speciesArts(); // index = species number; filled with the base game's three, defined at the end
     inline bool knownSpecies(int species) { return species >= 0 && size_t(species) < speciesArts().size(); }
+
+    // A mod's animations (PNG frames, already coloured) get a number from here up so that a species' art, which holds numbers,
+    // can name them like the ROM's own. The numbers are made while the mods load and are not saved.
+    // The number of the species with this id, or -1.
+    inline int speciesNumber(const std::string &id)
+    {
+        const auto &v = speciesArts();
+        for (size_t i = 0; i < v.size(); ++i)
+            if (v[i].id == id)
+                return int(i);
+        return -1;
+    }
+
+    constexpr int kModAnimBase = 0x30000;
+    inline std::vector<std::string> &modAnimNames()
+    {
+        static std::vector<std::string> v;
+        return v;
+    }
+    inline bool isModAnim(int n) { return n >= kModAnimBase && size_t(n - kModAnimBase) < modAnimNames().size(); }
+    inline int modAnimNumber(const std::string &id) // the number of a mod's animation id (made on the first ask)
+    {
+        auto &v = modAnimNames();
+        for (size_t i = 0; i < v.size(); ++i)
+            if (v[i] == id)
+                return kModAnimBase + int(i);
+        v.push_back(id);
+        return kModAnimBase + int(v.size()) - 1;
+    }
+    inline const std::string &modAnimName(int n) { return modAnimNames()[size_t(n - kModAnimBase)]; }
+    // The db id of animation number n under palette pal: the ROM's (recoloured by pal when pal >= 0), or the mod's own frames.
+    inline std::string animKey(int n, int pal)
+    {
+        if (isModAnim(n))
+            return modAnimName(n);
+        char b[48];
+        std::snprintf(b, sizeof b, pal >= 0 ? "base:anim/%d@%x" : "base:anim/%d", n, pal);
+        return b;
+    }
 
 
     struct AnimChoice
@@ -374,6 +425,7 @@ namespace gp
     inline SpeciesArt baseSpeciesArt(int i)
     {
         SpeciesArt a;
+        a.id = "base:species/" + std::to_string(i);
         a.walkUp = kWalkUp[i];
         a.walkDown = kWalkDown[i];
         a.walkSide = kWalkSide[i];
@@ -450,6 +502,28 @@ namespace gp
         }
         // an idle NPC's trick repeats: level 2 the monkey 2..5 times, the others once; level 3 the panda 1..3, the others 2..5
         a.trickRepeatLo[1] = i == 1 ? 2 : 1; a.trickRepeatHi[1] = i == 1 ? 6 : 1;
+        {
+            static const int icons[3][3] = {{0x58, 0x5b, 0x5c}, {0x5d, 0x5a, 0x59}, {0x60, 0x56, 0x57}};
+            static const int bases[3] = {0x1df, 0x29e, 0x31e};
+            for (int k = 0; k < 3; ++k)
+                a.trickIcons[k] = icons[i][k];
+            a.colorBase = bases[i];
+            for (int k = 0; k < 3; ++k)
+                a.trickNames[k] = "base:str/trick_" + std::to_string(k + 1) + "_" + std::to_string(i);
+            static const int pot[3][5] = {{0x1df, 0x1e4, 0x1ec, 0x1f9, 0x1fe}, {0x29e, 0x2a3, 0x2ab, 0x2b8, 0x2bd}, {0x31e, 0x323, 0x32b, 0x338, 0x33d}};
+            static const int np[3][3] = {{0x1e3, 0x1e4, 0x1fe}, {0x2a2, 0x2a3, 0x2bd}, {0x322, 0x323, 0x33d}};
+            static const int nt[3] = {0x8ae, 0x8ba, 0x8bc};
+            static const int pn[3][3] = {{0x65d, 0x22, 0x16}, {0x65c, 0x0e, 0x19}, {0x65b, 0x0d, 0x05}};
+            for (int k = 0; k < 5; ++k)
+                a.potions[k] = pot[i][k];
+            for (int k = 0; k < 3; ++k)
+            {
+                a.npcPortraitPal[k] = np[i][k];
+                a.namePortrait[k] = pn[i][k];
+            }
+            a.npcPortraitTile = nt[i];
+            a.menuPortrait = 0x982 + i;
+        }
         a.trickRepeatLo[2] = i == 2 ? 1 : 2; a.trickRepeatHi[2] = i == 2 ? 4 : 6;
         // the tricks' extras (see TrickRules): the sounds and the follow-ups the ROM has for each species / level pair
         a.trickRules[1].teacherRepeats = i == 1 ? 5 : 1;
