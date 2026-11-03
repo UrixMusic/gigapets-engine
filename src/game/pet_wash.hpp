@@ -8,6 +8,7 @@
 //      AdjustCareStat(Happiness, 10). The pet goes back to normal.
 // No money, no item: it is free and can be repeated.
 #pragma once
+#include "../engine/tuning.hpp"
 #include "player.hpp"
 
 namespace gp
@@ -22,15 +23,15 @@ namespace gp
     // Stage 2, when the bubble is done.
     inline void applyWash(Player &p)
     {
-        p.adjustCare(Cleanliness, kWashHygiene);
+        p.adjustCare(Cleanliness, tuning().washHygiene);
         p.washPet(); // appearance = the original colour
     }
 
     // Stage 3, after the happy reaction.
     inline void applyWashMood(Player &p)
     {
-        if (p.care[Happiness] <= kWashMoodLimit)
-            p.adjustCare(Happiness, kWashMoodBonus);
+        if (p.care[Happiness] <= tuning().washMoodLimit)
+            p.adjustCare(Happiness, tuning().washMoodBonus);
     }
 
     // Game ticks (30 Hz) until a one-shot bubble animation of `frames` frames has finished: the frame number is

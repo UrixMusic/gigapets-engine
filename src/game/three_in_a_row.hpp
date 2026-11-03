@@ -40,40 +40,72 @@ namespace gp
         static constexpr int kPrizeD[5] = {0x04, 0x08, 0x0C, 0x10, 0x10B};
         static constexpr int kPrizeSpecial = 0xb1; // goes first unless held or already offered (HasItemBeenOffered)
 
+        // The prize pools as vectors (the db's minigame record builds them; the arrays above are the base game's).
+        struct PrizeTiers
+        {
+            std::vector<int> a, b, c, d;
+            int special = kPrizeSpecial;
+        };
+        static PrizeTiers baseTiers() { return {{kPrizeA, kPrizeA + 2}, {kPrizeB, kPrizeB + 4}, {kPrizeC, kPrizeC + 8}, {kPrizeD, kPrizeD + 5}, kPrizeSpecial}; }
+
         // BuildUniqueRandomSet(out, n, 1): the first item from pool A, the rest from pool B, no repeats,
-        // then (n+1)/2 random swaps (not a full shuffle).
-        static std::vector<int> pickItems(int n, const RandFn &rnd)
+        // then (n+1)/2 random swaps (not a full shuffle). A pool a mod emptied gives nothing, and a set that cannot reach n
+        // different items (a small pool) stops short instead of looping.
+        static std::vector<int> pickItems(int n, const RandFn &rnd, const std::vector<int> &poolA, const std::vector<int> &poolB)
         {
             std::vector<int> v;
-            while (int(v.size()) < n)
+            int misses = 0;
+            while (int(v.size()) < n && misses < 1000)
             {
-                const int c = v.empty() ? kPoolA[rnd(0, 19)] : kPoolB[rnd(0, 46)];
+                const std::vector<int> &pool = v.empty() ? poolA : poolB;
+                if (pool.empty())
+                    break;
+                const int c = pool[size_t(rnd(0, int(pool.size())))];
                 if (std::find(v.begin(), v.end(), c) == v.end())
+                {
                     v.push_back(c);
+                    misses = 0;
+                }
+                else
+                    ++misses;
             }
             swapShuffle(v, rnd);
             return v;
         }
+        static std::vector<int> pickItems(int n, const RandFn &rnd)
+        {
+            return pickItems(n, rnd, std::vector<int>(kPoolA, kPoolA + 19), std::vector<int>(kPoolB, kPoolB + 46));
+        }
 
         // BuildRandomPrizePool(out, n): [0xb1 if not held/offered], one each from the 2/4/8-entry tables, then
         // picks from the 5-entry table. Quirk kept: the repeat check covers only the table-D picks, not the first three.
-        static std::vector<int> pickPrizeItems(int n, bool includeSpecial, const RandFn &rnd)
+        static std::vector<int> pickPrizeItems(int n, bool includeSpecial, const RandFn &rnd, const PrizeTiers &t)
         {
             std::vector<int> v;
             if (includeSpecial)
-                v.push_back(kPrizeSpecial);
-            v.push_back(kPrizeA[rnd(0, 2)]);
-            v.push_back(kPrizeB[rnd(0, 4)]);
-            v.push_back(kPrizeC[rnd(0, 8)]);
+                v.push_back(t.special);
+            for (const std::vector<int> *tier : {&t.a, &t.b, &t.c})
+                if (!tier->empty())
+                    v.push_back((*tier)[size_t(rnd(0, int(tier->size())))]);
             const size_t fixed = v.size();
-            while (int(v.size()) < n)
+            int misses = 0;
+            while (int(v.size()) < n && !t.d.empty() && misses < 1000)
             {
-                const int c = kPrizeD[rnd(0, 5)];
-                if (std::find(v.begin() + fixed, v.end(), c) == v.end())
+                const int c = t.d[size_t(rnd(0, int(t.d.size())))];
+                if (std::find(v.begin() + long(fixed), v.end(), c) == v.end())
+                {
                     v.push_back(c);
+                    misses = 0;
+                }
+                else
+                    ++misses;
             }
             swapShuffle(v, rnd);
             return v;
+        }
+        static std::vector<int> pickPrizeItems(int n, bool includeSpecial, const RandFn &rnd)
+        {
+            return pickPrizeItems(n, includeSpecial, rnd, baseTiers());
         }
 
         // items: the unique set. periods: {14,12,10}, or {16,14,12} when Lightbulbs > 199.
@@ -153,6 +185,8 @@ namespace gp
         static void swapShuffle(std::vector<int> &v, const RandFn &rnd)
         {
             const int n = int(v.size());
+            if (n == 0)
+                return;
             for (int i = 0; i < (n + 1) / 2; ++i)
                 std::swap(v[rnd(0, n)], v[rnd(0, n)]);
         }

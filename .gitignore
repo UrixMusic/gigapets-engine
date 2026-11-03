@@ -6,7 +6,7 @@ build/
 *.log
 
 # other
-mods/
+/mods/
 *.json
 GigaEditrV1.4.html
 

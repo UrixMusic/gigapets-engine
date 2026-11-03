@@ -31,6 +31,7 @@ namespace gp
         // (game/story_blast.hpp). `done` carries on with the dialogue. Unset = no effect, the dialogue goes straight on.
         std::function<void(int code, std::function<void()> done)> storyBlast;
         std::function<void()> onDecline;                  // DeclineQuest: the player said no to a quest
+        std::function<void()> onAccept;                   // the player said yes: the quest has been accepted (its objectives are about to show)
         // Fired when the receiver takes the hand-in (objectives already removed), before the completion dialogue.
         // Returns true to skip the quest's built-in bonus rewards (the -2 / -7 activities); the thank-you text and
         // moving on to the next quest still happen. Unset = false.
@@ -270,6 +271,8 @@ namespace gp
         void accept()
         {
             acceptQuest(q, counter, h.rnd, h.held, h.spawn, world.type(q.def.typeMode).spawnsOnAccept);
+            if (h.onAccept)
+                h.onAccept();
             showObjectives();
         }
 

@@ -11,9 +11,12 @@
 // Pet keys: E = eat (29), B = bark (47), S = sit down (49) then sit idle (45), F = toggle flip formula,
 //           P = dump the current animation's frames, 1-5 / J L I K = anchor experiments.
 // Z = use an exit / talk to the nearest NPC (and close a dialogue box).
+#include "../engine/tuning.hpp"
 #include <SDL2/SDL.h>
 #include "../loaders/import.hpp"
 #include "../engine/collision.hpp"
+#include "../engine/registry.hpp"
+#include "../game/pet_colour_save.hpp"
 #include "../engine/player_input.hpp"
 #include "../engine/ground.hpp"
 #include "../engine/area_runtime.hpp"
@@ -40,6 +43,7 @@
 #include "../game/item.hpp"
 #include "../game/progress_bits.hpp"
 #include "../game/offerings.hpp"
+#include "../game/resume_area.hpp"
 #include "../game/save.hpp"
 #include "../game/save_player.hpp"
 #include "../game/debug_mode.hpp"
@@ -109,9 +113,9 @@ class AreaWorld : public gp::IWorld
 public:
     AreaWorld(const gp::GroundField &g, const gp::AreaRuntime &o, const gp::Room &room)
         : g_(g), o_(o), room_(room) {}
-    bool tileWalkable(int x, int y) const override { return g_.walkable(x, y + kProbeDY); }
-    bool objectBlocks(int x, int y) const override { return o_.blocks(x, y + kProbeDY); }
-    bool inRoom(int x, int y) const override { return gp::inRoom(room_, x, y + kProbeDY); }
+    bool tileWalkable(int x, int y) const override { return g_.walkable(x, y + gp::tuning().probeDY); }
+    bool objectBlocks(int x, int y) const override { return o_.blocks(x, y + gp::tuning().probeDY); }
+    bool inRoom(int x, int y) const override { return gp::inRoom(room_, x, y + gp::tuning().probeDY); }
 
 private:
     const gp::GroundField &g_;
@@ -300,6 +304,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
         gp::ModReport rep = gp::importMods(db, "mods"); // <- new, after all base content
         gp::ScriptHost scripts;
+        gp::EngineRegistry engineValues; // what engine.get / engine.set reach; filled in below, once the variables exist
+        scripts.setRegistry(&engineValues);
+        scripts.loadModSave(sd.kv); // what the mods kept in this slot (save.get)
         for (const auto &w : rep.warnings)
             std::fprintf(stderr, "mod warning: %s\n", w.c_str());
         for (const auto &e : rep.errors)
@@ -308,6 +315,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             std::printf("loaded mod %s\n", id.c_str());
         if (!rep.ok())
             return 1;
+        for (const gp::Id &bad : gp::resolveModPalettes(rom, db))
+            std::fprintf(stderr, "mod palette %s: its ROM palette does not exist, so it is left out\n", bad.c_str());
+        if (const int n = gp::applyNpcPalettes(rom, db, playerSpecies))
+        {
+            std::printf("recoloured %d pet npcs\n", n);
+        }
         for (const std::string &id : rep.loaded)
             scripts.loadMod(id, std::filesystem::path("mods") / id);
         for (const auto &e : scripts.errors())
@@ -326,7 +339,14 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             const std::vector<std::string> hookProblems = gp::validateHooks(scripts, targets);
             for (const std::string &p : hookProblems)
                 std::fprintf(stderr, "script error: %s\n", p.c_str());
-            if (!hookProblems.empty())
+            bool sceneProblem = false; // an object that opens a scene nobody defined could never work: stop, like any other hook problem
+            for (const gp::InteractionDef *d : db.allInteractions())
+                if (d->action == "scene" && !scripts.sceneKnown(d->str.at("scene")))
+                {
+                    std::fprintf(stderr, "script error: object '%s' opens scene '%s', which no script defines (Scene.hooks)\n", d->object.c_str(), d->str.at("scene").c_str());
+                    sceneProblem = true;
+                }
+            if (!hookProblems.empty() || sceneProblem)
                 return 1;
         }
         // The pet's species and palette come from the db now: the colour picked in the front end, else the species default.
@@ -337,8 +357,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             return gp::kRunError;
         }
         const auto slotInfo = gp::peekSlot(slot);
-        int petPal = (slotInfo.full && slotInfo.appearance >= 0) ? slotInfo.appearance : speciesDef->defaultPalette; // washing can change it
-        std::printf("pet palette 0x%x (%s)\n", petPal, (slotInfo.full && slotInfo.appearance >= 0) ? "from save" : "species default");
+        // a mod's colour comes back from its palette id (the number it had last session means nothing now)
+        gp::loadColourIds(sd, [&](const gp::Id &id)
+                          { const gp::PaletteDef *p = db.palette(id); return p && gp::modPalettes().count(p->number) ? p->number : -1; });
+        const int savedAppearance = sd.getIntStrict("appearance", sd.getIntStrict("colour", -1));
+        int petPal = (slotInfo.full && savedAppearance >= 0) ? savedAppearance : speciesDef->defaultPalette; // washing can change it
+        std::printf("pet palette 0x%x (%s)\n", petPal, (slotInfo.full && savedAppearance >= 0) ? "from save" : "species default");
         // find record tables by content: sprite, pal, x, y
 
         // Items come from the db now (base game first, then mods): itemDefs[i].index == i. A reference, not a copy:
@@ -687,7 +711,23 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             }
         }
         const int id = startArea;
-        const gp::AreaDef *startDef = db.areaByLegacy(id);
+        // A save made inside a mod area resumes there, at the same spot (the normal start only: --area N still wins).
+        gp::ResumeSpot resume;
+        const gp::AreaDef *startDef = nullptr;
+        if (startArea == 0 && haveSave && gp::loadResume(sd, resume))
+        {
+            startDef = db.area(resume.area);
+            if (!startDef)
+                std::printf("saved in '%s', which is not loaded (its mod is gone?): starting at the usual place\n", resume.area.c_str());
+            else if (!startDef->resume)
+            {
+                std::printf("saved in '%s', which no longer asks to be resumed: starting at the usual place\n", resume.area.c_str());
+                startDef = nullptr;
+            }
+        }
+        const bool resuming = startDef != nullptr;
+        if (!startDef)
+            startDef = db.areaByLegacy(id);
         if (!startDef)
         {
             std::printf("area %d not found\n", id);
@@ -712,7 +752,17 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         pos = {cur->room.width / 2, cur->room.height / 2};
         long best = -1;
         bool slotSpawned = false;
-        if (slot >= 0 && slot < 3)
+        if (resuming)
+        {
+            if (world->tileWalkable(resume.x, resume.y) && world->inRoom(resume.x, resume.y))
+            {
+                pos = {resume.x, resume.y};
+                slotSpawned = true; // (skips the search for the middle of the room)
+            }
+            else
+                std::printf("warning: the saved spot (%d,%d) in %s is not walkable any more, using the centre search\n", resume.x, resume.y, resume.area.c_str());
+        }
+        else if (slot >= 0 && slot < 3)
         {
             const int sx = kSlotSpawn[slot][0], sy = kSlotSpawn[slot][1];
             if (world->tileWalkable(sx, sy) && world->inRoom(sx, sy))
@@ -887,19 +937,67 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 return {smoothAt(npcPrev[i].first, n.x()), smoothAt(npcPrev[i].second, n.y())};
             return {float(n.x()), float(n.y())};
         };
+        // What scripts changed about the NPCs of the area the pet is in (npc.spawn / move / remove). loadNpcs is run again at times
+        // (a quest moving on) and must not undo it; leaving the area forgets it. `defs` keeps the records of moved and spawned
+        // NPCs, actors point into it, so it is only cleared together with the actors.
+        struct ScriptNpcState
+        {
+            gp::Id area;
+            std::deque<gp::NpcDef> defs;
+            std::set<gp::Id> removed;                                 // this area's own NPCs a script removed
+            std::map<gp::Id, gp::IPoint> moved;                       // ... or moved
+            std::vector<std::pair<gp::Id, gp::IPoint>> spawned;       // NPCs a script put here
+            struct Op
+            {
+                enum Kind { Spawn, Move, Remove } kind;
+                gp::Id id;
+                gp::IPoint at;
+            };
+            std::vector<Op> pending;                                  // changes to the live actors, made at the start of a safe tick
+        } scriptNpc;
+        constexpr size_t kMaxNpcs = 64;
         auto loadNpcs = [&]()
         {
             npcs.clear();
             npcPrev.clear();
+            if (scriptNpc.area != cur->def->id) // a new area: what scripts did in the last one is forgotten
+            {
+                scriptNpc.area = cur->def->id;
+                scriptNpc.removed.clear();
+                scriptNpc.moved.clear();
+                scriptNpc.spawned.clear();
+            }
+            scriptNpc.defs.clear();
+            scriptNpc.pending.clear(); // (the rebuild below already has them)
+            npcs.reserve(kMaxNpcs);    // spawning later must not move the actors: other code holds pointers to them
             const int area = cur->def->legacyId;
+            auto withPos = [&](const gp::NpcDef &d, gp::IPoint p) -> const gp::NpcDef &
+            {
+                gp::NpcDef c = d;
+                c.x = p.x;
+                c.y = p.y;
+                return scriptNpc.defs.emplace_back(std::move(c));
+            };
             for (const gp::NpcDef *d : db.npcsInArea(area))
             {
                 gp::NpcSpawnInfo info;
                 info.areaId = area;
                 if (!gp::npcSpawnsInArea(d->index, info, area, player.questsCompleted))
                     continue;
-                npcs.emplace_back(*d);
+                if (scriptNpc.removed.count(d->id))
+                    continue;
+                const auto m = scriptNpc.moved.find(d->id);
+                npcs.emplace_back(m != scriptNpc.moved.end() ? withPos(*d, m->second) : *d);
             }
+            for (const auto &[id, p] : scriptNpc.spawned)
+                if (const gp::NpcDef *d = db.npc(id))
+                {
+                    gp::NpcDef c = *d;
+                    c.area = area;
+                    c.x = p.x;
+                    c.y = p.y;
+                    npcs.emplace_back(scriptNpc.defs.emplace_back(std::move(c)));
+                }
             std::printf("%zu NPCs in area %d\n", npcs.size(), area);
         };
         loadNpcs();
@@ -1149,7 +1247,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         {
             constexpr int kTalkBox = 0x3c;
             const float camXl = clampCamF(float(pos.x) - W / 2, cur->img.w, W);
-            const float camYl = clampCamF(float(pos.y) - kCamY, cur->img.h, H);
+            const float camYl = clampCamF(float(pos.y) - gp::tuning().camY, cur->img.h, H);
             gp::NpcActor *pick = nullptr;
             for (gp::NpcActor &n : npcs)
             {
@@ -1453,6 +1551,26 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         std::mt19937 digGen(SDL_GetTicks());
         const gp::RandFn rnd = gp::makeRandFn(digGen);
         gp::WorldItems events;
+        {
+            // the random-find table: the base game's rows plus whatever the mods changed (find records)
+            std::vector<gp::WeightedItem> finds;
+            for (const gp::FindWeightDef *f : db.findWeights())
+                if (const gp::ItemDef *d = db.item(f->item); d && f->weight > 0)
+                    finds.push_back({d->index, f->weight});
+            long long totalWeight = 0;
+            for (const gp::WeightedItem &w : finds)
+                totalWeight += w.weight;
+            std::printf("random finds: %zu rows, total weight %lld\n", finds.size(), totalWeight);
+            events.setFindTable(std::move(finds));
+            const gp::MinigameDef &pp = db.minigameOr("base:minigame/prize_pools");
+            {
+                const gp::MinigameDef &fp = db.minigameOr("base:minigame/friend_pools"), &cm = db.minigameOr("base:minigame/colour_machine");
+                std::printf("friend pools: gifts %zu, advice %zu, default lines %zu; colour presets %zu\n", fp.list("gifts").size(), fp.idList("advice").size(),
+                            fp.idList("defaultLines").size(), cm.list("presets").size());
+            }
+            std::printf("prize pools: first %zu, general %zu, prize tiers %zu/%zu/%zu/%zu, special %d\n", pp.list("first").size(), pp.list("general").size(),
+                        pp.list("prizeA").size(), pp.list("prizeB").size(), pp.list("prizeC").size(), pp.list("prizeD").size(), pp.get("special"));
+        }
         // Shared services for the free functions in walk_npc_talk.hpp / walk_script_bindings.hpp.
         WalkServices svc{db, scripts, player, dialogue, quests, S, events, refreshBits, saveGame,
                          [&]
@@ -1478,7 +1596,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             {
                 events.clearNonPersistent();
                 if (a.maxEvents > 0)
-                    events.spawnRandom(a, gp::kRandomSpawnBatch, rnd);
+                    events.spawnRandom(a, gp::tuning().randomSpawnBatch, rnd);
             }
             gp::spawnFixedSpots(events, a.legacyId, db.fixedSpotsIn(a.legacyId), spawnEnv);
         };
@@ -1602,6 +1720,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         bool panelClosing = false;
         int potionStep = 0, exclaimTicks = -1; // a colour potion's reaction; the exclamation bubble's clock (-1 = none)
         int colorStep = 0, colorIdx = 0, colorDir = 0, colorTicks = 0; // the spaceship colour machine
+        // What the machine cycles through for the pet's species: the db's presets (a mod can add to them), a mod palette only for the species it names.
+        auto machineColours = [&]
+        {
+            return gp::machineColours(sp, db.minigameOr("base:minigame/colour_machine").list("presets"), [&](int n)
+                                      { const gp::PaletteDef *p = db.paletteByNumber(n); return p ? p->species : -1; });
+        };
         std::unique_ptr<gp::ReactionSeq> potionSeq;
         long tiredDecayAccum = 0, hungerDecayAccum = 0; // the stat decay counts (thought_bubble.hpp)
         int thoughtIcon = -1, thoughtTicks = 0; // the bubble up over the pet (icon tile), -1 = none
@@ -1625,6 +1749,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
             };
             const int pickedItem = idx >= 0 && idx < events.size() ? events.events()[size_t(idx)].item : -1;
+            const gp::WorldItem *pickedEv = idx >= 0 && idx < events.size() ? &events.events()[size_t(idx)] : nullptr;
+            const gp::Id pickedItemId = pickedItem >= 0 && pickedItem < int(itemDefs.size()) ? itemDefs[size_t(pickedItem)].id : gp::Id();
+            const int pickX = pickedEv ? pickedEv->x : pos.x, pickY = pickedEv ? pickedEv->y : pos.y;
+            if (!pickedItemId.empty() && scripts.fireBeforePickup(cur->def->id, pickedItemId, pickX, pickY).suppress)
+                return; // a mod left it lying there
             const gp::PickupOutcome o = events.pickup(idx, pe);
             if (o.result == gp::PickupResult::Granted && pickedItem >= 0 && pickedItem < int(itemDefs.size()))
             {
@@ -1637,6 +1766,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         break;
                     }
             }
+            if (o.result == gp::PickupResult::Granted && !pickedItemId.empty())
+                scripts.fireAfterPickup(cur->def->id, pickedItemId, pickX, pickY);
             if (o.result == gp::PickupResult::Granted)
                 afterPickup = true; // ProcessStoryModeObjectInteraction: IsFirstTimeEvent(0xf) right after the item is granted
             if (o.result == gp::PickupResult::NeedItem)
@@ -1674,7 +1805,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             int sprite = -1, t = -1;
             const std::string head = type.substr(0, type.find('@')); // ignore a trailing "@palette"
             const size_t last = head.find_last_of("0123456789");
-            if (last != std::string::npos)
+            // only the base game's own types ("base:objtype/12") are ROM types with a shadow; a mod's type is not, whatever digits its id ends in
+            if (last != std::string::npos && head.rfind("base:objtype/", 0) == 0)
             {
                 size_t b = last;
                 while (b > 0 && std::isdigit(static_cast<unsigned char>(head[b - 1])))
@@ -1906,6 +2038,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             fade.go(1.0, 8.0 / 30);
         };
 
+        bool sceneActive = false; // a mod's scene (Scene.hooks) is on screen: the world is frozen behind it, like a minigame
         auto openBar = [&](bool house) // OpenMenuBar when closed; closes it if already open
         {
             if (bar.isOpen())
@@ -2716,7 +2849,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
                     return;
                 }
-                if (const int i = gp::resyncIndex(sp, player.appearance); i >= 0)
+                if (const int i = gp::colourIndex(machineColours(), player.appearance); i >= 0)
                     colorIdx = i;
                 colorDir = gp::nextDirection(colorDir);
                 colorTicks = 0;
@@ -2734,10 +2867,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
                 return;
             }
-            if (colorTicks++ % gp::kColorStepTicks == 0)
+            const gp::MinigameDef &machine = db.minigameOr("base:minigame/colour_machine");
+            if (colorTicks++ % std::max(1, machine.get("stepTicks", gp::kColorStepTicks)) == 0)
             {
-                colorIdx = gp::stepIndex(colorIdx, colorDir);
-                const int pal = gp::machinePalette(sp, colorIdx);
+                const std::vector<int> colours = machineColours();
+                colorIdx = gp::stepIndex(colorIdx, colorDir, int(colours.size()));
+                const int pal = gp::colourAt(colours, colorIdx, petPal);
                 player.appearance = player.baseColour = petPal = pal;
                 try
                 {
@@ -2917,6 +3052,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         r->hasVisitor = true;
                         r->visitSpecies = other.species;
                         r->visitPal = other.appearance >= 0 ? other.appearance : sd->defaultPalette;
+                        if (!other.appearanceId.empty()) // the visited pet wears a mod's colour
+                            if (const gp::PaletteDef *pd = db.palette(other.appearanceId); pd && gp::modPalettes().count(pd->number))
+                                r->visitPal = pd->number;
                         try
                         {
                             gp::importAnim(rom, db, gp::kSettledStyle[other.species], r->visitPal);
@@ -3885,6 +4023,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 std::printf("dig: %s\n", found ? "item" : r.kind == gp::DigResult::Kind::Dud ? "dud"
                                                                                              : "miss");
                 std::printf("holes now: %zu\n", events.holes().size());
+                scripts.fireAfterDig(cur->def->id, pos.x, pos.y, found ? "item" : r.kind == gp::DigResult::Kind::Dud ? "dud" : "miss",
+                                     found && r.item >= 0 && r.item < int(itemDefs.size()) ? itemDefs[size_t(r.item)].id : gp::Id());
                 if (r.triggerSet)
                     std::printf("trigger flags 0x%x (SavePetStatusBlock)\n", bits);
                 animDone = true;
@@ -4158,7 +4298,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
             // Item.hooks(id).onItemUse: a script that returns false takes the whole use over (no eating, no medicine,
             // nothing consumed unless the script takes it). The menu closes so it is rebuilt from the new inventory.
-            if (scripts.fireItemUse(d.id).suppress)
+            if (scripts.fireBeforeItemUse(d.id).suppress || scripts.fireItemUse(d.id).suppress) // Game.hooks() (any item), then Item.hooks(id)
             {
                 im.open = false;
                 barBusy = 0;
@@ -4319,7 +4459,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             const gp::IPoint s = e.hasSpawnOverride ? e.spawnOverride : tr->spawn;
             std::printf("area %d -> %d, spawn (%d,%d)\n", cur->def->legacyId, next->def->legacyId, s.x, s.y);
             const int fromLegacy = cur->def->legacyId;
+            const gp::Id fromId = cur->def->id;
+            scripts.fireAreaLeave(fromId, next->def->id); // (the area has not changed yet)
             cur = std::move(next);
+            pos = {s.x, s.y}; // before the save below, which remembers where the pet is inside a mod area
             if (tr->flags & 2)
                 enterShopStock(*cur->def); // destination is a shop
             else
@@ -4337,9 +4480,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, cur->img.w, cur->img.h);
             SDL_UpdateTexture(tex, nullptr, cur->img.rgba.data(), cur->img.w * 4);
             cur->runtime->updateVisible(clampCam(pos.x - W / 2, cur->img.w, W),
-                                        clampCam(pos.y - kCamY, cur->img.h, H), W, H);
+                                        clampCam(pos.y - gp::tuning().camY, cur->img.h, H), W, H);
             loadNpcs();
             exitsArmed = false;
+            scripts.fireAreaEnter(cur->def->id, fromId); // Area.hooks(id).onEnter and Game.hooks().onEnterArea
             return true;
         };
         // The outdoor bar's Go Home (HandleMenuBarInput, button 6): the sounds stop, the area becomes area 0 (where the houses are) and
@@ -4363,6 +4507,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         return;
                     }
                     const int from = cur->def->legacyId;
+                    const gp::Id fromId = cur->def->id;
+                    scripts.fireAreaLeave(fromId, next->def->id);
                     cur = std::move(next);
                     if (gp::shopRowForArea(from) >= 0)
                         pending.consumeUnflaggedForArea(from); // leaving a shop
@@ -4374,18 +4520,29 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, cur->img.w, cur->img.h);
                     SDL_UpdateTexture(tex, nullptr, cur->img.rgba.data(), cur->img.w * 4);
                     loadNpcs();
+                    scripts.fireAreaEnter(cur->def->id, fromId);
                 }
                 pos = {p.x, p.y}; // (leaving the room puts it here again)
                 prevPos = pos;
-                cur->runtime->updateVisible(clampCam(pos.x - W / 2, cur->img.w, W), clampCam(pos.y - kCamY, cur->img.h, H), W, H);
+                cur->runtime->updateVisible(clampCam(pos.x - W / 2, cur->img.w, W), clampCam(pos.y - gp::tuning().camY, cur->img.h, H), W, H);
                 exitsArmed = false;
                 if (!room)
                     beginRoom(location); });
         };
+        gp::Id blockedExit; // a door the pet walks into that a mod shut (onBeforeExit) is asked about once, until the pet steps away
         auto requestGoTo = [&](const gp::ExitDef &e)
         {
             if (pendingExit || fade.a > 0.0)
                 return;
+            if (e.onTouch && e.id == blockedExit)
+                return;
+            if (scripts.fireBeforeExit(cur->def->id, e.toArea, e.id).suppress)
+            {
+                if (e.onTouch)
+                    blockedExit = e.id;
+                return;
+            }
+            blockedExit.clear();
             pendingExit = e;
             fade.go(1.0, 8.0 / 30); // fade out
         };
@@ -4406,6 +4563,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (si < 0)
                 return;
             const gp::ItemDef &d = itemDefs[item];
+            if (scripts.fireBeforeBuy(cur->def->id, d.id, d.price).suppress)
+                return; // a mod called the sale off
             const std::string name = itemName(item);
             const gp::BuyQuote q = gp::quotePurchase(shopStock.rows[row][si].stock(), money, d.price, ownedCount(item), d.maxQty);
 
@@ -4435,6 +4594,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                                     [&](int)
                                     { pending.removeShopItem(area, item); });
                 player.adjustMoney(-qty * itemDefs[item].price); // Item_ProcessPurchase: AdjustPlayerMoney(-qty * price)
+                scripts.fireAfterBuy(cur->def->id, itemDefs[item].id, itemDefs[item].price, qty);
             };
             dialogue.show(std::move(b));
         };
@@ -4531,7 +4691,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         auto camNowX = [&]
         { return clampCam(pos.x - W / 2, cur->img.w, W); };
         auto camNowY = [&]
-        { return clampCam(pos.y - kCamY, cur->img.h, H); };
+        { return clampCam(pos.y - gp::tuning().camY, cur->img.h, H); };
         refreshBits = [&]
         {
             for (const gp::Id &sid : db.offerSetIds())
@@ -4547,6 +4707,125 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             cur->runtime->updateVisible(camNowX(), camNowY(), W, H);
         };
 
+        // ---- scripts: object.spawn / move / remove and npc.spawn / move / remove (in the area the pet is in) ----
+        {
+            gp::ScriptApi &sapi = scripts.api();
+            sapi.playSound = [&](int id, int vol)
+            { sfx(id, vol); };
+            sapi.spawnObject = [&](const std::string &id, const std::string &type, int x, int y, int rx, int ry)
+            {
+                const gp::ObjectType *ot = db.objectType(type);
+                if (!ot)
+                    return false;
+                gp::ObjectDef o;
+                o.id = id;
+                o.type = type;
+                o.x = x;
+                o.y = y;
+                if (rx > 0 && ry > 0)
+                {
+                    o.reachX = rx;
+                    o.reachY = ry;
+                    o.interactId = 0;
+                }
+                if (ot->hasArt) // the box the art covers, for the cull (as the loader does for a mod's object)
+                {
+                    o.boxLeft = x - ot->art.anchorX + ot->art.dx;
+                    o.boxTop = y - ot->art.anchorY + ot->art.dy;
+                    o.boxRight = o.boxLeft + ot->art.w;
+                    o.boxBottom = o.boxTop + ot->art.h;
+                }
+                else
+                {
+                    o.boxLeft = x - std::max(rx, 16);
+                    o.boxRight = x + std::max(rx, 16);
+                    o.boxTop = y - std::max(ry, 16);
+                    o.boxBottom = y + std::max(ry, 16);
+                }
+                if (!cur->runtime->addObject(std::move(o)))
+                    return false;
+                cur->runtime->updateVisible(camNowX(), camNowY(), W, H);
+                return true;
+            };
+            sapi.moveObject = [&](const std::string &id, int x, int y)
+            {
+                const bool ok = cur->runtime->moveObject(id, x, y);
+                if (ok)
+                    cur->runtime->updateVisible(camNowX(), camNowY(), W, H);
+                return ok;
+            };
+            sapi.removeObject = [&](const std::string &id)
+            {
+                const bool ok = cur->runtime->removeObject(id);
+                if (ok)
+                    cur->runtime->updateVisible(camNowX(), camNowY(), W, H);
+                return ok;
+            };
+
+            // Is this NPC in the area, counting the changes still waiting to be made to the live actors?
+            auto npcHere = [&](const gp::Id &id)
+            {
+                bool here = false;
+                for (const gp::NpcActor &n : npcs)
+                    if (n.def->id == id)
+                        here = true;
+                for (const auto &op : scriptNpc.pending)
+                    if (op.id == id)
+                        here = op.kind != ScriptNpcState::Op::Remove;
+                return here;
+            };
+            auto npcCount = [&]
+            {
+                long n = long(npcs.size());
+                for (const auto &op : scriptNpc.pending)
+                    n += op.kind == ScriptNpcState::Op::Spawn ? 1 : op.kind == ScriptNpcState::Op::Remove ? -1 : 0;
+                return n;
+            };
+            sapi.spawnNpc = [&, npcHere, npcCount](const std::string &id, int x, int y)
+            {
+                if (!db.npc(id) || npcHere(id) || npcCount() >= long(kMaxNpcs))
+                    return false;
+                if (scriptNpc.removed.erase(id)) // an NPC of this area that a script removed earlier: it comes back, here
+                    scriptNpc.moved[id] = {x, y};
+                else
+                    scriptNpc.spawned.push_back({id, {x, y}});
+                scriptNpc.pending.push_back({ScriptNpcState::Op::Spawn, id, {x, y}});
+                return true;
+            };
+            sapi.moveNpc = [&, npcHere](const std::string &id, int x, int y)
+            {
+                if (!npcHere(id))
+                    return false;
+                bool wasSpawned = false;
+                for (auto &s : scriptNpc.spawned)
+                    if (s.first == id)
+                    {
+                        s.second = {x, y};
+                        wasSpawned = true;
+                    }
+                if (!wasSpawned)
+                    scriptNpc.moved[id] = {x, y};
+                scriptNpc.pending.push_back({ScriptNpcState::Op::Move, id, {x, y}});
+                return true;
+            };
+            sapi.removeNpc = [&, npcHere](const std::string &id)
+            {
+                if (!npcHere(id))
+                    return false;
+                const auto before = scriptNpc.spawned.size();
+                scriptNpc.spawned.erase(std::remove_if(scriptNpc.spawned.begin(), scriptNpc.spawned.end(), [&](const auto &s)
+                                                       { return s.first == id; }),
+                                        scriptNpc.spawned.end());
+                if (scriptNpc.spawned.size() == before) // one of the area's own
+                {
+                    scriptNpc.removed.insert(id);
+                    scriptNpc.moved.erase(id);
+                }
+                scriptNpc.pending.push_back({ScriptNpcState::Op::Remove, id, {0, 0}});
+                return true;
+            };
+        }
+
         saveGame = [&]
         {
             player.questsCompleted = quests.counter;
@@ -4557,9 +4836,91 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             s.kv.erase("kingFlags");
             s.kv.erase("gardenFlags");
             gp::savePlayer(player, s);
+            gp::saveColourIds(s, player.baseColour, player.appearance, speciesDef->defaultPalette, [&](int n) -> gp::Id
+                              { const gp::PaletteDef *p = db.paletteByNumber(n); return p ? p->id : gp::Id(); });
             s.kv.erase("inventory");
+            gp::saveResume(s, cur->def->id, cur->def->resume, pos.x, pos.y); // only an area that asks ("resume": true) is come back to
+            // what the mods keep (save.set): they get a say first (Game onSave), then their keys replace the old ones
+            static bool inSave = false;
+            if (!inSave)
+            {
+                inSave = true;
+                scripts.fireGameSave();
+                inSave = false;
+            }
+            for (auto it = s.kv.begin(); it != s.kv.end();)
+                it = it->first.rfind("mod.", 0) == 0 ? s.kv.erase(it) : std::next(it);
+            for (const auto &[k, v] : scripts.modSaveKv())
+                s.kv[k] = v;
             gp::saveToFile(savePath, s);
         };
+
+        // Game.hooks().onStatChange: every change to money, a personality stat or a care stat passes through the script first
+        player.deltaFilter = [&](int kind, int stat, int delta)
+        {
+            if (delta == 0)
+                return delta;
+            const int value = kind == 2 ? player.money : kind == 1 ? player.personality[size_t(stat)] : player.care[size_t(stat)];
+            static const char *careNames[] = {"hunger", "health", "", "happiness", "tiredness", "cleanliness"}; // CareStat order; 2 has no name
+            static const char *personalityNames[] = {"halos", "pitchforks", "stars", "lightbulbs"};
+            const std::string name = kind == 0 && stat >= 0 && stat < 6 ? careNames[stat] : kind == 1 && stat >= 0 && stat < 4 ? personalityNames[stat] : "";
+            return scripts.fireStatChange(kind, name, delta, value);
+        };
+
+        // ---- engine values: what a script reaches with engine.get / engine.set / engine.list ----
+        // One line each. A value that is a plain variable is exposed by address; a computed one takes a getter (and a setter, unless it
+        // is read-only). Anything exposed here can be set by a mod; it is the mod's job to set it again after a load (Game onLoad).
+        {
+            gp::EngineRegistry &E = engineValues;
+            E.expose("pet.x", &pos.x, "the pet's feet, in pixels");
+            E.expose("pet.y", &pos.y, "the pet's feet, in pixels");
+            E.expose("pet.facing", &S.pet.facing, "0 up, 1 down, 2 sideways");
+            E.expose("pet.faceLeft", &S.pet.faceLeft);
+            E.expose("pet.speedMul", &S.pet.speedMul, "steps per tick (1 normal); the debug sprint multiplies it by 4");
+            E.expose("pet.name", &player.name);
+            E.expose("pet.appearance", &player.appearance, "the colour that is drawn");
+            E.expose("pet.baseColour", &player.baseColour, "the colour a wash goes back to");
+            E.expose("pet.animId", &S.pet.animId, "the animation that plays (the game changes it again as the pet acts)");
+            E.expose("player.money", &player.money);
+            E.expose("player.illness", &player.illnessId, "-1 healthy");
+            E.expose("quests.counter", &quests.counter, "quests completed + 1; NPCs refresh at the next area change");
+            E.expose("game.ticks", &S.world.gameTicks, "60 a second, counted from the start of the run");
+            E.expose("game.debug", &gp::debugMode(), "debug keys (Shift sprints, ...)");
+            E.exposeFn("area.id", "string", [&] { return gp::EngineValue::ofStr(cur->def->id); });
+            E.exposeFn("area.legacyId", "int", [&] { return gp::EngineValue::ofInt(cur->def->legacyId); });
+            E.exposeFn("area.width", "int", [&] { return gp::EngineValue::ofInt(cur->def->widthPx()); }, {}, "pixels");
+            E.exposeFn("area.height", "int", [&] { return gp::EngineValue::ofInt(cur->def->heightPx()); }, {}, "pixels");
+            E.exposeFn("npcs.count", "int", [&] { return gp::EngineValue::ofInt(int(npcs.size())); });
+            // gameplay numbers (engine/tuning.hpp): the base game's values until a mod sets them
+            gp::Tuning &T = gp::tuning();
+            E.expose("tuning.tickHz", &T.tickHz, "simulation steps a second (30)");
+            E.expose("tuning.camY", &T.camY, "the camera sits this far above the pet (145)");
+            E.expose("tuning.probeDY", &T.probeDY, "collision is tested this far above the feet (-4)");
+            E.expose("tuning.digReach", &T.digReach, "px around the pet a dig reaches (30)");
+            E.expose("tuning.holeRingSize", &T.holeRingSize, "holes that stay open (5)");
+            E.expose("tuning.randomSpawnBatch", &T.randomSpawnBatch, "random finds placed on entering an area (6)");
+            E.expose("tuning.spawnRetries", &T.spawnRetries, "tries to find a free spot for a random find (200)");
+            E.expose("tuning.findDudPercent", &T.findDudPercent, "chance in 100 that a random find is a dud (15)");
+            E.expose("tuning.maxMoney", &T.maxMoney, "99999");
+            E.expose("tuning.maxCare", &T.maxCare, "the cap of each care stat (100)");
+            E.expose("tuning.maxPersonality", &T.maxPersonality, "the cap of each personality stat (9999)");
+            E.expose("tuning.negativeCareMinQuests", &T.negativeCareMinQuests, "care stats ignore drops until this many quests are done (4)");
+            E.expose("tuning.sellFactor", &T.sellFactor, "what the seller pays, of the price (0.8)");
+            E.expose("tuning.washHygiene", &T.washHygiene, "Cleanliness a wash adds (100)");
+            E.expose("tuning.washMoodLimit", &T.washMoodLimit, "a wash cheers the pet up if Happiness is at most this (0x4a)");
+            E.expose("tuning.washMoodBonus", &T.washMoodBonus, "(10)");
+            E.expose("tuning.stinkHygieneDrop", &T.stinkHygieneDrop, "what catching a smell costs a clean pet (0x50)");
+            E.expose("tuning.stinkCountNeeded", &T.stinkCountNeeded, "checks beside a smelly NPC before it passes on (45)");
+            E.expose("tuning.stinkCheckTicks", &T.stinkCheckTicks, "steps between those checks (23)");
+            E.expose("tuning.idleMinTicks", &T.idleMinTicks, "NPC idle time, steps (30)");
+            E.expose("tuning.idleMaxTicks", &T.idleMaxTicks, "exclusive (91)");
+            E.expose("tuning.approachDX", &T.approachDX, "befriending: distance the pet stands from the NPC (75)");
+            E.expose("tuning.closerDX", &T.closerDX, "... steps closer for a friend (20)");
+            E.expose("tuning.awayDX", &T.awayDX, "... walks away from one that is not (30)");
+            E.expose("tuning.giveUpTicks", &T.giveUpTicks, "how long the pet tries to get there (120)");
+            E.expose("tuning.nudgeFirstSeconds", &T.nudgeFirstSeconds, "quest reminder, first (30)");
+            E.expose("tuning.nudgeRepeatSeconds", &T.nudgeRepeatSeconds, "quest reminder, repeat (180)");
+        }
 
         gp::QuestHooks &qh = quests.h;
         qh.rnd = rnd;
@@ -4629,8 +4990,27 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (const gp::NpcDef *d = npcAt(p))
                 b.portrait = gp::uiSpriteId(d->portraitSprite, d->portraitPalette);
         };
+        auto questInfo = [&]
+        {
+            const gp::QuestDef &d = quests.q.def;
+            gp::QuestCompleteInfo info;
+            info.questId = d.generic ? gp::Id() : gp::legacyQuestId(d.id);
+            info.number = quests.counter;
+            info.generic = d.generic;
+            info.type = quests.world.type(d.typeMode).id;
+            if (const gp::NpcDef *g = npcAt(d.giver))
+                info.giverId = g->id;
+            if (const gp::NpcDef *r = npcAt(d.receiver))
+                info.receiverId = r->id;
+            return info;
+        };
         qh.onDecline = [&]
-        { nudge.restart(long(gameTicks)); }; // DeclineQuest: the 30 s reminder timer
+        {
+            nudge.restart(long(gameTicks)); // DeclineQuest: the 30 s reminder timer
+            scripts.fireQuestAnswer(false, questInfo());
+        };
+        qh.onAccept = [&]
+        { scripts.fireQuestAnswer(true, questInfo()); };
         // StartQuestRewardActivity -8 / -10 (TickActor_MiniPetFoundItemSequence / HandleMiniPetGiftSequence, mis-named in the
         // decompile): the pet stands while the dialogue is closed, then the sound 0x5a, the explosion (bubble 0x13), the camera
         // shake, and the rock's object goes while the passage's comes in; a moment later the dialogue goes on.
@@ -4771,9 +5151,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
         enterAreaEvents(*cur->def, true);
         refreshBits(); // add
+        scripts.fireGameLoad(); // a mod's chance to set its engine values again from what it saved
+        scripts.fireAreaEnter(cur->def->id, ""); // the game starts here: ctx.from.id is nil
         bool &running = S.flow.running;
         bool &backToMenu = S.flow.backToMenu;
-        const double kTickHz = 30.0; // verified: the game ticks at 30 Hz
+        const auto tickHz = [] { return std::max(1.0, gp::tuning().tickHz); }; // verified: the game ticks at 30 Hz (tuning.tickHz, a mod can change it)
         const Uint64 freq = SDL_GetPerformanceFrequency();
         Uint64 prev = SDL_GetPerformanceCounter();
         double &acc = S.flow.acc;
@@ -4836,7 +5218,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         break;
                     case SDLK_o:
                         std::printf("cam %d,%d  pos %d,%d  (room %dx%d  top=%d bottom=%d)\n",
-                                    clampCam(pos.x - W / 2, cur->img.w, W), clampCam(pos.y - kCamY, cur->img.h, H),
+                                    clampCam(pos.x - W / 2, cur->img.w, W), clampCam(pos.y - gp::tuning().camY, cur->img.h, H),
                                     pos.x, pos.y, cur->room.width, cur->room.height,
                                     cur->room.top, cur->room.bottom);
                         break;
@@ -4956,9 +5338,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 fade.go(0.0, 8.0 / 30);
             }
 
-            while (acc >= 1.0 / kTickHz)
+            while (acc >= 1.0 / tickHz())
             {
-                acc -= 1.0 / kTickHz;
+                acc -= 1.0 / tickHz();
                 gameTicks += 2;
                 // remember where everything was before this tick, for the smooth renderer
                 prevPos = pos;
@@ -4970,6 +5352,69 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     room->pscroll = room->scroll;
                     room->pcurX = room->curX;
                     room->pcurY = room->curY;
+                }
+                // Changes scripts asked for on the NPCs (npc.spawn / move / remove) are made here, between ticks and only while no talk,
+                // encounter or dialogue holds a pointer to one of the actors; otherwise they wait for a quieter tick.
+                if (!scriptNpc.pending.empty() && !dialogue.open() && !enc && !showNpc)
+                {
+                    auto indexOf = [&](const gp::Id &id) -> long
+                    {
+                        for (size_t i = 0; i < npcs.size(); ++i)
+                            if (npcs[i].def->id == id)
+                                return long(i);
+                        return -1;
+                    };
+                    for (const auto &op : scriptNpc.pending)
+                    {
+                        const long i = indexOf(op.id);
+                        std::printf("script npc %s %s at %d,%d\n", op.kind == ScriptNpcState::Op::Spawn ? "spawn" : op.kind == ScriptNpcState::Op::Move ? "move" : "remove",
+                                    op.id.c_str(), op.at.x, op.at.y);
+                        if (op.kind == ScriptNpcState::Op::Spawn)
+                        {
+                            const gp::NpcDef *d = db.npc(op.id);
+                            if (!d || i >= 0 || npcs.size() >= kMaxNpcs)
+                                continue;
+                            gp::NpcDef c = *d;
+                            c.area = cur->def->legacyId;
+                            c.x = op.at.x;
+                            c.y = op.at.y;
+                            npcs.emplace_back(scriptNpc.defs.emplace_back(std::move(c))); // (capacity was reserved: no actor moves)
+                        }
+                        else if (i < 0)
+                            continue;
+                        else if (op.kind == ScriptNpcState::Op::Move)
+                        {
+                            gp::NpcActor &a = npcs[size_t(i)];
+                            gp::NpcDef c = *a.def;
+                            c.x = op.at.x;
+                            c.y = op.at.y;
+                            a.def = &scriptNpc.defs.emplace_back(std::move(c)); // a wanderer's route is relative to its spawn, so it follows
+                            a.body.x = op.at.x;
+                            a.body.y = op.at.y;
+                            a.target = {op.at.x, op.at.y};
+                            a.walk = decltype(a.walk){};
+                            a.activity = gp::kActivityIdle;
+                            a.activityTicks = 0;
+                            a.settle = gp::NpcActor::SettleNone;
+                            a.started = false;
+                        }
+                        else // Remove
+                        {
+                            gp::NpcActor *gone = &npcs[size_t(i)];
+                            if (encNpc == gone)
+                            {
+                                enc.reset();
+                                encNpc = nullptr;
+                            }
+                            if (holdNpc == gone)
+                                holdNpc = nullptr;
+                            npcs.erase(npcs.begin() + i);
+                            for (gp::NpcActor **p : {&encNpc, &holdNpc}) // the actors after it moved down one place
+                                if (*p && *p > gone)
+                                    --*p;
+                        }
+                    }
+                    scriptNpc.pending.clear();
                 }
                 npcPrev.resize(npcs.size());
                 for (size_t ni = 0; ni < npcs.size(); ++ni)
@@ -5058,6 +5503,34 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                                       { statsOpen = false; barBusy = 0; barAnim.visible = false; });
                     }
                     continue;
+                }
+                if (sceneActive)
+                {
+                    gp::SceneInput in; // keys pressed this tick; ignored during the fade-in
+                    if (fade.a <= 0.0)
+                    {
+                        in.z = zPressed;
+                        in.x = xPressed;
+                        in.left = (newlyPressed & gp::DirLeft) != 0;
+                        in.right = (newlyPressed & gp::DirRight) != 0;
+                        in.up = (newlyPressed & gp::DirUp) != 0;
+                        in.down = (newlyPressed & gp::DirDown) != 0;
+                    }
+                    in.heldZ = zDown;
+                    in.heldX = xDown;
+                    in.heldLeft = (rawDirs & gp::DirLeft) != 0;
+                    in.heldRight = (rawDirs & gp::DirRight) != 0;
+                    in.heldUp = (rawDirs & gp::DirUp) != 0;
+                    in.heldDown = (rawDirs & gp::DirDown) != 0;
+                    scripts.tickScene(in);
+                    scripts.tick(); // wait(n) in the scene's scripts
+                    if (scripts.sceneCloseRequested() && !pendingScreen)
+                        requestScreen([&]
+                                      {
+                                          scripts.endScene();
+                                          sceneActive = false;
+                                      });
+                    continue; // world frozen while a scene is up
                 }
                 if (minigames.active())
                 {
@@ -5383,7 +5856,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         beside->stinky = true;
                         break;
                     case gp::StinkEvent::PetStinks:
-                        player.adjustCare(gp::Cleanliness, -gp::kStinkHygieneDrop);
+                        player.adjustCare(gp::Cleanliness, -gp::tuning().stinkHygieneDrop);
                         saveGame();
                         break;
                     case gp::StinkEvent::None:
@@ -5397,8 +5870,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     medStuck = false;  // real input ends the stuck walk
                     pose = Pose::Move; // any direction input cancels idle/special animations
                     settleTicks = 0;
-                    speedMul = (gp::debugMode() && (SDL_GetModState() & KMOD_SHIFT)) ? 4 : 1; // debug mode: Shift sprints
-                    for (int rep = 0; rep < speedMul; ++rep)
+                    // speedMul is a setting a mod can change (engine.set "pet.speedMul"); the debug sprint multiplies it
+                    const int steps = std::clamp(speedMul, 0, 256) * ((gp::debugMode() && (SDL_GetModState() & KMOD_SHIFT)) ? 4 : 1);
+                    for (int rep = 0; rep < steps; ++rep)
                         pos = gp::stepPlayer(*world, pos, dirs).pos;
                     const int oldFacing = facing;
                     const bool oldLeft = faceLeft;
@@ -5534,6 +6008,19 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 tickThoughtBubble();
                 quests.tick(int(gameTicks));
                 scripts.tick(); // scripts that called wait(n)
+                // Area.hooks(id).onTick: every tick the world is running (not under a menu, a dialogue, a house room or a screen change)
+                static long scriptTicks = 0; // 30 a second, like dt and wait(); counts every tick, also the ones a menu skips
+                ++scriptTicks;
+                if (!dialogue.open() && !im.open && !statsOpen && !room && !pendingScreen)
+                    scripts.fireAreaTick(cur->def->id, scriptTicks);
+                // scene.open(id) from a script: open it as soon as the world is free (not in a dialogue, a menu, a house room or a talk)
+                if (!sceneActive && !dialogue.open() && !im.open && !statsOpen && !room && !pendingScreen && !pendingExit && !enc && !showNpc && barBusy == 0)
+                    if (std::string sceneId; scripts.takeSceneOpen(sceneId))
+                        requestScreen([&, sceneId]
+                                      {
+                                          sceneActive = true;
+                                          scripts.beginScene(sceneId);
+                                      });
                 if (!petBusyElsewhere && !enc && !dialogue.open() && !im.open && !statsOpen && !pendingExit && !pendingScreen && !room && !showNpc)
                 {
                     const gp::NpcActor *nb = nearestNpc();
@@ -5595,11 +6082,14 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 if (ie)
                     requestGoTo(*ie);
                 else if (!ex)
+                {
                     exitsArmed = true;
+                    blockedExit.clear();
+                }
                 else if (exitsArmed)
                     requestGoTo(*ex);
 
-                const bool outdoors = curArea <= 9; // GUESS for the ROM's 0x3c969(area) check; interiors/shops can't dig
+                const bool outdoors = cur->def->diggable; // base areas 0..9 (a GUESS for the ROM's 0x3c969(area) check); a mod area opts in
 
                 if (zWorld && !ie && !enc && !showNpc)
                 {
@@ -5614,14 +6104,15 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     else if (gp::NpcActor *t = nearestNpc())
                         walk::talkToNpc(svc, *t);
                     else if (outdoors)
-                        startDig(); // misses and duds play the no-item reaction
+                        if (!scripts.fireBeforeDig(cur->def->id, pos.x, pos.y).suppress) // a mod may call the dig off
+                            startDig(); // misses and duds play the no-item reaction
                 }
             }
 
-            renderAlpha = smoothCam ? float(std::min(acc * kTickHz, 1.0)) : 1.f;
+            renderAlpha = smoothCam ? float(std::min(acc * tickHz(), 1.0)) : 1.f;
             const float petFX = smoothAt(prevPos.x, pos.x), petFY = smoothAt(prevPos.y, pos.y); // pet's drawn position
             const float camX = clampCamF(petFX - W / 2, cur->img.w, W);
-            const float camY = clampCamF(petFY - kCamY - shakeDy, cur->img.h, H); // the belly flop moves the camera's lead
+            const float camY = clampCamF(petFY - gp::tuning().camY - shakeDy, cur->img.h, H); // the belly flop moves the camera's lead
             cur->runtime->updateVisible(int(std::floor(camX)), int(std::floor(camY)), W, H);
 
             // ---- DRAW ----
@@ -5649,6 +6140,21 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             for (int idx : cur->runtime->visible())
             {
                 const gp::ObjectDef *o = cur->runtime->objects()[size_t(idx)];
+                const gp::ObjectType *sot = db.objectType(o->type);
+                const int mode = sot ? sot->shadow : gp::ObjectType::ShadowDefault;
+                if (mode == gp::ObjectType::ShadowNone)
+                    continue;
+                if (mode == gp::ObjectType::ShadowAuto)
+                {
+                    if (sot->hasArt)
+                        drawShadow(sot->art.w, float(o->x), float(o->y), false, camX, camY); // the blob DrawShadow picks for a sprite this wide
+                    continue;
+                }
+                if (mode == gp::ObjectType::ShadowPicture)
+                {
+                    drawShadowSprite(gp::ObjectType::shadowAnim(o->type), float(o->x), float(o->y), camX, camY);
+                    continue;
+                }
                 const int sprite = shadowFor(o->type);
                 if (sprite >= 0)
                     drawShadowSprite(gp::uiSpriteId(sprite, 0x28c), o->x, o->y + 1, camX, camY);
@@ -5968,7 +6474,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     drawRoom();
                 gp::useUiScreen(ren);
                 const bool wholeBox = dialogue.open() && dialogue.box->kind == gp::BoxKind::Picture; // (a sign is drawn over the world)
-                if (im.open || statsOpen || minigames.active() || wholeBox) // full-screen screens: the world is not behind them
+                if (im.open || statsOpen || minigames.active() || sceneActive || wholeBox) // full-screen screens: the world is not behind them
                     gp::clearFrame(ren);
             }
             else if (room)
@@ -6001,6 +6507,101 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (dialogue.open())
                 drawDialogue(*dialogue.box);
             minigames.draw(renderAlpha);
+            if (sceneActive)
+            {
+                // a mod's scene: the whole 320 x 240 screen is its own (drawing calls are the script's list; see DrawCmd)
+                gp::clearFrame(ren);
+                for (const gp::DrawCmd &c : scripts.drawScene())
+                {
+                    SDL_SetRenderDrawBlendMode(ren, c.a < 255 ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE);
+                    SDL_SetRenderDrawColor(ren, Uint8(c.r), Uint8(c.g), Uint8(c.b), Uint8(c.a));
+                    switch (c.kind)
+                    {
+                    case gp::DrawCmd::Kind::Clear:
+                    {
+                        const SDL_Rect all{0, 0, gp::kLogicalW, gp::kLogicalH};
+                        SDL_RenderFillRect(ren, &all);
+                        break;
+                    }
+                    case gp::DrawCmd::Kind::Rect:
+                    {
+                        const SDL_Rect r{c.x, c.y, c.w, c.h};
+                        c.fill ? SDL_RenderFillRect(ren, &r) : SDL_RenderDrawRect(ren, &r);
+                        break;
+                    }
+                    case gp::DrawCmd::Kind::Sprite:
+                    {
+                        AnimRef A = animRefById(c.str);
+                        int sprite = 0, pal = 0;
+                        if (!A.size() && std::sscanf(c.str.c_str(), "base:sprite/%x@%x", &sprite, &pal) == 2) // a game picture: brought in on first use
+                        {
+                            try
+                            {
+                                gp::importUiSprite(db, rom, sprite, pal);
+                            }
+                            catch (const std::exception &)
+                            {
+                            }
+                            A = animRefById(c.str);
+                        }
+                        if (!A.size())
+                        {
+                            static std::set<gp::Id> warnedScene;
+                            if (warnedScene.insert(c.str).second)
+                                std::fprintf(stderr, "scene: no picture '%s'\n", c.str.c_str());
+                            break;
+                        }
+                        const size_t fi = size_t(c.frame) % A.size();
+                        const gp::SpriteFrame &f = A.anim->frames[fi];
+                        const SDL_FRect r{float(c.x - f.anchorX + f.dx), float(c.y - f.anchorY + f.dy), float(f.w), float(f.h)};
+                        SDL_RenderCopyExF(ren, (*A.tex)[fi], nullptr, &r, 0.0, nullptr, c.flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+                        break;
+                    }
+                    case gp::DrawCmd::Kind::Text:
+                    case gp::DrawCmd::Kind::Num:
+                    {
+                        std::string str;
+                        if (c.kind == gp::DrawCmd::Kind::Num)
+                        {
+                            char b[40];
+                            if (c.num == std::floor(c.num) && std::fabs(c.num) < 1e15)
+                                std::snprintf(b, sizeof b, "%lld", static_cast<long long>(c.num));
+                            else
+                                std::snprintf(b, sizeof b, "%g", c.num);
+                            str = b;
+                        }
+                        else
+                            str = gp::fillTemplateVars(gp::fmtAll(db.textOr(c.str, "?"), player.name), c.vars);
+                        const gp::Align al = c.align == 1 ? gp::Align::Center : c.align == 2 ? gp::Align::Right : gp::Align::Left;
+                        int bx = c.x, bw = c.width;
+                        if (bw == 0) // no box given: the text is placed around x
+                        {
+                            bw = gp::kLogicalW;
+                            bx = c.align == 1 ? c.x - bw / 2 : c.align == 2 ? c.x - bw : c.x;
+                        }
+                        (c.font == 3 ? swiftTitle : text).draw(str, bx, c.y, bw, al);
+                        break;
+                    }
+                    }
+                }
+                SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+                if (const char *shot = std::getenv("GP_SCENE_SHOT")) // debug: save the 20th frame of a scene as a BMP (for tests and screenshots)
+                {
+                    static int sceneFrames = 0;
+                    const char *at = std::getenv("GP_SCENE_SHOT_FRAME"); // which frame (default the 20th)
+                    if (++sceneFrames == (at ? std::atoi(at) : 20))
+                    {
+                        int w = 0, h = 0;
+                        SDL_GetRendererOutputSize(ren, &w, &h);
+                        if (SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888))
+                        {
+                            if (SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ARGB8888, surf->pixels, surf->pitch) == 0)
+                                SDL_SaveBMP(surf, shot);
+                            SDL_FreeSurface(surf);
+                        }
+                    }
+                }
+            }
             if (showStats)
             {
                 constexpr int kRow = 16; // raise if letters still overlap

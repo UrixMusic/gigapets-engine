@@ -4,6 +4,7 @@
 #pragma once
 #include <array>
 #include <string>
+#include <vector>
 #include "npc_brain.hpp" // Rng (range(lo, hi) has hi EXCLUSIVE, like RandRange)
 
 namespace gp
@@ -81,6 +82,16 @@ namespace gp
         0x17, 0x19, 0x1a, 0x1b, 0x1d, 0x1e, 0x1f, 0x20, 0x22, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31,
         0x29, 0x2a, 0x2b, 0x109, 0x0b, 0x0f, 0x29, 0x2a, 0x2b, 0x109, 0x0b, 0x0f, 0x29, 0x2a, 0x2b, 0x109, 0x0b, 0x0f};
     inline int rollFriendGift(Rng &rng) { return kFriendGifts[size_t(rng.range(0, kFriendGiftCount))]; }
+    // The same draws from a pool the db holds (a mod's may differ); an empty pool gives -1.
+    inline int rollFriendGift(Rng &rng, const std::vector<int> &pool)
+    {
+        return pool.empty() ? -1 : pool[size_t(rng.range(0, int(pool.size())))];
+    }
+    // A random entry of a list of text ids; "" for an empty list.
+    inline std::string pickTextId(Rng &rng, const std::vector<std::string> &ids)
+    {
+        return ids.empty() ? std::string() : ids[size_t(rng.range(0, int(ids.size())))];
+    }
 
     // ShowFriendAdviceText: RandomizeAdviceText picks the word at 0xe018 + RandRange(0, 0x2f), i.e. text id 0x2e7..0x315.
     constexpr int kFriendAdviceFirst = 0x2e7, kFriendAdviceCount = 0x2f;

@@ -80,6 +80,46 @@ static ContentDB baseDb()
     a.legacyId = 0;
     a.tilesW = a.tilesH = 2;
     db.put(std::move(a));
+    ItemDef gem;
+    gem.id = "base:item/173";
+    db.put(std::move(gem));
+    db.put(FindWeightDef{"base:find/265", "base:item/173", 100});
+    NpcDef pet;
+    pet.id = "base:npc/12";
+    pet.area = 0;
+    pet.x = 10;
+    pet.y = 20;
+    pet.speciesOrAnim = 1;
+    pet.befriendOdds = 7;
+    pet.path = {{5, 0}, {-5, 0}};
+    pet.anim = "base:anim/139";
+    db.put(std::move(pet));
+    MinigameDef pools;
+    pools.id = "base:minigame/prize_pools";
+    pools.handler = "pools";
+    pools.num = {{"special", 177}};
+    pools.lists = {{"first", {1, 2}}, {"general", {3, 4}}, {"prizeA", {5}}};
+    pools.itemLists = {"first", "general", "prizeA"};
+    db.put(std::move(pools));
+    MinigameDef mm;
+    mm.id = "base:minigame/memory_match";
+    mm.handler = "memory_match";
+    mm.num = {{"cost", 20}};
+    db.put(std::move(mm));
+    MinigameDef fp;
+    fp.id = "base:minigame/friend_pools";
+    fp.handler = "pools";
+    fp.lists = {{"gifts", {0, 0}}};
+    fp.itemLists = {"gifts"};
+    fp.idLists = {{"advice", {"base:text/1"}}, {"defaultLines", {"base:text/1"}}};
+    db.put(std::move(fp));
+    MinigameDef cmach;
+    cmach.id = "base:minigame/colour_machine";
+    cmach.handler = "colour_machine";
+    cmach.num = {{"stepTicks", 4}};
+    cmach.lists = {{"presets", {1, 2, 3}}};
+    cmach.paletteLists = {"presets"};
+    db.put(std::move(cmach));
     return db;
 }
 
@@ -263,8 +303,243 @@ int main()
         CHECK(a && a->tilesW == 2 && a->tilesH == 2 && a->tileset == "cave2:tileset/t" && a->tiles[1] == 1 && a->tiles[2] == 1 && a->tiles[3] == 0);
         CHECK(a && a->music == 2 && a->spawnPoints.size() == 1 && a->marginL == 1 && a->marginB == 4);
     }
+    { // object shadows: none / auto / a picture on add, and a patch on a base type and on a mod type
+        TmpMods t("shadow");
+        t.manifest("cave");
+        assets(t, "cave");
+        solidPng(t.root / "cave" / "assets" / "shade.png", 20, 8, 0, 0, 0, 200);
+        t.data("cave", "a.json", R"([
+          {"type":"objtype","mode":"add","id":"cave:objtype/plain","png":"assets/door.png"},
+          {"type":"objtype","mode":"add","id":"cave:objtype/none","png":"assets/door.png","shadow":"none"},
+          {"type":"objtype","mode":"add","id":"cave:objtype/auto","png":"assets/door.png","shadow":"auto"},
+          {"type":"objtype","mode":"add","id":"cave:objtype/pic","png":"assets/door.png","shadow_png":"assets/shade.png","shadow_anchorY":2}])");
+        t.data("cave", "b.json", R"([
+          {"type":"objtype","mode":"patch","id":"base:objtype/7","shadow_png":"assets/shade.png"},
+          {"type":"objtype","mode":"patch","id":"base:objtype/8","shadow":"none"},
+          {"type":"objtype","mode":"patch","id":"cave:objtype/pic","shadow":"auto"}])");
+        ContentDB db = baseDb();
+        for (int i = 7; i <= 8; ++i)
+        {
+            ObjectType ot;
+            ot.id = "base:objtype/" + std::to_string(i);
+            ot.hasArt = ot.hasMarker = true;
+            db.put(std::move(ot));
+        }
+        ModReport r = importMods(db, t.root);
+        for (auto &e : r.errors)
+            std::cerr << e << "\n";
+        CHECK(r.ok());
+        CHECK(db.objectType("cave:objtype/plain")->shadow == ObjectType::ShadowDefault);
+        CHECK(db.objectType("cave:objtype/none")->shadow == ObjectType::ShadowNone);
+        CHECK(db.objectType("cave:objtype/auto")->shadow == ObjectType::ShadowAuto);
+        const ObjectType *b7 = db.objectType("base:objtype/7"), *b8 = db.objectType("base:objtype/8");
+        CHECK(b7 && b7->shadow == ObjectType::ShadowPicture && b7->hasMarker && b7->hasArt); // the rest of the type is untouched
+        const Anim *sa = db.anim(ObjectType::shadowAnim("base:objtype/7"));
+        CHECK(sa && sa->frames.size() == 1 && sa->frames[0].w == 20 && sa->frames[0].h == 8 && sa->frames[0].anchorX == 10 && sa->frames[0].anchorY == 4);
+        CHECK(b8 && b8->shadow == ObjectType::ShadowNone);
+        CHECK(db.objectType("cave:objtype/pic")->shadow == ObjectType::ShadowAuto); // a later patch wins
+        const Anim *pa = db.anim(ObjectType::shadowAnim("cave:objtype/pic"));
+        CHECK(pa && pa->frames[0].anchorY == 2); // (the anim stays; the shadow mode decides whether it is used)
+    }
+    { // resume: off unless an area asks for it; a patch can change it, on a mod's area or a base one
+        TmpMods t("resume");
+        t.manifest("cave");
+        assets(t, "cave");
+        t.data("cave", "a.json", kGoodData);
+        t.data("cave", "b.json", R"([
+          {"type":"area","mode":"add","id":"cave:area/home","tileset":"cave:tileset/rock","collision":"cave:collision/rock","map":[[0,0],[0,0]],"resume":true},
+          {"type":"area","mode":"patch","id":"base:area/0","resume":true}])");
+        ContentDB db = baseDb();
+        ModReport r = importMods(db, t.root);
+        for (auto &e : r.errors)
+            std::cerr << e << "\n";
+        CHECK(r.ok());
+        CHECK(!db.area("cave:area/main")->resume);
+        CHECK(db.area("cave:area/home")->resume);
+        CHECK(db.area("base:area/0")->resume);
+    }
+    { // diggable + spot: base areas 0..9 dig, a mod area opts in; spots name an area and an item and may come before them in file order
+        TmpMods t("spots");
+        t.manifest("cave");
+        assets(t, "cave");
+        t.data("cave", "a.json", kGoodData);
+        t.data("cave", "0_spots.json", R"([
+          {"type":"spot","mode":"add","id":"cave:spot/gem","area":"cave:area/yard","item":"base:item/173","x":40,"y":50,"state":"ground","not_while_held":true},
+          {"type":"spot","mode":"add","id":"cave:spot/buried","area":"base:area/0","item":"base:item/173","x":9,"y":8,"requires_item":"base:item/173","not_offered":true},
+          {"type":"spot","mode":"remove","id":"base:spot/228"}])");
+        t.data("cave", "b.json", R"([
+          {"type":"area","mode":"add","id":"cave:area/yard","tileset":"cave:tileset/rock","collision":"cave:collision/rock","map":[[0,0],[0,0]],"diggable":true},
+          {"type":"area","mode":"patch","id":"base:area/12","diggable":true}])");
+        ContentDB db = baseDb();
+        db.areaMutable("base:area/0")->diggable = true; // what the ROM import does for areas 0..9
+        AreaDef a12;
+        a12.id = "base:area/12";
+        a12.legacyId = 12;
+        db.put(std::move(a12));
+        FixedSpotDef old;
+        old.id = "base:spot/228";
+        old.item = "base:item/173";
+        db.put(std::move(old));
+        const bool hadBaseSpot = db.spot("base:spot/228") != nullptr;
+        ModReport r = importMods(db, t.root);
+        for (auto &e : r.errors)
+            std::cerr << e << "\n";
+        CHECK(r.ok());
+        CHECK(db.area("base:area/0")->diggable && db.area("base:area/12")->diggable && !db.area("cave:area/main")->diggable);
+        CHECK(db.area("cave:area/yard")->diggable);
+        const FixedSpotDef *g = db.spot("cave:spot/gem"), *b = db.spot("cave:spot/buried");
+        CHECK(g && g->state == 2 && g->x == 40 && g->y == 50 && g->notWhileHeld && g->area == db.area("cave:area/yard")->legacyId);
+        CHECK(b && b->state == 1 && b->notOffered && b->prereqItem == "base:item/173" && b->area == 0);
+        CHECK(db.fixedSpotsIn(g->area).size() == 1);
+        CHECK(hadBaseSpot && db.spot("base:spot/228") == nullptr);
+    }
+    { // find rows: add, patch weight / item, remove; the base game's rows are records too
+        TmpMods t("finds");
+        t.manifest("cave");
+        assets(t, "cave");
+        t.data("cave", "a.json", kGoodData);
+        t.data("cave", "0_finds.json", R"([
+          {"type":"find","mode":"add","id":"cave:find/gem","item":"base:item/173","weight":40},
+          {"type":"find","mode":"patch","id":"base:find/265","weight":7},
+          {"type":"find","mode":"patch","id":"base:find/6","item":"base:item/173"},
+          {"type":"find","mode":"remove","id":"base:find/10"}])");
+        ContentDB db = baseDb();
+        db.put(FindWeightDef{"base:find/6", "base:item/6", 25});
+        db.put(FindWeightDef{"base:find/10", "base:item/10", 25});
+
+        ModReport r = importMods(db, t.root);
+        for (auto &e : r.errors)
+            std::cerr << e << "\n";
+        CHECK(r.ok());
+        const FindWeightDef *g = db.findWeight("cave:find/gem");
+        CHECK(g && g->weight == 40 && g->item == "base:item/173");
+        CHECK(db.findWeight("base:find/265")->weight == 7 && db.findWeight("base:find/6")->item == "base:item/173" && db.findWeight("base:find/6")->weight == 25);
+        CHECK(!db.findWeight("base:find/10"));
+        const auto rows = db.findWeights();
+        CHECK(rows.size() == 3 && rows.back()->id == "cave:find/gem"); // new rows go last, in order
+    }
+    { // minigame patch: numbers, replace / add / remove in lists, item ids become item numbers
+        TmpMods t("minigames");
+        t.manifest("cave");
+        assets(t, "cave");
+        t.data("cave", "a.json", kGoodData);
+        t.data("cave", "0_mg.json", R"([
+          {"type":"minigame","mode":"patch","id":"base:minigame/prize_pools","lists":{"first":["base:item/173", 0]},"list_add":{"general":[0,0]},"list_remove":{"general":[3]},"num":{"special":0}},
+          {"type":"minigame","mode":"patch","id":"base:minigame/memory_match","num":{"cost":35}}])");
+        ContentDB db = baseDb();
+        ModReport r = importMods(db, t.root);
+        for (auto &e : r.errors)
+            std::cerr << e << "\n";
+        CHECK(r.ok());
+        const MinigameDef &p = db.minigameOr("base:minigame/prize_pools");
+        CHECK(p.list("first") == std::vector<int>({db.item("base:item/173")->index, 0}));
+        CHECK(p.list("general") == std::vector<int>({4, 0, 0}) && p.list("prizeA") == std::vector<int>({5}) && p.get("special") == 0);
+        CHECK(db.minigameOr("base:minigame/memory_match").get("cost") == 35);
+    }
+    { // text-id lists and the colour presets
+        TmpMods t("idlists");
+        t.manifest("cave");
+        assets(t, "cave");
+        t.data("cave", "a.json", kGoodData);
+        t.data("cave", "0_mg.json", R"([
+          {"type":"minigame","mode":"patch","id":"base:minigame/friend_pools","list_add":{"advice":["cave:str/sign","cave:str/name"]},"list_remove":{"defaultLines":["base:text/1"]},"lists":{"gifts":["base:item/173"]}},
+          {"type":"minigame","mode":"patch","id":"base:minigame/colour_machine","lists":{"presets":[9,8,7,6]},"num":{"stepTicks":2}}])");
+        ContentDB db = baseDb();
+        db.put(TextDef{"base:text/2", "x"});
+        // removing the only default line would empty it: that is the error case below; here keep one
+        ModReport r = importMods(db, t.root);
+        for (auto &e : r.errors)
+            std::cerr << e << "\n";
+        CHECK(!r.ok()); // defaultLines would be empty
+    }
+    { // the same without the emptying removal
+        TmpMods t("idlists2");
+        t.manifest("cave");
+        assets(t, "cave");
+        t.data("cave", "a.json", kGoodData);
+        t.data("cave", "0_mg.json", R"([
+          {"type":"minigame","mode":"patch","id":"base:minigame/friend_pools","list_add":{"advice":["cave:str/sign","cave:str/name"]},"lists":{"gifts":["base:item/173"]}},
+          {"type":"minigame","mode":"patch","id":"base:minigame/colour_machine","lists":{"presets":[9,8,7,6]},"num":{"stepTicks":2}}])");
+        ContentDB db = baseDb();
+        ModReport r = importMods(db, t.root);
+        for (auto &e : r.errors)
+            std::cerr << e << "\n";
+        CHECK(r.ok());
+        const MinigameDef &fp = db.minigameOr("base:minigame/friend_pools");
+        CHECK(fp.idList("advice") == std::vector<Id>({"base:text/1", "cave:str/sign", "cave:str/name"}));
+        CHECK(fp.list("gifts") == std::vector<int>({db.item("base:item/173")->index}));
+        CHECK(db.minigameOr("base:minigame/colour_machine").list("presets") == std::vector<int>({9, 8, 7, 6}) && db.minigameOr("base:minigame/colour_machine").get("stepTicks") == 2);
+    }
+    { // palettes: both forms, and an npc that uses one (a copy of a base pet in a new place, and a recoloured base pet)
+        TmpMods t("palettes");
+        t.manifest("cave");
+        assets(t, "cave");
+        t.data("cave", "a.json", kGoodData);
+        t.data("cave", "b.json", R"([
+          {"type":"npc","mode":"add","id":"cave:npc/pal_pet","based_on":"base:npc/12","area":"cave:area/main","x":100,"y":120,"palette":"cave:pal/ember"},
+          {"type":"npc","mode":"replace","id":"base:npc/12","palette":"cave:pal/mono"},
+          {"type":"palette","mode":"add","id":"cave:pal/ember","based_on":480,"set":{"3":[255,80,20],"4":null}},
+          {"type":"palette","mode":"add","id":"cave:pal/mono","colors":[null,[0,0,0],[255,255,255]]}])");
+        ContentDB db = baseDb();
+        ModReport r = importMods(db, t.root);
+        for (auto &e : r.errors)
+            std::cerr << e << "\n";
+        CHECK(r.ok());
+        const PaletteDef *em = db.palette("cave:pal/ember"), *mo = db.palette("cave:pal/mono");
+        CHECK(em && em->basedOn == 480 && em->set.size() == 2 && em->set[0].first == 3 && em->set[0].second == uint16_t((31 << 10) | (10 << 5) | 2) && em->set[1].second == 0x8000);
+        CHECK(mo && mo->colors == std::vector<uint16_t>({0x8000, 0, uint16_t((31 << 10) | (31 << 5) | 31)}) && mo->number != em->number);
+        const NpcDef *np = db.npc("cave:npc/pal_pet"), *base = db.npc("base:npc/12");
+        CHECK(np && np->palette == "cave:pal/ember" && np->x == 100 && np->y == 120 && np->befriendOdds == 7 && np->path.size() == 2 && np->speciesOrAnim == 1);
+        CHECK(np && np->area == db.area("cave:area/main")->legacyId && np->index >= 1000 && np->anim == "base:anim/139");
+        CHECK(base && base->palette == "cave:pal/mono" && base->x == 10 && base->befriendOdds == 7); // a replace keeps the rest
+    }
+    { // colour machine presets take palette ids, and a palette can name its species
+        TmpMods t("colours");
+        t.manifest("cave");
+        assets(t, "cave");
+        t.data("cave", "a.json", kGoodData);
+        t.data("cave", "b.json", R"([
+          {"type":"palette","mode":"add","id":"cave:pal/ember","based_on":480,"species":"monkey"},
+          {"type":"palette","mode":"add","id":"cave:pal/any","colors":[null,[1,2,3]]},
+          {"type":"minigame","mode":"patch","id":"base:minigame/colour_machine","list_add":{"presets":["cave:pal/ember", 7, "cave:pal/any"]},"list_remove":{"presets":[2]}}])");
+        ContentDB db = baseDb();
+        ModReport r = importMods(db, t.root);
+        for (auto &e : r.errors)
+            std::cerr << e << "\n";
+        CHECK(r.ok());
+        CHECK(db.palette("cave:pal/ember")->species == 1 && db.palette("cave:pal/any")->species == -1);
+        CHECK(db.minigameOr("base:minigame/colour_machine").list("presets") ==
+              std::vector<int>({1, 3, db.palette("cave:pal/ember")->number, 7, db.palette("cave:pal/any")->number}));
+        CHECK(db.paletteByNumber(db.palette("cave:pal/ember")->number)->id == "cave:pal/ember" && !db.paletteByNumber(5));
+    }
+    { // an object that opens a scene of a script: Z -> the "scene" interaction; patching an object to one replaces its message
+        TmpMods t("scenes");
+        t.manifest("cave");
+        assets(t, "cave");
+        t.data("cave", "a.json", kGoodData);
+        t.data("cave", "b.json", R"([
+          {"type":"object","mode":"add","id":"cave:obj/arcade","area":"cave:area/main","objtype":"cave:objtype/door","x":20,"y":30,"scene":"cave:scene/catch"},
+          {"type":"object","mode":"add","id":"cave:obj/talker","area":"cave:area/main","objtype":"cave:objtype/door","x":50,"y":30,"message":"cave:str/sign"},
+          {"type":"object","mode":"patch","id":"cave:obj/talker","area":"cave:area/main","scene":"cave:scene/other"}])");
+        ContentDB db = baseDb();
+        ModReport r = importMods(db, t.root);
+        for (auto &e : r.errors)
+            std::cerr << e << "\n";
+        CHECK(r.ok());
+        const InteractionDef *i = db.findInteraction("cave:area/main", "cave:obj/arcade");
+        CHECK(i && i->action == "scene" && i->str.at("scene") == "cave:scene/catch");
+        const InteractionDef *j = db.findInteraction("cave:area/main", "cave:obj/talker");
+        CHECK(j && j->action == "scene" && j->str.at("scene") == "cave:scene/other" && !j->str.count("text")); // the message was replaced
+        const AreaDef *a = db.area("cave:area/main");
+        const auto it = std::find_if(a->objects.begin(), a->objects.end(), [](const ObjectDef &o) { return o.id == "cave:obj/arcade"; });
+        CHECK(it != a->objects.end() && it->interactive()); // a scene object can be used without giving a reach
+        bool found = false;
+        for (const InteractionDef *d : db.allInteractions())
+            found = found || d->id == "cave:obj/arcade/interaction";
+        CHECK(found);
+    }
     // ---- mistakes are errors that say what is wrong ----
-    auto bad = [&](const char *name, const std::string &data, const char *expect)
+    auto bad =[&](const char *name, const std::string &data, const char *expect)
     {
         TmpMods t(name);
         t.manifest("cave");
@@ -318,7 +593,7 @@ int main()
     bad("patcharea", R"([{"type":"object","mode":"patch","id":"cave:obj/plain","area":"cave:area/none","x":3}])", "unknown area");
     bad("patchnoarea", R"([{"type":"object","mode":"patch","id":"cave:obj/plain","x":3}])", "'area'");
     bad("patchrange", R"([{"type":"object","mode":"patch","id":"cave:obj/plain","area":"cave:area/main","x":9999999}])", "'x' must be");
-    bad("patchboth", R"([{"type":"object","mode":"patch","id":"cave:obj/plain","area":"cave:area/main","sign":"cave:str/a","message":"cave:str/b"}])", "not both");
+    bad("patchboth", R"([{"type":"object","mode":"patch","id":"cave:obj/plain","area":"cave:area/main","sign":"cave:str/a","message":"cave:str/b"}])", "give one of");
     bad("removenone", R"([{"type":"object","mode":"remove","id":"cave:obj/none","area":"cave:area/main"}])", "has no such object");
     bad("removefields", R"([{"type":"object","mode":"remove","id":"cave:obj/plain","area":"cave:area/main","x":3}])", "takes only");
     bad("objreplace", R"([{"type":"object","mode":"replace","id":"cave:obj/plain","area":"cave:area/main"}])", "'add', 'patch' and 'remove'");
@@ -327,7 +602,61 @@ int main()
     bad("areapatchpos", R"([{"type":"area","mode":"patch","id":"cave:area/main","set_tiles":[[5,0,1]]}])", "outside the 2x2 map");
     bad("areapatchmusic", R"([{"type":"area","mode":"patch","id":"cave:area/main","music":9}])", "'music' must be 0 to 8");
     bad("areapatchfield", R"([{"type":"area","mode":"patch","id":"cave:area/main","bogus":1}])", "unknown field");
-    bad("npcarea", R"([{"type":"npc","mode":"add","id":"cave:npc/t","area":"cave:area/none","x":1,"y":1,"anim":"cave:anim/none"}])", "unknown area");
+    bad("shadowmode", R"([{"type":"objtype","mode":"add","id":"cave:objtype/s","png":"assets/door.png","shadow":"big"}])", "'shadow' must be");
+    bad("shadowboth", R"([{"type":"objtype","mode":"add","id":"cave:objtype/s","png":"assets/door.png","shadow":"none","shadow_png":"assets/door.png"}])", "goes with shadow \"picture\"");
+    bad("shadowpicnopng", R"([{"type":"objtype","mode":"add","id":"cave:objtype/s","png":"assets/door.png","shadow":"picture"}])", "needs 'shadow_png'");
+    bad("shadowanchor", R"([{"type":"objtype","mode":"add","id":"cave:objtype/s","png":"assets/door.png","shadow_anchorX":3}])", "need 'shadow_png'");
+    bad("shadowmissing", R"([{"type":"objtype","mode":"add","id":"cave:objtype/s","png":"assets/door.png","shadow_png":"assets/nope.png"}])", "missing file");
+    bad("shadowpatchnone", R"([{"type":"objtype","mode":"patch","id":"cave:objtype/none","shadow":"none"}])", "no such objtype");
+    bad("shadowpatchfield", R"([{"type":"objtype","mode":"patch","id":"cave:objtype/door","png":"assets/door.png"}])", "can only change the shadow");
+    bad("shadowpatchempty", R"([{"type":"objtype","mode":"patch","id":"cave:objtype/door"}])", "nothing to change");
+    bad("resumetype", R"([{"type":"area","mode":"add","id":"cave:area/t","tileset":"cave:tileset/rock","collision":"cave:collision/rock","map":[[0]],"resume":"yes"}])", "'resume' must be true or false");
+    bad("resumepatchtype", R"([{"type":"area","mode":"patch","id":"cave:area/main","resume":1}])", "'resume' must be true or false");
+    bad("diggabletype", R"([{"type":"area","mode":"add","id":"cave:area/t","tileset":"cave:tileset/rock","collision":"cave:collision/rock","map":[[0]],"diggable":"yes"}])", "'diggable' must be true or false");
+    bad("spotarea", R"([{"type":"spot","mode":"add","id":"cave:spot/t","area":"cave:area/none","item":"base:item/173","x":1,"y":1}])", "unknown area");
+    bad("spotitem", R"([{"type":"spot","mode":"add","id":"cave:spot/t","area":"base:area/0","item":"cave:item/none","x":1,"y":1}])", "unknown item");
+    bad("spotstate", R"([{"type":"spot","mode":"add","id":"cave:spot/t","area":"base:area/0","item":"base:item/173","x":1,"y":1,"state":"hidden"}])", "'state' must be");
+    bad("spotpos", R"([{"type":"spot","mode":"add","id":"cave:spot/t","area":"base:area/0","item":"base:item/173","x":1}])", "'x' and 'y' are required");
+    bad("spotremove", R"([{"type":"spot","mode":"remove","id":"cave:spot/none"}])", "no such spot");
+    bad("findunknown", R"([{"type":"find","mode":"add","id":"cave:find/t","item":"cave:item/none","weight":5}])", "unknown item");
+    bad("findweight", R"([{"type":"find","mode":"add","id":"cave:find/t","item":"base:item/173"}])", "'weight' is required");
+    bad("findweightrange", R"([{"type":"find","mode":"add","id":"cave:find/t","item":"base:item/173","weight":0}])", "'weight'");
+    bad("findpatchnone", R"([{"type":"find","mode":"patch","id":"base:find/none","weight":3}])", "no such find row");
+    bad("findpatchempty", R"([{"type":"find","mode":"patch","id":"base:find/265"}])", "nothing to change");
+    bad("findremovefield", R"([{"type":"find","mode":"remove","id":"base:find/265","weight":3}])", "unknown field");
+    bad("mgunknown", R"([{"type":"minigame","mode":"patch","id":"base:minigame/none","num":{"a":1}}])", "no such minigame");
+    bad("mgmode", R"([{"type":"minigame","mode":"add","id":"base:minigame/memory_match","num":{"cost":1}}])", "only support mode 'patch'");
+    bad("mgempty", R"([{"type":"minigame","mode":"patch","id":"base:minigame/memory_match"}])", "nothing to change");
+    bad("mgnumkey", R"([{"type":"minigame","mode":"patch","id":"base:minigame/memory_match","num":{"cots":1}}])", "it has: cost");
+    bad("mgnumtype", R"([{"type":"minigame","mode":"patch","id":"base:minigame/memory_match","num":{"cost":1.5}}])", "whole number");
+    bad("mglistkey", R"([{"type":"minigame","mode":"patch","id":"base:minigame/prize_pools","lists":{"firts":[1]}}])", "it has: first");
+    bad("mgempty2", R"([{"type":"minigame","mode":"patch","id":"base:minigame/prize_pools","lists":{"prizeA":[]}}])", "cannot be left empty");
+    bad("mgemptyrm", R"([{"type":"minigame","mode":"patch","id":"base:minigame/prize_pools","list_remove":{"prizeA":[5]}}])", "cannot be left empty");
+    bad("mgitem", R"([{"type":"minigame","mode":"patch","id":"base:minigame/prize_pools","list_add":{"first":["cave:item/none"]}}])", "unknown item");
+    bad("mgrange", R"([{"type":"minigame","mode":"patch","id":"base:minigame/prize_pools","list_add":{"first":[99999]}}])", "not an item number");
+    bad("mgentry", R"([{"type":"minigame","mode":"patch","id":"base:minigame/prize_pools","list_add":{"first":[-1]}}])", "every entry");
+    bad("mgtextunknown", R"([{"type":"minigame","mode":"patch","id":"base:minigame/friend_pools","list_add":{"advice":["cave:str/none"]}}])", "unknown text id");
+    bad("mgtextnum", R"([{"type":"minigame","mode":"patch","id":"base:minigame/friend_pools","list_add":{"advice":[5]}}])", "not a text id");
+    bad("mgtextempty", R"([{"type":"minigame","mode":"patch","id":"base:minigame/friend_pools","list_remove":{"advice":["base:text/1"]}}])", "cannot be left empty");
+    bad("mggiftitem", R"([{"type":"minigame","mode":"patch","id":"base:minigame/friend_pools","list_add":{"gifts":[99999]}}])", "not an item number");
+    bad("palboth", R"([{"type":"palette","mode":"add","id":"cave:pal/t","based_on":480,"colors":[[1,2,3]]}])", "exactly one of");
+    bad("palnone", R"([{"type":"palette","mode":"add","id":"cave:pal/t"}])", "exactly one of");
+    bad("palbase", R"([{"type":"palette","mode":"add","id":"cave:pal/t","based_on":5}])", "ROM palette number");
+    bad("palsetidx", R"([{"type":"palette","mode":"add","id":"cave:pal/t","based_on":480,"set":{"x":[1,2,3]}}])", "set index");
+    bad("palsetrange", R"([{"type":"palette","mode":"add","id":"cave:pal/t","based_on":480,"set":{"3":[1,2,300]}}])", "[r, g, b]");
+    bad("palsetcolors", R"([{"type":"palette","mode":"add","id":"cave:pal/t","colors":[[1,2,3]],"set":{"1":[1,2,3]}}])", "'set' goes with 'based_on'");
+    bad("palcolors", R"([{"type":"palette","mode":"add","id":"cave:pal/t","colors":[]}])", "1 to 256");
+    bad("npcpalette", R"([{"type":"npc","mode":"replace","id":"base:npc/12","palette":"cave:pal/none"}])", "palette record");
+    bad("npcbasedon", R"([{"type":"npc","mode":"add","id":"cave:npc/t","based_on":"base:npc/none"}])", "unknown npc");
+    bad("npcbasedonmode", R"([{"type":"npc","mode":"replace","id":"base:npc/12","based_on":"base:npc/12"}])", "only goes with mode add");
+    bad("palspecies", R"([{"type":"palette","mode":"add","id":"cave:pal/t","based_on":480,"species":"cat"}])", "'species' must be");
+    bad("colourunknown", R"([{"type":"minigame","mode":"patch","id":"base:minigame/colour_machine","list_add":{"presets":["cave:pal/none"]}}])", "unknown palette");
+    bad("colourentry", R"([{"type":"minigame","mode":"patch","id":"base:minigame/colour_machine","list_add":{"presets":[5000]}}])", "palette id or an offset");
+    bad("scenesign", R"([{"type":"object","mode":"patch","id":"cave:obj/plain","area":"cave:area/main","sign":"cave:str/a","scene":"cave:scene/x"}])", "give one of");
+    bad("scenemsg", R"([{"type":"object","mode":"patch","id":"cave:obj/plain","area":"cave:area/main","message":"cave:str/a","scene":"cave:scene/x"}])", "give one of");
+    bad("sceneid", R"([{"type":"object","mode":"add","id":"cave:obj/t","area":"cave:area/main","objtype":"cave:objtype/door","x":1,"y":1,"scene":"has space"}])", "scene id");
+    bad("scenetype", R"([{"type":"object","mode":"add","id":"cave:obj/t","area":"cave:area/main","objtype":"cave:objtype/door","x":1,"y":1,"scene":5}])", "'scene' must be a string");
+    bad("npcarea",R"([{"type":"npc","mode":"add","id":"cave:npc/t","area":"cave:area/none","x":1,"y":1,"anim":"cave:anim/none"}])", "unknown area");
 
     if (g_fail)
         std::cerr << g_fail << " check(s) failed\n";

@@ -8,6 +8,8 @@
 //   palette @ word 0x9237 + (palId-0x101)*4: [0]>>8 = colour count, [3] = word offset into bank 0x20000
 #pragma once
 #include "rom.hpp"
+#include "../content/records.hpp"
+#include <map>
 #include <algorithm>
 #include <vector>
 
@@ -54,7 +56,19 @@ inline std::vector<uint8_t> unpackPixels(const Rom& rom, uint32_t wordAddr, int 
 
 struct Palette { std::vector<uint16_t> colors; };
 
+// The colours of the mods' palettes, by palette number (resolveModPalettes fills it); readPalette looks here for numbers of a mod.
+inline std::map<int, Palette>& modPalettes() {
+    static std::map<int, Palette> m;
+    return m;
+}
+
 inline bool readPalette(const Rom& rom, int id, Palette& out) {
+    if (isModPalette(id)) {
+        const auto it = modPalettes().find(id);
+        if (it == modPalettes().end()) return false;
+        out = it->second;
+        return true;
+    }
     if (id <= 0x100) return false;
     const uint32_t e = kPaletteTable + uint32_t(id - 0x101) * 4;
     if (e + 4 > rom.sizeWords()) return false;

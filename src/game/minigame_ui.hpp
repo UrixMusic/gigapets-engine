@@ -318,7 +318,11 @@ private:
         {
             auto rr = [this](int lo, int hi)
             { return e_.randIn(lo, hi - 1); };
-            swift_.start(gp::buildUniqueRandomSet(10, 2, rr), speed);
+            const gp::MinigameDef &pools = e_.db.minigameOr("base:minigame/prize_pools");
+            std::vector<int> picks = gp::buildUniqueRandomSet(10, 2, rr, pools.list("first"), pools.list("general"));
+            if (picks.size() < 10) // a mod's pools cannot make 10 different items: play with the base game's
+                picks = gp::buildUniqueRandomSet(10, 2, rr);
+            swift_.start(std::move(picks), speed);
             return;
         }
         petX = mg.get("petX", 0x628) + e_.randIn(-mg.get("petXJitter", 10), mg.get("petXJitter", 10));
@@ -355,15 +359,17 @@ private:
         petX = w.x;
         petY = w.y;
         std::vector<int> items;
+        const gp::MinigameDef &pools = e_.db.minigameOr("base:minigame/prize_pools"); // lists a mod may have changed
         if (w.cost >= 100)
         {
-            const int special = gp::ThreeInARow::kPrizeSpecial;
+            const int special = pools.get("special", gp::ThreeInARow::kPrizeSpecial);
             const bool includeSpecial = e_.player.itemCount(gp::legacyItemId(special)) == 0 &&
                                         !e_.player.hasFlag(gp::offeredKey(special));
-            items = gp::ThreeInARow::pickPrizeItems(n, includeSpecial, rr);
+            const gp::ThreeInARow::PrizeTiers tiers{pools.list("prizeA"), pools.list("prizeB"), pools.list("prizeC"), pools.list("prizeD"), special};
+            items = gp::ThreeInARow::pickPrizeItems(n, includeSpecial, rr, tiers);
         }
         else
-            items = gp::ThreeInARow::pickItems(n, rr);
+            items = gp::ThreeInARow::pickItems(n, rr, pools.list("first"), pools.list("general"));
         three_.start(std::move(items), periods, gp::ThreeInARow::kMoneyItem, rr);
     }
 
@@ -400,7 +406,10 @@ private:
 
         // BuildUniqueRandomSet(out, 6, 2): 6 DISTINCT items, the first 2 from kPoolFirst, the rest from kPoolGeneral,
         // then shuffled (item_pools.hpp, tables read from the ROM and matching the MAME dump).
-        std::vector<int> items = gp::buildUniqueRandomSet(gp::MemoryMatch::kPairs, 2, rr);
+        const gp::MinigameDef &pools = e_.db.minigameOr("base:minigame/prize_pools");
+        std::vector<int> items = gp::buildUniqueRandomSet(gp::MemoryMatch::kPairs, 2, rr, pools.list("first"), pools.list("general"));
+        if (int(items.size()) < gp::MemoryMatch::kPairs) // a mod's pools cannot make 6 different items: play with the base game's
+            items = gp::buildUniqueRandomSet(gp::MemoryMatch::kPairs, 2, rr);
 
         const int flipFrames = int(e_.animRefById("base:anim/" + std::to_string(gp::MemoryMatch::kFlipAnim) + "@28c").size());
         memory_.start(items, maxWrong, flipFrames, rr);

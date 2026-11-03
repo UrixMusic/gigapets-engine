@@ -1,4 +1,5 @@
 #pragma once
+#include "../engine/tuning.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <string>
@@ -69,7 +70,7 @@ namespace gp
         if (s.has("questsCompleted"))
             p.questsCompleted = std::max(1, s.getInt("questsCompleted", 1)); // the ROM's counter starts at 1
         if (s.has("money"))
-            p.money = std::clamp(s.getInt("money"), 0, kMaxMoney);
+            p.money = std::clamp(s.getInt("money"), 0, tuning().maxMoney);
         if (s.has("illness"))
             p.illnessId = std::clamp(s.getInt("illness", kHealthy), 0, kHealthy);
         if (s.has("tricksKnown"))
@@ -88,13 +89,13 @@ namespace gp
         if (s.has("species"))
             p.species = std::clamp(s.getInt("species"), 0, 2);
         if (s.has("colour"))
-            p.baseColour = s.getInt("colour");
-        p.appearance = s.has("appearance") ? s.getInt("appearance") : p.baseColour;
+            p.baseColour = s.getIntStrict("colour", p.baseColour);
+        p.appearance = s.has("appearance") ? s.getIntStrict("appearance", p.baseColour) : p.baseColour;
         const std::vector<int> per = s.getList("personality"), care = s.getList("care");
         for (size_t i = 0; i < per.size() && i < p.personality.size(); ++i)
-            p.personality[i] = std::clamp(per[i], 0, kMaxPersonality);
+            p.personality[i] = std::clamp(per[i], 0, tuning().maxPersonality);
         for (size_t i = 0; i < care.size() && i < p.care.size(); ++i)
-            p.care[i] = std::clamp(care[i], 0, kMaxCare);
+            p.care[i] = std::clamp(care[i], 0, tuning().maxCare);
 
         if (s.has("friendIds")) // v3
             p.friended = s.getIdList("friendIds");

@@ -83,6 +83,11 @@ namespace gp
                 npcOrder_.push_back(k);
             npcs_[k] = std::move(n);
         }
+        NpcDef *npcMutable(const Id &id)
+        {
+            auto i = npcs_.find(id);
+            return i == npcs_.end() ? nullptr : &i->second;
+        }
         bool hasNpc(const Id &id) const { return npcs_.count(id) > 0; }
         int npcCount() const { return int(npcs_.size()); }
         bool eraseNpc(const Id &id)
@@ -168,6 +173,13 @@ namespace gp
             const std::string k = d.area + "|" + d.object;
             interactions_[k] = std::move(d);
         }
+        std::vector<const InteractionDef *> allInteractions() const
+        {
+            std::vector<const InteractionDef *> v;
+            for (const auto &kv : interactions_)
+                v.push_back(&kv.second);
+            return v;
+        }
         const InteractionDef *findInteraction(const Id &area, const Id &object) const
         {
             auto i = interactions_.find(area + "|" + object);
@@ -250,6 +262,78 @@ namespace gp
                 spotOrder_.push_back(k);
             spots_[k] = std::move(s);
         }
+        void put(FindWeightDef f)
+        {
+            const Id k = f.id;
+            if (!finds_.count(k))
+                findOrder_.push_back(k);
+            finds_[k] = std::move(f);
+        }
+        const FindWeightDef *findWeight(const Id &id) const
+        {
+            const auto it = finds_.find(id);
+            return it == finds_.end() ? nullptr : &it->second;
+        }
+        FindWeightDef *findWeightMutable(const Id &id)
+        {
+            const auto it = finds_.find(id);
+            return it == finds_.end() ? nullptr : &it->second;
+        }
+        void eraseFindWeight(const Id &id)
+        {
+            finds_.erase(id);
+            findOrder_.erase(std::remove(findOrder_.begin(), findOrder_.end(), id), findOrder_.end());
+        }
+        // The random-find table in the order it was built (the base game's rows first, then the mods').
+        std::vector<const FindWeightDef *> findWeights() const
+        {
+            std::vector<const FindWeightDef *> v;
+            for (const Id &k : findOrder_)
+                v.push_back(&finds_.at(k));
+            return v;
+        }
+        // A mod's palette: its number follows the order they were added in.
+        void put(PaletteDef p)
+        {
+            const auto it = palettes_.find(p.id);
+            if (it != palettes_.end())
+                p.number = it->second.number;
+            else
+            {
+                p.number = kModPaletteBase + int(paletteOrder_.size()) + 1;
+                paletteOrder_.push_back(p.id);
+            }
+            palettes_[p.id] = std::move(p);
+        }
+        const PaletteDef *palette(const Id &id) const
+        {
+            const auto it = palettes_.find(id);
+            return it == palettes_.end() ? nullptr : &it->second;
+        }
+        const PaletteDef *paletteByNumber(int number) const
+        {
+            for (const Id &k : paletteOrder_)
+                if (palettes_.at(k).number == number)
+                    return &palettes_.at(k);
+            return nullptr;
+        }
+        std::vector<const PaletteDef *> allPalettes() const
+        {
+            std::vector<const PaletteDef *> v;
+            for (const Id &k : paletteOrder_)
+                v.push_back(&palettes_.at(k));
+            return v;
+        }
+        const FixedSpotDef *spot(const Id &id) const
+        {
+            const auto it = spots_.find(id);
+            return it == spots_.end() ? nullptr : &it->second;
+        }
+        void eraseSpot(const Id &id)
+        {
+            spots_.erase(id);
+            spotOrder_.erase(std::remove(spotOrder_.begin(), spotOrder_.end(), id), spotOrder_.end());
+        }
         std::vector<const FixedSpotDef *> fixedSpotsIn(int area) const
         {
             std::vector<const FixedSpotDef *> v;
@@ -295,6 +379,11 @@ namespace gp
             minigames_[k] = std::move(m);
         }
         const MinigameDef *minigame(const Id &id) const
+        {
+            auto i = minigames_.find(id);
+            return i == minigames_.end() ? nullptr : &i->second;
+        }
+        MinigameDef *minigameMutable(const Id &id)
         {
             auto i = minigames_.find(id);
             return i == minigames_.end() ? nullptr : &i->second;
@@ -374,6 +463,10 @@ namespace gp
         std::map<Id, TextDef> texts_;
         std::map<Id, FontDef> fonts_;
         std::map<Id, FixedSpotDef> spots_;
+        std::map<Id, PaletteDef> palettes_;
+        std::vector<Id> paletteOrder_;
+        std::map<Id, FindWeightDef> finds_;
+        std::vector<Id> findOrder_;
         std::vector<Id> spotOrder_;
         std::vector<QuestDef> quests_;
         QuestRomTables questTables_;

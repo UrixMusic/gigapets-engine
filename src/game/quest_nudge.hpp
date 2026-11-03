@@ -7,6 +7,7 @@
 // 180 s, the timer restarted. The timer is restarted with a 30 s limit by DeclineQuest and by every area change that happens
 // under the same conditions (Game_ProcessTick 0x01af62).
 #pragma once
+#include "../engine/tuning.hpp"
 
 namespace gp
 {
@@ -19,13 +20,13 @@ namespace gp
     struct QuestNudge
     {
         long start = 0;
-        double limit = kNudgeFirstSeconds;
+        double limit = tuning().nudgeFirstSeconds;
 
         // Restart the timer with the first (30 s) limit.
         void restart(long nowTicks)
         {
             start = nowTicks;
-            limit = kNudgeFirstSeconds;
+            limit = tuning().nudgeFirstSeconds;
         }
         static bool applies(int questsCompleted, int questPhase) { return questsCompleted == kNudgeQuestsCompleted && questPhase == 0; }
 
@@ -38,7 +39,7 @@ namespace gp
             if (double(nowTicks - start) / kGameTicksPerSecond <= limit)
                 return false;
             start = nowTicks;
-            limit = kNudgeRepeatSeconds;
+            limit = tuning().nudgeRepeatSeconds;
             return true;
         }
     };

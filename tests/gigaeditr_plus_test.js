@@ -197,10 +197,77 @@ check('area look, full objtype records', () => {
   assert.deepStrictEqual(recs[1], { type: 'objtype', mode: 'add', id, png: 'assets/tree.png', anchorX: 3, anchorY: 9, dx: 0, dy: 1, ground: true });
 });
 
+check('shadows: patch a base type, edit an own type in place', () => {
+  const recs = [];
+  let W = G.buildWorld(base, wr(recs));
+  const t = Object.keys(W.objtypes)[0];
+  G.edSetShadow(recs, t, { mode: 'none' });
+  assert.deepStrictEqual(recs, [{ type: 'objtype', mode: 'patch', id: t, shadow: 'none' }]);
+  G.edSetShadow(recs, t, { png: 'assets/s.png', anchorY: 3 });
+  assert.deepStrictEqual(recs, [{ type: 'objtype', mode: 'patch', id: t, shadow_png: 'assets/s.png', shadow_anchorY: 3 }]);
+  W = G.buildWorld(base, wr(recs));
+  assert(W.objtypes[t].shadow === 'picture' && W.objtypes[t].shadowPng === 'assets/s.png' && W.objtypes[t].shadowSrc === 'm' && W.objtypes[t].shadowAnchorY === 3);
+  G.edSetShadow(recs, t, { mode: 'default' }); // back to the game's own: the patch says so explicitly
+  assert.strictEqual(recs[0].shadow, 'default');
+  const own = []; const id = G.edAddObjTypeFull(own, W, 'm', 'tree', 'assets/tree.png', {});
+  G.edSetShadow(own, id, { mode: 'auto' }); assert.strictEqual(own.length, 1); assert.strictEqual(own[0].shadow, 'auto');
+  G.edSetShadow(own, id, { mode: 'default' }); assert(!('shadow' in own[0]) && own.length === 1);
+  G.edSetShadow(own, id, { png: 'assets/s.png' }); assert.strictEqual(own[0].shadow_png, 'assets/s.png');
+});
+
+check('area fields: resume and music', () => {
+  const recs = [];
+  G.edSetAreaField(recs, 'base:area/0', 'resume', true);
+  assert.deepStrictEqual(recs, [{ type: 'area', mode: 'patch', id: 'base:area/0', resume: true }]);
+  let W = G.buildWorld(base, wr(recs));
+  assert.strictEqual(W.areas['base:area/0'].resume, true);
+  assert(!W.areas['base:area/1'].resume);
+  G.edSetAreaField(recs, 'base:area/0', 'music', 3);
+  G.edSetAreaField(recs, 'base:area/0', 'resume', undefined);
+  assert.deepStrictEqual(recs, [{ type: 'area', mode: 'patch', id: 'base:area/0', music: 3 }]);
+  G.edSetAreaField(recs, 'base:area/0', 'music', undefined); // nothing left: the patch goes away
+  assert.deepStrictEqual(recs, []);
+  const own = [{ type: 'area', mode: 'add', id: 'm:area/x', tileset: 't', collision: 'c', map: [[0]] }];
+  G.edSetAreaField(own, 'm:area/x', 'resume', true); // an area the editor made keeps it in its own record
+  assert.strictEqual(own.length, 1); assert.strictEqual(own[0].resume, true);
+});
+
 check('mod order honours load_after', () => {
   const ms = [{ id: 'b', manifest: { load_after: ['z'] } }, { id: 'z', manifest: {} }, { id: 'a', manifest: {} }];
   assert.deepStrictEqual(G.orderMods(ms).map(m => m.id), ['a', 'z', 'b']);
 });
 
+
+check('colour words round-trip and records', () => {
+  for (let v = 0; v < 32; v++) { const w = (v << 10) | (v << 5) | v; assert.strictEqual(G.rgbToWord(G.wordToRgbRound(w)), w, 'round trip ' + v); }
+  assert.deepStrictEqual(G.wordToRgb(31 << 10), [255, 0, 0]);
+  assert.strictEqual(G.wordToRgb(0x8000), null); assert.strictEqual(G.rgbToWord(null), 0x8000);
+  const baseWords = [0x8000, 31 << 10, 31 << 5, 31];
+  const words = [0x8000, 31 << 10, 0x8000, 12];
+  assert.deepStrictEqual(G.paletteSet(baseWords, words), { 2: null, 3: G.wordToRgbRound(12) });
+  const recs = [{ type: 'npc', mode: 'replace', id: 'base:npc/1', palette: 'm:pal/a' }];
+  const W = G.buildWorld(base, []);
+  const id = G.edSavePalette(recs, W, 'm', { slug: 'a', basedOn: 481, baseWords, words, species: 1, offer: true });
+  assert.strictEqual(id, 'm:pal/a');
+  assert.deepStrictEqual(recs[1], { type: 'palette', mode: 'add', id: 'm:pal/a', based_on: 481, set: { 2: null, 3: G.wordToRgbRound(12) }, species: 'monkey' });
+  assert.deepStrictEqual(recs[2], { type: 'minigame', mode: 'patch', id: 'base:minigame/colour_machine', list_add: { presets: ['m:pal/a'] } });
+  const id2 = G.edSavePalette(recs, { palettes: { 'm:pal/a': {} } }, 'm', { slug: 'a', basedOn: 481, baseWords, words: baseWords, species: -1, offer: true }); // the name is taken
+  assert.strictEqual(id2, 'm:pal/a2'); assert.deepStrictEqual(recs[2].list_add.presets, ['m:pal/a', 'm:pal/a2']);
+  G.edSavePalette(recs, W, 'm', { id: 'm:pal/a', slug: 'a', basedOn: 481, baseWords, words: baseWords, species: -1, offer: false }); // edit in place, out of the machine
+  assert.strictEqual(recs.filter(r => r.type === 'palette' && r.id === 'm:pal/a').length, 1);
+  assert.deepStrictEqual(recs.find(r => r.id === 'm:pal/a'), { type: 'palette', mode: 'add', id: 'm:pal/a', based_on: 481 });
+  assert.deepStrictEqual(G.offeredIds(recs), ['m:pal/a2']);
+  assert.deepStrictEqual(G.paletteWords({ based_on: 481, set: { 2: null } }, { 481: baseWords }), [0x8000, 31 << 10, 0x8000, 31]);
+  assert.strictEqual(G.paletteWords({ colors: [[1, 2, 3]] }, { 481: baseWords }), null);
+  G.edDeletePalette(recs, 'm:pal/a');
+  assert(!recs.some(r => r.id === 'm:pal/a' && r.type === 'palette') && recs[0].palette === undefined);
+  G.edDeletePalette(recs, 'm:pal/a2'); // the machine record goes with its last entry
+  assert(!recs.some(r => r.type === 'minigame' || r.type === 'palette'));
+});
+
+check('palette records show in the world', () => {
+  const W = G.buildWorld(base, [{ id: 'm', files: [{ name: 'a.json', records: [{ type: 'palette', mode: 'add', id: 'm:pal/x', based_on: 481 }] }] }]);
+  assert(W.palettes['m:pal/x'] && W.palettes['m:pal/x'].src === 'm');
+});
 if (fails) { console.error(fails + ' failed'); process.exit(1); }
 console.log('gigaeditr_plus_test: all passed');

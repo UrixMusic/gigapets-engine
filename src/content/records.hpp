@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <utility>
 
 namespace gp
@@ -13,6 +14,11 @@ namespace gp
     // UI sprite numbers at or above this never come from the ROM: the art is registered in the db by a mod.
     constexpr int kModSpriteBase = 0x10000;
     constexpr bool isModSprite(int n) { return n >= kModSpriteBase; }
+
+    // Palette numbers at or above this belong to a mod's palette records (PaletteDef); they are handed out in load order, so they
+    // are only good for one session. Saves must keep the palette's id, never its number.
+    constexpr int kModPaletteBase = 0x20000;
+    constexpr bool isModPalette(int n) { return n >= kModPaletteBase; }
 
     using Id = std::string;
 
@@ -74,6 +80,19 @@ namespace gp
         std::vector<StarterItem> starterItems;
     };
 
+    // A colour set a mod adds for sprites that come from the ROM (the roaming pets). Either `colors` (a full list, 5-5-5 words, 0x8000
+    // = transparent) or `basedOn` (a ROM palette number) with `set` (index, word) changes on top of it. `number` is what the sprite
+    // code is given (kModPaletteBase + order); the colours are filled in once the ROM is at hand (resolveModPalettes).
+    struct PaletteDef
+    {
+        Id id;
+        int basedOn = -1;
+        std::vector<std::pair<int, uint16_t>> set;
+        std::vector<uint16_t> colors;
+        int number = 0;
+        int species = -1; // -1 = any; 0 dog, 1 monkey, 2 panda: the colour machine only offers it to that species
+    };
+
     struct NpcDef
     {
         Id id;
@@ -97,6 +116,7 @@ namespace gp
         Id sickIdleAnim, sadIdleAnim; // the idles for behaviorFlags bit 1 (sick: PlayIdleAnim_FlagB) and bit 2 (sad: _FlagA)
         std::vector<Id> lines; // rotating dialogue for stationary NPCs: 3 text ids
         int portraitPalette = 0x28c;
+        Id palette; // a mod's PaletteDef: recolours the roaming pet's animations (applyNpcPalettes); empty = the ROM's own colours
     };
 
     // Classifier rules from ClassifyReactionCategory (player side) / ClassifyCompatibilityReaction (animal side).
@@ -137,10 +157,19 @@ namespace gp
         std::string handler;
         std::map<std::string, int> num;
         std::map<std::string, std::vector<int>> lists;
+        std::map<std::string, std::vector<Id>> idLists; // lists of text ids (a mod's too), e.g. a friend's advice lines
+        std::set<std::string> paletteLists;             // the keys of `lists` whose entries are colours: an offset from the species' base colour, or a mod palette's number
+        std::set<std::string> itemLists;                // the keys of `lists` whose entries are item numbers (a mod's must exist)
         int get(const std::string &k, int fallback = 0) const
         {
             auto i = num.find(k);
             return i == num.end() ? fallback : i->second;
+        }
+        const std::vector<Id> &idList(const std::string &k) const
+        {
+            static const std::vector<Id> none;
+            auto i = idLists.find(k);
+            return i == idLists.end() ? none : i->second;
         }
         const std::vector<int> &list(const std::string &k) const
         {
@@ -310,6 +339,11 @@ namespace gp
         bool hasArt = false, hasMarker = false;
         SpriteFrame art; // draw at (x - anchorX + dx, y - anchorY + dy)
         CollisionMask mask;
+        // The ground shadow. Default = the ROM's own marker for a base type, none for a mod's type.
+        enum Shadow { ShadowDefault = 0, ShadowNone = 1, ShadowAuto = 2, ShadowPicture = 3 };
+        int shadow = ShadowDefault; // Auto = the blob DrawShadow picks by the art's width (as for pets and items)
+        // ShadowPicture: the picture is the db anim shadowAnim(id), drawn with its anchor on the object's feet
+        static Id shadowAnim(const Id &typeId) { return typeId + "#shadow"; }
     };
 
     // A placed object. No fixed count per area: mods can add as many as they like.
@@ -341,6 +375,8 @@ namespace gp
         Id tileset, collision;
         int collisionYOffset = 0; // the game adds a RAM word (0x1afa) to y before testing
         int music = -1;           // a song (0..8) to start on entering; -1 = the zone's own (base areas) or keep the current one
+        bool resume = false;      // a save made here starts here next time (the base game never does; a mod area can ask for it)
+        bool diggable = false;    // Z on bare ground digs (the base game's outdoor areas 0..9); a mod area can ask for it
         int marginL = 0, marginR = 0, marginT = 0, marginB = 0;
         std::vector<ObjectDef> objects;  // import keeps ROM order (y-sorted); stable-sort by y after mods are applied
         std::vector<IPoint> spawnPoints; // flowers / random items
@@ -361,6 +397,15 @@ namespace gp
         bool notOffered = false;    // skip once returned to the King
         bool notLegacyFlag = false; // skip once the legacy collected flag is set
         Id spawnOnGrantItem;        // empty = none; also spawn at once when this item is granted in `area`
+    };
+
+    // One row of the table a random dig find is drawn from (the ROM's PickRandomEventItemId table): the item turns up with
+    // chance weight / (sum of all weights), after the dud roll (tuning.findDudPercent).
+    struct FindWeightDef
+    {
+        Id id;
+        Id item;
+        int weight = 1;
     };
 
     // A door. Replaces the findStoryExit / findInteractExit if-chains: a mod adds a door by adding a record.

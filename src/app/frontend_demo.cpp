@@ -49,6 +49,7 @@ static void feVoice(int species, int category, int volume = 0xbe) { gp::audio().
 #include "../game/dialogue.hpp"
 #include "app_context.hpp"
 #include "../loaders/import.hpp" // ContentDB + importRom: that is where the fonts live
+#include "../mods/mod_loader.hpp" // the mods' palettes: the slot pets wear their saved colours
 #include "../game/text_draw.hpp"
 #include <memory>
 
@@ -1473,6 +1474,10 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             std::printf("front end: loading fonts (importRom)...\n");
             uiDb = std::make_unique<gp::ContentDB>();
             gp::importRom(rom, *uiDb, 0);
+            // A pet that wears a mod's colour needs that palette to be drawn in the slot list: load the mods (their palette records are what
+            // matter here) and fill the palette registry the sprite code looks mod colours up in. The game does the same when it starts.
+            gp::importMods(*uiDb, "mods");
+            gp::resolveModPalettes(rom, *uiDb);
             // Every (font style, palette) pair the front end draws with, imported up front so the db never
             // changes once a TextDrawer holds a pointer into it. drawTextBox's first two arguments are
             // exactly (fontIndex, palette): the palette is baked into the glyphs by importFont.
@@ -1530,6 +1535,11 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                 slotSpecies[i] = si.full ? si.species : -1;
                 const int sp = std::clamp(si.species, 0, 2);
                 slotColour[i] = si.appearance >= 0 ? si.appearance : menu.colour[sp]; // old saves: random menu colour
+                if (!si.appearanceId.empty()) // a mod's colour: its number is only known once the mods are loaded
+                    if (const gp::PaletteDef *pd = uiDb->palette(si.appearanceId); pd && gp::modPalettes().count(pd->number))
+                        slotColour[i] = pd->number;
+                if (si.full)
+                    std::printf("slot %d: %s, colour 0x%x%s%s\n", i, si.name.c_str(), slotColour[i], si.appearanceId.empty() ? "" : " of ", si.appearanceId.c_str());
             }
         };
         refreshSlots();

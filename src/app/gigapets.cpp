@@ -73,7 +73,9 @@ int main(int argc, char **argv)
                 gp::Rom rom(romPath);
                 gp::ContentDB db;
                 gp::importRom(rom, db, 0);
-                const std::string why = gp::exportBase(db, argv[i + 1]);
+                std::string why = gp::exportBase(db, argv[i + 1]);
+                if (why.empty())
+                    why = gp::exportPets(db, rom, argv[i + 1]);
                 if (!why.empty())
                 {
                     std::fprintf(stderr, "export failed: %s\n", why.c_str());

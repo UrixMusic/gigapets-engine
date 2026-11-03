@@ -5,6 +5,7 @@
 //
 // Timings: MEASURED = from one MAME run of an angry encounter (frames / 2). PLACEHOLDER = a guess, not measured.
 #pragma once
+#include "../engine/tuning.hpp"
 #include "encounter.hpp"
 #include <cstdio>
 #include <functional>
@@ -111,7 +112,7 @@ namespace gp
                     enter(6);
                 break;
             case 6: // pick the side the pet is already on
-                targetX_ = h.npcX() < h.petX() ? h.npcX() + kApproachDX : h.npcX() - kApproachDX;
+                targetX_ = h.npcX() < h.petX() ? h.npcX() + tuning().approachDX : h.npcX() - tuning().approachDX;
                 enter(7);
                 break;
             case 7: // walk to the side; the idle timer started in step 2 makes the pet give up
@@ -191,14 +192,14 @@ namespace gp
                 if (ac == 4 || ac == 5) // negative: walk away from the NPC. (AdjustCareStat(Happiness, ?): delta not read yet)
                 {
                     timer_ = 0;
-                    targetX_ = nx < px ? px + kAwayDX : px - kAwayDX;
+                    targetX_ = nx < px ? px + tuning().awayDX : px - tuning().awayDX;
                     outcome_ = Outcome::Negative;
                     enter(0x14);
                 }
                 else if ((ac == 1 || ac == 2) && pc != 4 && pc != 5) // friend
                 {
                     timer_ = 0;
-                    targetX_ = nx < px ? px - kCloserDX : px + kCloserDX;
+                    targetX_ = nx < px ? px - tuning().closerDX : px + tuning().closerDX;
                     outcome_ = Outcome::Friend;
                     const int friends = h.markFriended();
                     // A new friend drops item 0xa3 where the pet is about to stand, 10 px below it
@@ -291,7 +292,7 @@ namespace gp
         }
 
     private:
-        bool gaveUp() const { return timer_ >= kGiveUpTicks; }
+        bool gaveUp() const { return timer_ >= tuning().giveUpTicks; }
         void enter(int s)
         {
             step_ = s;

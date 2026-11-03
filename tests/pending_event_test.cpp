@@ -51,6 +51,20 @@ static void testItemTable() {
     CHECK(pickRandomEventItemId(script({16, 25})) == 6);
     CHECK(pickRandomEventItemId(script({16, 242})) == 267);
 
+    { // a table of the mods' own: the same roll order, an empty table only duds, and the dud chance is a tuning value
+        const std::vector<WeightedItem> t{{7, 3}, {9, 1}};
+        CHECK(pickRandomEventItemId(script({16, 0}), t) == 7 && pickRandomEventItemId(script({16, 2}), t) == 7);
+        CHECK(pickRandomEventItemId(script({16, 3}), t) == 9);
+        CHECK(pickRandomEventItemId(script({16, 0}), std::vector<WeightedItem>{}) == 0);
+        tuning().findDudPercent = 0;
+        CHECK(pickRandomEventItemId(script({1, 0}), t) == 7); // never a dud
+        tuning().findDudPercent = 100;
+        CHECK(pickRandomEventItemId(script({100}), t) == 0);  // always one
+        tuning().findDudPercent = 15;
+        WorldItems w;
+        w.setFindTable({{42, 5}});
+        CHECK(w.findTable().size() == 1 && w.findTable()[0].item == 42);
+    }
     std::mt19937 g(42);
     const RandFn rnd = makeRandFn(g);
     const int N = 100000;

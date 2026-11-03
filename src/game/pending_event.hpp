@@ -14,6 +14,7 @@
 //  * Events are keyed by AreaKey = AreaDef::legacyId for now, like NpcDef::area. Mod areas with
 //    legacyId -1 would all share one key; switch AreaKey to an Id (or a runtime index) when areas migrate.
 #pragma once
+#include "../engine/tuning.hpp"
 #include <algorithm>
 #include <array>
 #include <climits>
@@ -89,18 +90,29 @@ namespace gp
     inline constexpr std::array<WeightedItem, 15> kEventItemTable = {{{2, 25}, {6, 25}, {10, 25}, {14, 25}, {3, 5}, {7, 5}, {11, 5}, {15, 5}, {4, 2}, {8, 2}, {12, 2}, {16, 2}, {265, 100}, {266, 5}, {267, 10}}};
     constexpr int kEventItemTotalWeight = 243;
 
-    inline int pickRandomEventItemId(const RandFn &rnd)
+    // The table is whatever the db holds after the mods (walk.cpp builds it with WorldItems::setFindTable); an empty one only duds.
+    inline int pickRandomEventItemId(const RandFn &rnd, const std::vector<WeightedItem> &table)
     {
-        if (rnd(1, 101) < 16)
+        if (rnd(1, 101) < tuning().findDudPercent + 1)
             return 0;
-        int r = rnd(0, kEventItemTotalWeight);
-        for (const WeightedItem &w : kEventItemTable)
+        long long total = 0;
+        for (const WeightedItem &w : table)
+            total += w.weight;
+        if (total <= 0)
+            return 0;
+        int r = rnd(0, int(total));
+        for (const WeightedItem &w : table)
         {
             if (r < w.weight)
                 return w.item;
             r -= w.weight;
         }
-        return kEventItemTable.back().item;
+        return table.back().item;
+    }
+    inline int pickRandomEventItemId(const RandFn &rnd)
+    {
+        static const std::vector<WeightedItem> base(kEventItemTable.begin(), kEventItemTable.end());
+        return pickRandomEventItemId(rnd, base);
     }
 
     struct DigResult
@@ -176,7 +188,13 @@ namespace gp
 
     class WorldItems
     {
+        std::vector<WeightedItem> finds_{kEventItemTable.begin(), kEventItemTable.end()}; // the random-find table
+
     public:
+        // The table random finds are drawn from (item number, weight); the game builds it from the db's find records.
+        void setFindTable(std::vector<WeightedItem> t) { finds_ = std::move(t); }
+        const std::vector<WeightedItem> &findTable() const { return finds_; }
+
         const std::vector<WorldItem> &events() const { return ev_; }
         const std::vector<Hole> &holes() const { return holes_; }
         int size() const { return int(ev_.size()); }
@@ -265,8 +283,8 @@ namespace gp
             int placed = 0;
             for (int k = 0; k < n; ++k)
             {
-                const int item = pickRandomEventItemId(rnd);
-                for (int attempt = 0; attempt < kSpawnRetries; ++attempt)
+                const int item = pickRandomEventItemId(rnd, finds_);
+                for (int attempt = 0; attempt < tuning().spawnRetries; ++attempt)
                 {
                     const int slot = rnd(0, total);
                     if (slotInUse(area, slot))
@@ -289,7 +307,7 @@ namespace gp
             const int area = areaKey(def), total = int(def.spawnPoints.size());
             if (total == 0)
                 return false;
-            for (int attempt = 0; attempt <= kSpawnRetries; ++attempt)
+            for (int attempt = 0; attempt <= tuning().spawnRetries; ++attempt)
             {
                 const int slot = rnd(0, total);
                 if (slotInUse(area, slot))
@@ -321,7 +339,7 @@ namespace gp
         void enterArea(const AreaDef &def, const RandFn &rnd)
         {
             clearNonPersistent();
-            spawnRandom(def, kRandomSpawnBatch, rnd);
+            spawnRandom(def, tuning().randomSpawnBatch, rnd);
         }
 
         // TickCareStatWatchdog condition 3: top up one spot when no quest is active and the area is below max.
@@ -348,7 +366,7 @@ namespace gp
                     continue;
                 if (e.state != EventState::BuriedRandom && e.state != EventState::HiddenQuest)
                     continue;
-                if (std::abs(px - e.x) >= kDigReach || std::abs(py - e.y) >= kDigReach)
+                if (std::abs(px - e.x) >= tuning().digReach || std::abs(py - e.y) >= tuning().digReach)
                     continue;
 
                 const Hole hole{int16_t(px), int16_t(py), e.area, e.uid};
@@ -390,7 +408,7 @@ namespace gp
         std::optional<Hole> addHole(const Hole &h)
         {
             std::optional<Hole> filled;
-            if (int(holes_.size()) >= kHoleRingSize)
+            if (int(holes_.size()) >= tuning().holeRingSize)
             {
                 filled = holes_.front();
                 holes_.erase(holes_.begin());
@@ -412,7 +430,7 @@ namespace gp
                 if (e.state != EventState::Visible && e.state != EventState::Shop)
                     continue;
                 const int dx = std::abs(px - e.x), dy = std::abs(py - e.y);
-                if (dx >= kDigReach || dy >= kDigReach)
+                if (dx >= tuning().digReach || dy >= tuning().digReach)
                     continue;
                 if (dx + dy < bestD)
                 {
@@ -484,7 +502,7 @@ namespace gp
         bool holeNear(int area, int x, int y) const
         {
             for (const Hole &h : holes_)
-                if (h.area == area && std::abs(h.x - x) <= kDigReach && std::abs(h.y - y) <= kDigReach)
+                if (h.area == area && std::abs(h.x - x) <= tuning().digReach && std::abs(h.y - y) <= tuning().digReach)
                     return true;
             return false;
         }

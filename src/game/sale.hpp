@@ -6,6 +6,7 @@
 // Item_ProcessSale (0x02e11f) pays int(quantity * price * 0.8) in single-precision floats; when an item's 0.8 * price is
 // not above 1.0 each one still pays 1. Then Item_ApplyLimit takes the items and AdjustPlayerMoney pays.
 #pragma once
+#include "../engine/tuning.hpp"
 
 namespace gp
 {
@@ -19,7 +20,7 @@ namespace gp
 
     inline int saleTotal(int price, int qty)
     {
-        const float unit = float(price) * kSellFactor;
+        const float unit = float(price) * tuning().sellFactor;
         const float total = unit > 1.0f ? float(qty) * unit : float(qty);
         return int(total);
     }

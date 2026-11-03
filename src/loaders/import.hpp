@@ -216,6 +216,77 @@ namespace gp
         }
     }
 
+    // Fills modPalettes() with the colours of every mod palette (a based_on one starts from its ROM palette). Call once after importMods.
+    // Returns the ids that could not be made (the ROM palette does not exist), which are left out.
+    inline std::vector<Id> resolveModPalettes(const Rom &rom, const ContentDB &db)
+    {
+        std::vector<Id> failed;
+        modPalettes().clear();
+        for (const PaletteDef *p : db.allPalettes())
+        {
+            Palette pal;
+            if (p->basedOn >= 0)
+            {
+                if (!readPalette(rom, p->basedOn, pal))
+                {
+                    failed.push_back(p->id);
+                    continue;
+                }
+                for (const auto &[i, w] : p->set)
+                {
+                    if (size_t(i) >= pal.colors.size())
+                        pal.colors.resize(size_t(i) + 1, 0x8000);
+                    pal.colors[size_t(i)] = w;
+                }
+            }
+            else
+                pal.colors = p->colors;
+            modPalettes()[p->number] = std::move(pal);
+        }
+        return failed;
+    }
+
+    // A roaming pet NPC with a palette of a mod (NpcDef::palette): its idle, walk, turn and reaction animations are drawn again in
+    // those colours, the same set importNpcs makes for the ROM's own colours. Works on the ROM's pets and on mod npcs copied from one
+    // (based_on); an npc whose art is not a pet's (a mod's own picture) keeps it. Call after resolveModPalettes.
+    inline int applyNpcPalettes(const Rom &rom, ContentDB &db, int playerSpecies)
+    {
+        int done = 0;
+        for (const NpcDef *seen : db.allNpcs())
+        {
+            if (seen->palette.empty())
+                continue;
+            const PaletteDef *p = db.palette(seen->palette);
+            if (!p || !modPalettes().count(p->number))
+                continue;
+            NpcDef *d = db.npcMutable(seen->id);
+            NpcRecord r{};
+            r.speciesOrAnim = d->speciesOrAnim;
+            r.stationary = d->stationary;
+            const int sp = r.speciesOrAnim == 0xfffe ? playerSpecies : r.speciesOrAnim;
+            const int an = npcAnimId(r, playerSpecies);
+            if (an < 0 || sp < 0 || sp > 2)
+                continue; // not one of the ROM's pets
+            d->appearancePalette = p->number;
+            d->anim = importAnim(rom, db, an, p->number);
+            if (!d->stationary)
+            {
+                for (int rid : reactIdsForTier(sp))
+                    importAnim(rom, db, rid, p->number);
+                d->walkAnim[0] = importAnim(rom, db, kWalkUp[sp], p->number);
+                d->walkAnim[1] = importAnim(rom, db, kWalkDown[sp], p->number);
+                d->walkAnim[2] = importAnim(rom, db, kWalkSide[sp], p->number);
+                d->turn180Anim = importAnim(rom, db, kTurn180[sp], p->number);
+                d->turn90Anim = importAnim(rom, db, kTurn90[sp], p->number);
+                d->idleSideAnim = importAnim(rom, db, kIdleSide[sp], p->number);
+                d->sickIdleAnim = importAnim(rom, db, kIdleFlagB[sp], p->number);
+                d->sadIdleAnim = importAnim(rom, db, kIdleFlagA[sp], p->number);
+            }
+            ++done;
+        }
+        return done;
+    }
+
     inline void importItems(const Rom &rom, ContentDB &db)
     {
         for (const ItemDef &raw : readItems(rom))
@@ -411,6 +482,7 @@ namespace gp
             AreaDef a;
             a.id = "base:area/" + std::to_string(id);
             a.legacyId = id;
+            a.diggable = id <= 9; // GUESS for the ROM's 0x3c969(area) check; interiors/shops can't dig
             a.name = "base:text/" + std::to_string(rom.u16(0xe303 + id));
             a.tilesW = ar.tilesW;
             a.tilesH = ar.tilesH;
@@ -832,6 +904,8 @@ namespace gp
         importItems(rom, db);
         for (const FixedSpotDef &s : baseFixedSpots())
             db.put(s);
+        for (const WeightedItem &w : kEventItemTable) // the dig-find table, as records a mod can change
+            db.put(FindWeightDef{"base:find/" + std::to_string(w.item), legacyItemId(w.item), w.weight});
     }
 
 } // namespace gp

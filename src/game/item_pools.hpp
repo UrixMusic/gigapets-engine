@@ -31,23 +31,39 @@ inline constexpr std::array<int, 19> kPoolPrize = { // 100 Bucks well; BuildRand
 // rest from kPoolGeneral; any draw already in the set is re-rolled; then (count+1)/2 random swaps shuffle it.
 // rr(lo, hi) is the ROM's RandRange: [lo, hi).
 // Known callers: Memory Match (6, 2); Swift Pick via PlayRandomMinigame (10, 2); Three in a Row (RandRange(6,9), 1).
-inline std::vector<int> buildUniqueRandomSet(int count, int firstSlots, const std::function<int(int, int)> &rr)
+inline std::vector<int> buildUniqueRandomSet(int count, int firstSlots, const std::function<int(int, int)> &rr,
+                                             const std::vector<int> &first, const std::vector<int> &general)
 {
     std::vector<int> out;
-    while (int(out.size()) < count)
+    int misses = 0; // a pool with fewer different items than `count` (a mod's) stops short instead of looping
+    while (int(out.size()) < count && misses < 1000)
     {
         const int i = int(out.size());
-        const int item = i < firstSlots ? kPoolFirst[size_t(rr(0, int(kPoolFirst.size())))]
-                                        : kPoolGeneral[size_t(rr(0, int(kPoolGeneral.size())))];
+        const std::vector<int> &pool = i < firstSlots ? first : general;
+        if (pool.empty())
+            break;
+        const int item = pool[size_t(rr(0, int(pool.size())))];
         bool dup = false;
         for (int v : out)
             dup = dup || v == item;
         if (!dup)
+        {
             out.push_back(item);
+            misses = 0;
+        }
+        else
+            ++misses;
     }
-    for (int k = 0; k < (count + 1) / 2; ++k)
-        std::swap(out[size_t(rr(0, count))], out[size_t(rr(0, count))]);
+    const int n = int(out.size());
+    if (n > 0)
+        for (int k = 0; k < (n + 1) / 2; ++k)
+            std::swap(out[size_t(rr(0, n))], out[size_t(rr(0, n))]);
     return out;
+}
+inline std::vector<int> buildUniqueRandomSet(int count, int firstSlots, const std::function<int(int, int)> &rr)
+{
+    return buildUniqueRandomSet(count, firstSlots, rr, std::vector<int>(kPoolFirst.begin(), kPoolFirst.end()),
+                                std::vector<int>(kPoolGeneral.begin(), kPoolGeneral.end()));
 }
 
 } // namespace gp

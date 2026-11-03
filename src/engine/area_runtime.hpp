@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <unordered_set>
 
 namespace gp {
@@ -78,7 +79,58 @@ public:
 
     const std::vector<int>& visible() const { return visible_; }
 
+    // ---- changes made while the area is loaded (scripts: object.spawn / move / remove) ----
+    // The area's own object table is the db's and never changes; the runtime keeps copies of what a script touches, so a
+    // moved or added object lives only until the area is left (a new AreaRuntime is built when it is entered again).
+    // Call updateVisible after any of these, the visible indices refer to positions in objects().
+    bool has(const Id& obj) const { return find(obj) >= 0; }
+    // Adds an object (its id must be new). Returns the stored copy.
+    const ObjectDef* addObject(ObjectDef o) {
+        if (has(o.id)) return nullptr;
+        own_.push_back(std::move(o));
+        owned_.insert(own_.back().id);
+        objs_.push_back(&own_.back());
+        resort();
+        return &own_.back();
+    }
+    // Moves an object (a base one is copied first). The art/cull box moves with it. False if there is no such object.
+    bool moveObject(const Id& obj, int x, int y) {
+        ObjectDef* o = ownedCopy(obj);
+        if (!o) return false;
+        const int dx = x - o->x, dy = y - o->y;
+        o->x = x; o->y = y;
+        o->boxLeft += dx; o->boxRight += dx; o->boxTop += dy; o->boxBottom += dy;
+        resort();
+        return true;
+    }
+    // Takes an object out of the area (it is not drawn, blocks nothing, cannot be used). False if there is no such object.
+    bool removeObject(const Id& obj) {
+        const int i = find(obj);
+        if (i < 0) return false;
+        objs_.erase(objs_.begin() + i);
+        return true;
+    }
+
 private:
+    int find(const Id& obj) const {
+        for (size_t i = 0; i < objs_.size(); ++i) if (objs_[i]->id == obj) return int(i);
+        return -1;
+    }
+    void resort() {
+        std::stable_sort(objs_.begin(), objs_.end(), [](const ObjectDef* a, const ObjectDef* b) { return a->y < b->y; });
+    }
+    ObjectDef* ownedCopy(const Id& obj) {
+        const int i = find(obj);
+        if (i < 0) return nullptr;
+        if (!owned_.count(obj)) {                       // a base object: copy it, and use the copy from now on
+            own_.push_back(*objs_[size_t(i)]);
+            owned_.insert(obj);
+            objs_[size_t(i)] = &own_.back();
+        }
+        return const_cast<ObjectDef*>(objs_[size_t(i)]);  // (it points into own_ now, so it is ours to change)
+    }
+    std::deque<ObjectDef> own_;   // stable addresses: objs_ points into it
+    std::unordered_set<Id> owned_;
     const ContentDB& db_;
     const AreaDef& area_;
     std::vector<const ObjectDef*> objs_;

@@ -102,6 +102,11 @@ private:
                 s.replace(p, 2, left == 1 ? "" : "s");
             showSign(svc_, std::move(s)); });
         // The spaceship's colour machine (color_machine.hpp).
+        // A scene a mod draws (Scene.hooks): the object's `scene` field. It opens when the world is free, like scene.open.
+        registry_.add("scene", [this](const gp::InteractionDef &d)
+                      {
+            if (!svc_.scripts.openScene(d.str.at("scene")))
+                std::fprintf(stderr, "scene: '%s' cannot be opened now (no script defines it, or one is already open)\n", d.str.at("scene").c_str()); });
         registry_.add("color_machine", [this](const gp::InteractionDef &)
                       {
             if (svc_.startColorMachine)

@@ -48,7 +48,8 @@ inline void openNpcDialogue(WalkServices &svc, const gp::NpcActor &n)
 // ShowFriendAdviceText (0x017ccf): the "hello" greeting's follow-up, a random advice line from the friend.
 inline void showFriendAdvice(WalkServices &svc, const gp::NpcDef &d)
 {
-    gp::DialogueBox b = gp::messageBox(gp::fmtAll(svc.db.textOr(gp::friendAdviceId(svc.S.world.npcRng), "..."), svc.player.name));
+    const gp::MinigameDef &fp = svc.db.minigameOr("base:minigame/friend_pools"); // lists a mod may have changed
+    gp::DialogueBox b = gp::messageBox(gp::fmtAll(svc.db.textOr(gp::pickTextId(svc.S.world.npcRng, fp.idList("advice")), "..."), svc.player.name));
     b.portrait = gp::uiSpriteId(d.portraitSprite, d.portraitPalette);
     svc.dialogue.show(std::move(b));
 }
@@ -64,7 +65,7 @@ inline void giveFriendGift(WalkServices &svc)
         item = cure ? cure->index : -1;
     }
     else
-        item = gp::rollFriendGift(svc.S.world.npcRng);
+        item = gp::rollFriendGift(svc.S.world.npcRng, svc.db.minigameOr("base:minigame/friend_pools").list("gifts"));
     if (item >= 0 && svc.dropGift)
         svc.dropGift(item);
 }
@@ -73,6 +74,7 @@ inline void giveFriendGift(WalkServices &svc)
 // The box shows the NPC's portrait; pressing OK runs the greeting's follow-up (the handler the ROM hangs on it).
 inline void grantFriendship(WalkServices &svc, const gp::NpcDef &d, bool again)
 {
+    svc.scripts.fireBefriend(d.id, again); // Game.hooks().onBefriend
     auto &db = svc.db;
     auto &player = svc.player;
     auto &dialogue = svc.dialogue;
@@ -127,7 +129,7 @@ inline void openFriendPanel(WalkServices &svc, const gp::NpcActor &n)
     b.npcId = d.id;
     const std::string name = db.textOr(d.nameText, "?");
     b.title = gp::fmtS(db.textOr("base:str/stats_title", "%s"), {name});
-    const std::string line = gp::fmtAll(db.textOr(gp::defaultLineId(npcRng), "..."), player.name);
+    const std::string line = gp::fmtAll(db.textOr(gp::pickTextId(npcRng, db.minigameOr("base:minigame/friend_pools").idList("defaultLines")), "..."), player.name);
     b.body = gp::fmtS(db.textOr("base:str/fmt_name_and_line", "%s %s"), {name, line});
     b.req = {d.halos, d.pitchforks, d.stars, d.lightbulbs};
     b.portrait = gp::uiSpriteId(d.portraitSprite, d.portraitPalette);

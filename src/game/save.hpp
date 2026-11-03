@@ -24,6 +24,21 @@ namespace gp
             auto it = kv.find(k);
             return it == kv.end() ? def : std::atoi(it->second.c_str());
         }
+        // like getInt, but a value that is not a whole number (a palette id typed into "colour=" by hand, say) gives `def` instead of 0
+        int getIntStrict(const std::string &k, int def = 0) const
+        {
+            const auto it = kv.find(k);
+            if (it == kv.end())
+                return def;
+            const std::string &v = it->second;
+            size_t i = !v.empty() && v[0] == '-' ? 1 : 0;
+            if (i >= v.size())
+                return def;
+            for (; i < v.size(); ++i)
+                if (v[i] < '0' || v[i] > '9')
+                    return def;
+            return std::atoi(v.c_str());
+        }
         void setUInt(const std::string &k, uint32_t v) { kv[k] = std::to_string(v); }
         uint32_t getUInt(const std::string &k, uint32_t def = 0) const
         {
@@ -194,6 +209,7 @@ namespace gp
         bool full = false;
         std::string name;
         int species = 0, colour = -1, appearance = -1;
+        std::string appearanceId; // a mod palette's id when the pet wears one (its number then holds the species default; see pet_colour_save.hpp)
     };
 
     inline SlotInfo peekSlot(int slot)
@@ -205,8 +221,17 @@ namespace gp
         i.full = true;
         i.name = s.getStr("name");
         i.species = s.getInt("species");
-        i.colour = s.getInt("colour", -1);
-        i.appearance = s.getInt("appearance", i.colour);
+        i.colour = s.getIntStrict("colour", -1);
+        i.appearance = s.getIntStrict("appearance", i.colour);
+        // the id of a mod palette: "appearanceId" (else "colourId"), or one typed straight into appearance= / colour=
+        auto idOf = [&](const char *key)
+        {
+            const std::string viaKey = s.getStr(std::string(key) + "Id"), typed = s.getStr(key);
+            return !viaKey.empty() ? viaKey : typed.find(':') != std::string::npos ? typed : std::string();
+        };
+        i.appearanceId = idOf("appearance");
+        if (i.appearanceId.empty() && !s.has("appearance"))
+            i.appearanceId = idOf("colour");
         return i;
     }
 }

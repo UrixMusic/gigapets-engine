@@ -6,6 +6,7 @@
 // What an item does is data (ItemDef::use). The action name picks a handler from itemActions();
 // a mod registers its own with itemActions().add("mymod:heal", fn) and refers to it from an item record.
 #pragma once
+#include "../engine/tuning.hpp"
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -83,7 +84,7 @@ namespace gp
             const int cur = p.personality[stat];
             int delta = 0;
             if (has(u, "raise"))
-                delta = std::min(param(u, "raise"), kMaxPersonality - cur);
+                delta = std::min(param(u, "raise"), tuning().maxPersonality - cur);
             else if (has(u, "lower"))
                 delta = -std::min(cur, param(u, "lower"));
             else

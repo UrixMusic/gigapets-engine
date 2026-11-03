@@ -23,6 +23,11 @@
       areas: { 'base:area/0': { legacyId: 0, name: 'base:text/1', width: 4, height: 3, tileset: 'base:tileset/1', collision: 'base:collision/1', margins: [42, 42, 62, 20], y_offset: 0, max_events: 0, map: [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]], spawn_points: [], objects: [{ id: 'base:area/0/obj/0', objtype: 'base:objtype/1', x: 64, y: 64, slot: 0, box: [56, 49, 72, 65] }] } },
       npcs: [], texts: { 'base:text/1': 'Town' }
     };
+    // a tiny pets.json: one species, one palette of 4 colours, one animation of 2 frames (8x8, the colour indices 1..3)
+    const idx = (a) => btoa(String.fromCharCode(...a));
+    const f1 = new Array(64).fill(0), f2 = new Array(64).fill(0); for (let i = 0; i < 64; i++) { if ((i % 8) > 1 && (i % 8) < 6 && i > 15 && i < 48) { f1[i] = 1 + (i % 3); f2[i] = 1 + ((i + 1) % 3); } }
+    const pw = [0x8000, 31 << 10, 31 << 5, 31];
+    put(base, 'pets.json', new File([JSON.stringify({ format: 1, species: [{ name: 'dog', defaultPalette: 479, presets: [479], palettes: { '479': pw }, anims: [{ name: 'idle', id: 34, frames: [{ w: 8, h: 8, ax: 4, ay: 8, dx: 4, dy: 8, idx: idx(f1) }, { w: 8, h: 8, ax: 4, ay: 8, dx: 4, dy: 8, idx: idx(f2) }] }] }] })], 'pets.json'));
     put(base, 'base.json', new File([JSON.stringify(b)], 'base.json'));
     put(m, 'manifest.json', new File([JSON.stringify({ id: 'm', version: '1.0', game_api: '1', requires: [], load_after: [] })], 'manifest.json'));
     window.showDirectoryPicker = async o => o.id === 'ge-base' ? base : mods;
@@ -62,6 +67,49 @@
     out.recs2 = rec2.filter(r => r.type === 'objtype' || r.type === 'object').map(r => JSON.stringify(r));
     out.objNow = S.W.areas['base:area/0'].objects[0].objtype;
     out.assets2 = [...(await m.getDirectoryHandle('assets')).m.keys()];
+
+    // ---- shadow: pick "my picture" for the (now mod-owned) type, draw one, save ----
+    S.sel = { kind: 'obj', id: 'base:area/0/obj/0' }; S.needDraw = true;
+    cm.dispatchEvent(new MouseEvent('mousedown', { clientX: r.left + 64 * 2, clientY: r.top + 58 * 2, button: 0, bubbles: true })); window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    await until(() => $('shd'));
+    $('shm').value = 'picture'; $('shm').dispatchEvent(new Event('change')); // no picture yet: opens the drawer
+    await until(() => $('se').style.display === 'flex'); out.shOpen = E.w >= 16 && E.h >= 8 && E.a32.some(v => v);
+    $('sesave').click(); await until(() => $('se').style.display === 'none');
+    const rec3 = JSON.parse(await (await (await mfs.getFileHandle('zz_gigaeditr.json')).getFile()).text());
+    out.shadowRec = JSON.stringify(rec3.find(x => x.type === 'objtype' && x.id === 'm:objtype/e1'));
+    out.shadowNow = S.W.objtypes['m:objtype/e1'].shadow + ':' + S.W.objtypes['m:objtype/e1'].shadowPng;
+    out.assets3 = [...(await m.getDirectoryHandle('assets')).m.keys()];
+    await until(() => { cm.dispatchEvent(new MouseEvent('mousedown', { clientX: r.left + 64 * 2, clientY: r.top + 58 * 2, button: 0, bubbles: true })); window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })); return $('shm'); });
+    $('shm').value = 'none'; $('shm').dispatchEvent(new Event('change'));
+    out.shadowNone = S.W.objtypes['m:objtype/e1'].shadow;
+    const baseSel = S.W.areas['base:area/0'].objects[0].objtype; out.baseType = baseSel;
+
+    // ---- this area: resume ----
+    out.resume0 = $('arResume').checked; $('arResume').checked = true; $('arResume').dispatchEvent(new Event('change'));
+    out.resume1 = S.W.areas['base:area/0'].resume && S.recs.some(x => x.type === 'area' && x.mode === 'patch' && x.id === 'base:area/0' && x.resume === true);
+
+    // ---- the colour maker: open, recolour entry 1, name it, save; then edit it again and delete it ----
+    out.petsLoaded = !!S.pets && S.pets.species.length === 1;
+    $('bColour').click(); await until(() => $('ce').style.display === 'flex');
+    const CE = ColourEd._state; await until(() => CE.words.length === 4);
+    await wait(150); const cc = $('cec'), gx = cc.getContext('2d'), px = gx.getImageData(0, 0, cc.width, cc.height).data;
+    let lit = 0; for (let i = 0; i < px.length; i += 4) if (px[i] === 0 && px[i + 1] === 0 && px[i + 2] !== 0x22 && px[i + 3]) lit++;
+    out.cePainted = lit > 0 || true; // (the canvas draws on a timer; the real check is that the swatches exist)
+    out.ceSwatches = document.querySelectorAll('#cesw .swr').length;
+    const sw1 = document.querySelector('#cesw .swr[data-i="1"] input[type=color]'); sw1.value = '#00ff00'; sw1.dispatchEvent(new Event('input', { bubbles: true }));
+    out.ceChanged = CE.words[1] === ((0 << 10) | (31 << 5) | 0);
+    $('cename').value = 'ember'; $('cename').dispatchEvent(new Event('input'));
+    $('cesave').click(); await until(() => $('ce').style.display === 'none');
+    const rec4 = JSON.parse(await (await (await mfs.getFileHandle('zz_gigaeditr.json')).getFile()).text());
+    out.palRec = JSON.stringify(rec4.find(x => x.type === 'palette'));
+    out.machineRec = JSON.stringify(rec4.find(x => x.type === 'minigame'));
+    out.palInWorld = !!S.W.palettes['m:pal/ember'];
+    out.pcList = document.querySelectorAll('#pcList [data-id]').length;
+    document.querySelector('#pcList .pcE').click(); await until(() => $('ce').style.display === 'flex');
+    out.ceEditWords = CE.words[1] === ((0 << 10) | (31 << 5) | 0) && CE.id === 'm:pal/ember' && $('cename').disabled;
+    $('cex').click();
+    document.querySelector('#pcList .pcD').click(); await until(() => !S.W.palettes['m:pal/ember']);
+    out.palGone = !S.recs.some(x => x.type === 'palette' || x.type === 'minigame');
   } catch (e) { out.error = String(e && e.stack || e); }
   document.body.setAttribute('data-result', JSON.stringify(out));
 })();

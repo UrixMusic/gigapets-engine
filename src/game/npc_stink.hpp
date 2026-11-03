@@ -11,6 +11,7 @@
 //     pet clean:  the pet's Cleanliness drops by 0x50 (AdjustCareStat(5, -0x50)).
 // The minipet-link branch of condition 9 (g_miniPetTrackingFlag) is not ported.
 #pragma once
+#include "../engine/tuning.hpp"
 #include "thought_bubble.hpp"
 
 namespace gp
@@ -36,7 +37,7 @@ namespace gp
     // One sim step. npcIndex = the selected NPC's pool index, -1 for none; npcStinky = whether it already stinks.
     inline StinkEvent stinkTransferStep(StinkTransfer &s, int quests, int hygiene, int npcIndex, bool npcStinky)
     {
-        if (++s.accum < kStinkCheckTicks)
+        if (++s.accum < tuning().stinkCheckTicks)
             return StinkEvent::None;
         s.accum = 0;
         if (quests <= 3)
@@ -57,7 +58,7 @@ namespace gp
             else if (!petStinky && npcStinky)
                 ++s.count;
         }
-        if (s.count < kStinkCountNeeded)
+        if (s.count < tuning().stinkCountNeeded)
             return StinkEvent::None;
         s.count = 0;
         if (petStinky)

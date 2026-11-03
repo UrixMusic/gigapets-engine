@@ -76,7 +76,7 @@ namespace gp::fe
         si.valid = true;
         si.name = s.getStr("name");
         si.species = s.getInt("species", 0);
-        si.appearance = s.getInt("appearance", -1);
+        si.appearance = s.getIntStrict("appearance", -1);
         si.house = s.getInt("house", -1);
         return si;
     }

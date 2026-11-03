@@ -10,6 +10,7 @@
 // game) and 0x13 is a trick, performed by TrickShowcase (see NpcActor::trickLevel). 9 = settle after being talked to / after stopping at a waypoint.
 // 0x17 = wander along the path. 0x19 / 0x1b / 0x1d = default idles (picked by flag bit 1 / bit 2 / neither).
 #pragma once
+#include "../engine/tuning.hpp"
 #include <cstdint>
 
 namespace gp {
@@ -74,6 +75,6 @@ inline bool overheadStarts(Rng& rng) { return rng.range(1, 0x32) == 1; }
 // Ticks the animation takes for `frames` frames at kOverheadFps (it is finished when the frame count has been used up).
 constexpr int overheadTicks(int frames) { return frames <= 0 ? 0 : (frames * 30 + kOverheadFps - 1) / kOverheadFps; }
 
-inline int idleTicks(Rng& rng) { return rng.range(kIdleMinTicks, kIdleMaxTicks); }
+inline int idleTicks(Rng& rng) { return rng.range(tuning().idleMinTicks, tuning().idleMaxTicks); }
 
 } // namespace gp

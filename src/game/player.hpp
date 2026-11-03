@@ -2,13 +2,16 @@
 // Who the player (the pet) is: progression data that NPCs, items and quests read and write.
 // Position and movement live elsewhere (walk.cpp + player_input.hpp).
 #pragma once
+#include "../engine/tuning.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace gp
 {
@@ -151,13 +154,19 @@ namespace gp
         // in Player
         int money = 0; // g_playerMoneyHi:Lo as one value
 
+        // Every change to money, a personality stat or a care stat passes through this first (a mod's onStatChange seam): (kind, stat,
+        // delta) -> the delta to apply. kind 0 = care, 1 = personality, 2 = money; stat is the CareStat / PersonalityStat number.
+        std::function<int(int, int, int)> deltaFilter;
+
         // Port of AdjustPlayerMoney (player part only). Returns the change actually applied,
         // which is what AddToLifetimeEarnings should receive if you port it.
         // Not handled here: SaveMoneyToSlot, CheckStatsAndMoneyGate.
         int adjustMoney(int delta)
         {
+            if (deltaFilter)
+                delta = deltaFilter(2, 0, delta);
             const int before = money;
-            money = std::clamp(money + delta, 0, kMaxMoney);
+            money = std::clamp(money + delta, 0, tuning().maxMoney);
             pendingMoney += money - before; // AddToLifetimeEarnings: the stat-change panel reads and clears it (not saved)
             return money - before;
         }
@@ -168,7 +177,9 @@ namespace gp
         // Not handled here: SavePetStatsToSlot, the mini-pet mirror, CheckStatsAndMoneyGate.
         void adjustPersonality(PersonalityStat s, int delta)
         {
-            personality[s] = std::clamp(personality[s] + delta, 0, kMaxPersonality);
+            if (deltaFilter)
+                delta = deltaFilter(1, int(s), delta);
+            personality[s] = std::clamp(personality[s] + delta, 0, tuning().maxPersonality);
             if (s == Halos || s == Lightbulbs)
                 clearEncounteredForUnfriended();
         }
@@ -176,9 +187,11 @@ namespace gp
         // Port of AdjustCareStat.
         void adjustCare(CareStat s, int delta)
         {
-            if (delta < 0 && questsCompleted < kNegativeCareMinQuests)
+            if (deltaFilter)
+                delta = deltaFilter(0, int(s), delta);
+            if (delta < 0 && questsCompleted < tuning().negativeCareMinQuests)
                 return;
-            care[s] = std::clamp(care[s] + delta, 0, kMaxCare);
+            care[s] = std::clamp(care[s] + delta, 0, tuning().maxCare);
         }
 
         bool isHealthy() const { return illnessId == kHealthy; }
