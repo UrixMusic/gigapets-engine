@@ -1634,6 +1634,136 @@ namespace gp
             rep.lastWriter[id] = m.id;
         }
 
+        // shop: what a shop can stock, and where. The stock is rolled from this table (see ShopDef): `rolls` weighted picks when the game starts, then one more
+        // every restock. { type: "shop", mode: "add", id: "mymod:shop/store", area: "mymod:area/store", rolls: 10,
+        //   items: [ { item: "mymod:item/pie", weight: 20, cap: 5 } ] }   // weight: 0..10000 (default 10), cap: the most offered at once, 1..99 (default 5)
+        // mode "patch" (or "replace": the same) changes a shop that is there, a base one too ("base:shop/10" is the area number): `rolls`, `items` (the whole
+        // list), `add_items` (added, or changed if the item is already listed), `remove_items` (item ids). mode "remove": the shop sells nothing. The area is where the
+        // stock stands (the area's spawn points) and cannot be changed by a patch.
+        inline void applyShop(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
+        {
+            static const std::set<std::string> allowed{"type", "mode", "id", "area", "rolls", "items", "add_items", "remove_items"};
+            const std::string mode = rec.contains("mode") && rec["mode"].is_string() ? rec["mode"].get<std::string>() : "";
+            std::string id, why;
+            auto readItems = [&](const json &arr, const char *key, std::vector<ShopItem> &out) -> bool {
+                if (!arr.is_array() || arr.size() > 200)
+                    return why = std::string("'") + key + "' must be a list of up to 200 items like { \"item\": \"mymod:item/pie\", \"weight\": 20, \"cap\": 5 }", false;
+                for (const json &e : arr)
+                {
+                    if (!e.is_object())
+                        return why = std::string("each entry of '") + key + "' must be an object { item, weight, cap }", false;
+                    for (auto it = e.begin(); it != e.end(); ++it)
+                        if (it.key() != "item" && it.key() != "weight" && it.key() != "cap")
+                            return why = "unknown field '" + it.key() + "' in a shop item (item, weight, cap)", false;
+                    ShopItem si;
+                    si.weight = 10;
+                    if (!needStr(e, "item", si.item, why) || !optInt(e, "weight", si.weight, 0, 10000, why) || !optInt(e, "cap", si.cap, 1, 99, why))
+                        return false;
+                    if (!db.item(si.item))
+                        return why = "unknown item '" + si.item + "'", false;
+                    for (const ShopItem &o : out)
+                        if (o.item == si.item)
+                            return why = "item '" + si.item + "' is listed twice", false;
+                    out.push_back(std::move(si));
+                }
+                return true;
+            };
+            if (mode == "patch" || mode == "replace" || mode == "remove")
+            {
+                for (auto it = rec.begin(); it != rec.end(); ++it)
+                    if (!allowed.count(it.key()) || (mode == "remove" && it.key() != "type" && it.key() != "mode" && it.key() != "id"))
+                        return err(rep, file, m.id, "unknown field '" + it.key() + "' in a shop " + mode + " record");
+                if (!needStr(rec, "id", id, why))
+                    return err(rep, file, m.id, "shop record: " + why);
+                ShopDef *s = db.shopMutable(id);
+                if (!s)
+                    return err(rep, file, m.id, mode + " '" + id + "': no such shop");
+                if (mode == "remove")
+                {
+                    db.eraseShop(id);
+                    rep.lastWriter[id] = m.id;
+                    return;
+                }
+                if (rec.contains("area"))
+                    return err(rep, file, m.id, mode + " '" + id + "': the shop's area cannot be changed");
+                ShopDef n = *s;
+                if (!optInt(rec, "rolls", n.rolls, 0, 100, why))
+                    return err(rep, file, m.id, mode + " '" + id + "': " + why);
+                if (rec.contains("items"))
+                {
+                    n.items.clear();
+                    if (!readItems(rec["items"], "items", n.items))
+                        return err(rep, file, m.id, mode + " '" + id + "': " + why);
+                }
+                if (rec.contains("remove_items"))
+                {
+                    if (!rec["remove_items"].is_array())
+                        return err(rep, file, m.id, mode + " '" + id + "': 'remove_items' must be a list of item ids");
+                    for (const json &r : rec["remove_items"])
+                    {
+                        if (!r.is_string())
+                            return err(rep, file, m.id, mode + " '" + id + "': 'remove_items' must be a list of item ids");
+                        bool found = false;
+                        for (size_t i = 0; i < n.items.size(); ++i)
+                            if (n.items[i].item == r.get<std::string>())
+                            {
+                                n.items.erase(n.items.begin() + std::ptrdiff_t(i));
+                                found = true;
+                                break;
+                            }
+                        if (!found)
+                            return err(rep, file, m.id, mode + " '" + id + "': '" + r.get<std::string>() + "' is not in the shop to remove");
+                    }
+                }
+                if (rec.contains("add_items"))
+                {
+                    std::vector<ShopItem> add;
+                    if (!readItems(rec["add_items"], "add_items", add))
+                        return err(rep, file, m.id, mode + " '" + id + "': " + why);
+                    for (ShopItem &a : add)
+                    {
+                        bool done = false;
+                        for (ShopItem &o : n.items)
+                            if (o.item == a.item)
+                            {
+                                o = a; // already listed: its weight and cap change
+                                done = true;
+                            }
+                        if (!done)
+                            n.items.push_back(std::move(a));
+                    }
+                }
+                if (!rec.contains("rolls") && !rec.contains("items") && !rec.contains("add_items") && !rec.contains("remove_items"))
+                    return err(rep, file, m.id, mode + " '" + id + "': nothing to change (rolls, items, add_items, remove_items)");
+                *s = std::move(n);
+                rep.lastWriter[id] = m.id;
+                return;
+            }
+            if (!beginAdd(m, file, rec, rep, "shop", allowed, [&](const std::string &i) { return db.shop(i) != nullptr; }, id))
+                return;
+            if (rec.contains("add_items") || rec.contains("remove_items"))
+                return err(rep, file, m.id, "'" + id + "': add_items / remove_items only go with a patch (an add lists its 'items')");
+            ShopDef s;
+            s.id = id;
+            if (!needStr(rec, "area", s.area, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            const AreaDef *ad = db.area(s.area);
+            if (!ad)
+                return err(rep, file, m.id, "'" + id + "': unknown area '" + s.area + "'");
+            if (!optInt(rec, "rolls", s.rolls, 0, 100, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            if (!rec.contains("items"))
+                return err(rep, file, m.id, "'" + id + "': 'items' is required");
+            if (!readItems(rec["items"], "items", s.items))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            if (db.shopForArea(s.area))
+                return err(rep, file, m.id, "'" + id + "': area '" + s.area + "' already has a shop (" + db.shopForArea(s.area)->id + "); patch that one instead");
+            if (ad->spawnPoints.empty())
+                rep.warnings.push_back("[" + m.id + "] " + id + ": area '" + s.area + "' has no spawn_points, so the stock has nowhere to stand");
+            db.put(std::move(s));
+            rep.lastWriter[id] = m.id;
+        }
+
         // gate: a barrier object that goes for good once the pet meets a condition (the base game's five guards in Magma Mountain are
         // "base:gate/5/25", "/15", "/7", "/1" and "/22"). { barrier = an object id, kind = "tricks" (tricks known >= need) | "stat"
         // (any of stats - "halos", "pitchforks", "stars", "lightbulbs" - >= need) | "money" (>= need) | "quests" (quests done >= need,
@@ -2868,7 +2998,7 @@ namespace gp
                 return 0;
             if (t == "area")
                 return 1;
-            return t == "spot" || t == "find" || t == "quest_spawn" || t == "gate" || t == "minigame" || t == "species" ? 3 : 2; // they name areas and items, so they come last
+            return t == "spot" || t == "find" || t == "quest_spawn" || t == "gate" || t == "minigame" || t == "species" || t == "shop" ? 3 : 2; // they name areas and items, so they come last
         }
         inline constexpr int kPasses = 4;
 
@@ -2945,6 +3075,8 @@ namespace gp
                     applyGate(db, m, file, r, rep);
                 else if (type == "minigame")
                     applyMinigame(db, m, file, r, rep);
+                else if (type == "shop")
+                    applyShop(db, m, file, r, rep);
                 else if (type == "species")
                     applySpecies(db, m, file, r, rep);
                 else

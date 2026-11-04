@@ -421,27 +421,33 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         player.inventory[gp::legacyItemId(it)] = n;
             }
         }
+        // The shops' stock: rolled from the shop records (the ROM's weight tables, and whatever the mods add) as the ROM does at start, and topped up on a timer.
         gp::ShopStock shopStock;
-        if (!gp::loadStockDump("stock.bin", shopStock))
-        {
-            std::printf("stock.bin not found or wrong size, using row 1 test data\n");
-            shopStock.initRow1();
-        }
-        for (int r = 0; r < 22; ++r)
-        {
-            std::printf("shop row %d:", r);
-            for (const gp::StockEntry &e : shopStock.rows[r])
-                if (e.w0)
-                    std::printf(" %dx%s", e.stock(), db.textOr(itemDefs[e.item()].name, "?").c_str());
-            std::printf("\n");
-        }
-        gp::PendingList pending;
+        int shopRestockAccum = 0; // ROM ticks since the shops were last topped up
         auto shopRnd = [](int n)
         { return std::rand() % n; };
+        shopStock.init(db.shops(), shopRnd);
+        for (const gp::ShopDef &sd : db.shops())
+        {
+            std::printf("shop %s:", sd.id.c_str());
+            if (const auto *row = shopStock.rowOf(sd.area))
+                for (const gp::StockEntry &e : *row)
+                    if (e.present())
+                        if (const gp::ItemDef *id = db.item(e.item))
+                            std::printf(" %dx%s", e.stock, db.textOr(id->name, "?").c_str());
+            std::printf("\n");
+        }
+        auto itemNumberOf = [&](const gp::Id &item) -> int
+        { const gp::ItemDef *d = db.item(item); return d ? d->index : -1; };
+        gp::PendingList pending;
         auto enterShopStock = [&](const gp::AreaDef &a) { // call when the destination is a shop
-            const int row = gp::shopRowForArea(a.legacyId);
-            if (row >= 0)
-                gp::spawnShopItemStock(pending, shopStock, a.legacyId, row, a.spawnPoints, shopRnd);
+            const gp::ShopDef *shop = db.shopForArea(a.id);
+            if (!shop)
+                return;
+            // ClampInventorySlotQuantities: nothing is offered that the pet cannot carry or that is over the shop's cap
+            shopStock.clamp(*shop, [&](const gp::Id &i) { return player.itemCount(i); },
+                            [&](const gp::Id &i) { const gp::ItemDef *d = db.item(i); return d ? d->maxQty : 0; });
+            gp::spawnShopItemStock(pending, shopStock, a.legacyId, a.id, a.spawnPoints, shopRnd, itemNumberOf);
         };
 
         int itemSlot = 0x1e; // GUESS: tune with [ and ] while the menu is open
@@ -539,16 +545,17 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 gp::importUiSprite(db, rom, s, p);
         }
 
-        for (int r = 0; r < 22; ++r)
-            for (const gp::StockEntry &e : shopStock.rows[r])
-                if (e.w0 && !gp::isModSprite(itemDefs[e.item()].worldSprite))
-                    try
-                    {
-                        gp::importUiSprite(db, rom, itemDefs[e.item()].worldSprite, gp::kMenuPalette);
-                    }
-                    catch (const std::exception &)
-                    {
-                    }
+        for (const gp::ShopDef &sd : db.shops())
+            for (const gp::ShopItem &si : sd.items)
+                if (const gp::ItemDef *d = db.item(si.item))
+                    if (!gp::isModSprite(d->worldSprite))
+                        try
+                        {
+                            gp::importUiSprite(db, rom, d->worldSprite, gp::kMenuPalette);
+                        }
+                        catch (const std::exception &)
+                        {
+                        }
 
         for (int a : {0xe, 0x10, 0x11, 0x12, 0x16, 0x17, 0x18, gp::kTabAnimIn, gp::kTabAnimOut, gp::kBlastAnim, gp::kStinkAnim, gp::kExclaimIntroAnim, gp::kExclaimOutroAnim, gp::kTrickQuestionBubble, gp::kTrickAnswerBubble, gp::kHaloBubble, gp::kPitchforkBubble, gp::kStarBubble}) // 0xe: the wash bubble; arrow, dig bubble; 0x17/0x18: the thought bubble
             try
@@ -1550,7 +1557,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 nudge.restart(long(gameTicks)); // Game_ProcessTick: an area change restarts the reminder
             if (const int song = a.music >= 0 ? a.music : gp::rau::zoneSong(a.legacyId); song >= 0)
                 gp::audio().playMusic(song); // Sound_LookupAndStart via RemapZoneIndexToAudioId; other areas keep the current song
-            if (gp::shopRowForArea(a.legacyId) >= 0)
+            if (db.shopForArea(a.id))
                 return; // shops use the old PendingList
             if (newZone)
             {
@@ -4426,11 +4433,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             scripts.fireAreaLeave(fromId, next->def->id); // (the area has not changed yet)
             cur = std::move(next);
             pos = {s.x, s.y}; // before the save below, which remembers where the pet is inside a mod area
-            if (tr->flags & 2)
+            if ((tr->flags & 2) || db.shopForArea(cur->def->id))
                 enterShopStock(*cur->def); // destination is a shop
             else
             {
-                if (tr->flags & 1)
+                if ((tr->flags & 1) || db.shopForArea(fromId))
                     pending.consumeUnflaggedForArea(fromLegacy); // leaving a shop
                 enterAreaEvents(*cur->def, e.consumeAndSpawn);
                 refreshBits();
@@ -4473,7 +4480,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     const gp::Id fromId = cur->def->id;
                     scripts.fireAreaLeave(fromId, next->def->id);
                     cur = std::move(next);
-                    if (gp::shopRowForArea(from) >= 0)
+                    if (db.shopForArea(fromId))
                         pending.consumeUnflaggedForArea(from); // leaving a shop
                     enterAreaEvents(*cur->def, true);
                     refreshBits();
@@ -4522,14 +4529,16 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         auto buyFromShop = [&](const gp::ShopEvent &pe)
         {
             const int item = pe.item, area = pe.area, slot = pe.slot;
-            const int row = gp::shopRowForArea(area), si = shopStock.find(row, item);
+            const gp::Id shopArea = cur->def->id;
+            const gp::Id itemId = itemDefs[size_t(item)].id;
+            const int si = shopStock.find(shopArea, itemId);
             if (si < 0)
                 return;
             const gp::ItemDef &d = itemDefs[item];
             if (scripts.fireBeforeBuy(cur->def->id, d.id, d.price).suppress)
                 return; // a mod called the sale off
             const std::string name = itemName(item);
-            const gp::BuyQuote q = gp::quotePurchase(shopStock.rows[row][si].stock(), money, d.price, ownedCount(item), d.maxQty);
+            const gp::BuyQuote q = gp::quotePurchase((*shopStock.rowOf(shopArea))[size_t(si)].stock, money, d.price, ownedCount(item), d.maxQty);
 
             if (q.outcome == gp::BuyOutcome::AtCap)
             { // string at 0xb61d: "You can only carry %d %s."
@@ -4550,11 +4559,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             b.kind = gp::BoxKind::Quantity;
             b.qty = 1;
             b.qtyMax = q.maxQty;
-            b.onQuantity = [&, item, area, row](int qty)
+            b.onQuantity = [&, item, area, shopArea, itemId](int qty)
             {
-                gp::deliverPurchase(shopStock, row, item, qty, [&](int id)
-                                    { if (player.itemCount(itemDefs[size_t(id)].id) < itemDefs[size_t(id)].maxQty) player.addItem(itemDefs[size_t(id)].id, 1); }, // CheckQuestItemObjectivesComplete not ported
-                                    [&](int)
+                gp::deliverPurchase(shopStock, shopArea, itemId, qty, [&](const gp::Id &id)
+                                    { if (player.itemCount(id) < db.item(id)->maxQty) player.addItem(id, 1); }, // CheckQuestItemObjectivesComplete not ported
+                                    [&](const gp::Id &)
                                     { pending.removeShopItem(area, item); });
                 player.adjustMoney(-qty * itemDefs[item].price); // Item_ProcessPurchase: AdjustPlayerMoney(-qty * price)
                 scripts.fireAfterBuy(cur->def->id, itemDefs[item].id, itemDefs[item].price, qty);
@@ -4892,6 +4901,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             E.expose("tuning.nudgeQuests", &T.nudgeQuests, "the reminder shows while exactly this many quests are done (1)");
             E.expose("tuning.nudgeNpc", &T.nudgeNpc, "the base NPC record number it sends the pet to (0x42, Mayor Peter)");
             E.expose("tuning.nudgeFirstSeconds", &T.nudgeFirstSeconds, "quest reminder, first (30)");
+            E.expose("tuning.shopRestockRomTicks", &T.shopRestockRomTicks, "ROM ticks (59.94 Hz) between shop restocks, 0 = never (3000, about 50 s)");
             E.expose("tuning.nudgeRepeatSeconds", &T.nudgeRepeatSeconds, "quest reminder, repeat (180)");
         }
 
@@ -5318,6 +5328,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             {
                 acc -= 1.0 / tickHz();
                 gameTicks += 2;
+                if (const int every = gp::tuning().shopRestockRomTicks; every > 0 && (shopRestockAccum += 2) >= every) // +2 ROM ticks per 30 Hz step, like gameTicks
+                {
+                    shopRestockAccum = 0; // RollShopItemStock (TickCareStatWatchdog condition 12): one more weighted pick for every shop
+                    shopStock.restock(db.shops(), shopRnd);
+                }
                 // remember where everything was before this tick, for the smooth renderer
                 prevPos = pos;
                 statNotice.prevOffset = statNotice.offset; // (so a tick that doesn't run it, a dialogue say, doesn't make it shake)

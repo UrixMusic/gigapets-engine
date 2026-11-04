@@ -391,6 +391,23 @@ namespace gp
         int widthPx() const { return tilesW * 32; }
         int heightPx() const { return tilesH * 32; }
     };
+    // What a shop can stock (the ROM's tables at word 0xb303: 22 shops, up to 12 items each, three words an item). The stock is not a table: at the start
+    // `rolls` weighted picks are made (InitZoneItemPools), and a timer adds one more to every shop (RollShopItemStock). `cap` is the most of the item the
+    // shop offers at once (the word the ROM keeps beside the weight).
+    struct ShopItem
+    {
+        Id item;
+        int weight = 1;
+        int cap = 5;
+    };
+    struct ShopDef
+    {
+        Id id;   // "base:shop/<area number>" or "mymod:shop/x"
+        Id area; // the area (a base one or a mod's) that is the shop: its spawn points are where the stock stands
+        int rolls = 10;
+        std::vector<ShopItem> items;
+    };
+
     struct FixedSpotDef
     {
         Id id;

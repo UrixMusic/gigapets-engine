@@ -478,6 +478,50 @@ namespace gp
             return m ? *m : none;
         }
 
+        // Shops: same id replaces in place, a new id appends (the order is load order).
+        void put(ShopDef s)
+        {
+            for (ShopDef &e : shops_)
+                if (e.id == s.id)
+                {
+                    e = std::move(s);
+                    return;
+                }
+            shops_.push_back(std::move(s));
+        }
+        const std::vector<ShopDef> &shops() const { return shops_; }
+        const ShopDef *shop(const Id &id) const
+        {
+            for (const ShopDef &e : shops_)
+                if (e.id == id)
+                    return &e;
+            return nullptr;
+        }
+        ShopDef *shopMutable(const Id &id)
+        {
+            for (ShopDef &e : shops_)
+                if (e.id == id)
+                    return &e;
+            return nullptr;
+        }
+        void eraseShop(const Id &id)
+        {
+            for (size_t i = 0; i < shops_.size(); ++i)
+                if (shops_[i].id == id)
+                {
+                    shops_.erase(shops_.begin() + std::ptrdiff_t(i));
+                    return;
+                }
+        }
+        // The shop that stands in an area (the first, if two mods give one area two), or null.
+        const ShopDef *shopForArea(const Id &area) const
+        {
+            for (const ShopDef &e : shops_)
+                if (e.area == area)
+                    return &e;
+            return nullptr;
+        }
+
         void put(OfferSetDef s)
         {
             const Id k = s.id;
@@ -558,6 +602,7 @@ namespace gp
         QuestRomTables questTables_;
         BefriendRules befriend_;
         std::map<Id, MinigameDef> minigames_;
+        std::vector<ShopDef> shops_;
         std::vector<QuestTypeDef> questTypes_;
         std::map<Id, OfferSetDef> offerSets_;
         std::vector<Id> offerOrder_;

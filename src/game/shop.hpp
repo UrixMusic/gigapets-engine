@@ -2,10 +2,11 @@
 // Ported from SpawnShopItemStock, SpawnItemAtRandomFreeSlot, ConsumeUnflaggedWorldItemsForArea.
 #pragma once
 #include "../content/records.hpp"
-#include <cstdint>
-#include <vector>
-#include <cstring>
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <map>
+#include <vector>
 
 namespace gp
 {
@@ -20,80 +21,160 @@ namespace gp
         return (area >= 0 && area < 0x26) ? rows[area] : -1;
     }
 
+    // One entry of a shop's stock: an item and how many are on offer. (The ROM packs these into two words, `item | stock << 9` and an order
+    // number, so an item could be 9 bits; here an entry holds the item's id, so a mod's items fit.) `idx` is the order the entries came in.
     struct StockEntry
     {
-        uint16_t w0 = 0, idx = 0; // w0 = (stock << 9) | item, idx = offer index
-        int stock() const { return w0 >> 9; }
-        int item() const { return w0 & 0x1FF; }
+        Id item;
+        int stock = 0;
+        int idx = 0;
+        bool present() const { return !item.empty() && stock > 0; }
     };
 
-    struct ShopStock
+    // One weighted pick from a shop's table (PickWeightedRandomItem 0x2ddfe): the weights are summed, rnd(total) (0..total-1) is rolled, and the entries
+    // are walked from the last one back until the running total passes it. Empty if the shop lists nothing with a weight.
+    template <class Rnd>
+    Id pickWeightedItem(const ShopDef &shop, Rnd &&rnd)
     {
-        StockEntry rows[22][9];
-        static StockEntry make(int item, int stock, int idx) { return {uint16_t((stock << 9) | item), uint16_t(idx)}; }
-        // Test data only: row 1 (shop 0xB) as seen in MAME. Replace with the real initial table.
-        void initRow1()
+        long total = 0;
+        for (const ShopItem &i : shop.items)
+            total += std::max(0, i.weight);
+        if (total <= 0)
+            return {};
+        const long r = rnd(int(std::min<long>(total, 0x7fffffff)));
+        long acc = 0;
+        for (size_t k = shop.items.size(); k-- > 0;)
         {
-            const int it[6] = {0x2d, 0x3d, 0x44, 0x33, 0x40, 0x45}, st[6] = {1, 2, 2, 2, 2, 1};
-            for (int i = 0; i < 6; ++i)
-                rows[1][i] = make(it[i], st[i], i + 1);
+            acc += std::max(0, shop.items[k].weight);
+            if (acc > r)
+                return shop.items[k].item;
         }
-        // Purchase: stock -= 1, and a zero stock clears both words. Returns true if the entry is now empty.
-        bool buyOne(int row, int i)
-        { // Item_TickDeliveryCountdown; true = entry emptied
-            StockEntry &e = rows[row][i];
-            if (e.stock() <= 0)
+        return shop.items.front().item;
+    }
+
+    // The stock of every shop, by the shop's area. Nine entries a shop. Made when the game starts (InitZoneItemPools 0x2e2f3: 10 weighted picks a
+    // shop) and topped up by a timer (RollShopItemStock 0x2e339: one pick a shop); a purchase takes from it; it is not saved.
+    class ShopStock
+    {
+    public:
+        static constexpr int kSlots = 9;
+        using Row = std::array<StockEntry, kSlots>;
+
+        void clear() { rows_.clear(); }
+        Row &row(const Id &area) { return rows_[area]; }
+        const Row *rowOf(const Id &area) const
+        {
+            const auto it = rows_.find(area);
+            return it == rows_.end() ? nullptr : &it->second;
+        }
+
+        // InsertOrIncrementPoolSlot (0x2db08): an item already there gets one more; else it takes the first empty slot, numbered one past the highest
+        // order number in the row. False when the row is full of other items.
+        bool insert(const Id &area, const Id &item)
+        {
+            if (item.empty())
                 return false;
-            const int s = e.stock() - 1;
-            if (s == 0)
+            Row &r = rows_[area];
+            int firstEmpty = -1, highest = 0;
+            for (int i = 0; i < kSlots; ++i)
             {
-                e = {};
-                return true;
+                if (r[size_t(i)].item == item)
+                {
+                    ++r[size_t(i)].stock;
+                    return true;
+                }
+                if (r[size_t(i)].item.empty())
+                {
+                    if (firstEmpty < 0)
+                        firstEmpty = i;
+                }
+                else
+                    highest = std::max(highest, r[size_t(i)].idx);
             }
-            e.w0 = uint16_t((s << 9) | e.item());
-            return false;
+            if (firstEmpty < 0)
+                return false;
+            r[size_t(firstEmpty)] = {item, 1, highest + 1};
+            return true;
         }
-        int find(int row, int item) const
+
+        template <class Rnd>
+        void rollOne(const ShopDef &shop, Rnd &&rnd)
         {
-            for (int i = 0; i < 9; ++i)
-                if (rows[row][i].w0 && rows[row][i].item() == item)
+            insert(shop.area, pickWeightedItem(shop, rnd));
+        }
+        // The shops as they are when the game starts.
+        template <class Rnd>
+        void init(const std::vector<ShopDef> &shops, Rnd &&rnd)
+        {
+            rows_.clear();
+            for (const ShopDef &s : shops)
+            {
+                rows_[s.area] = Row{};
+                for (int n = 0; n < s.rolls; ++n)
+                    rollOne(s, rnd);
+            }
+        }
+        // The timer's top-up: one more pick for every shop.
+        template <class Rnd>
+        void restock(const std::vector<ShopDef> &shops, Rnd &&rnd)
+        {
+            for (const ShopDef &s : shops)
+                rollOne(s, rnd);
+        }
+
+        // ClampInventorySlotQuantities (0x2e381), run as the pet walks into a shop: no entry offers more than the shop's cap for it, or more than the pet
+        // can still carry (held(item), maxQty(item)); an entry that comes to nothing is emptied. An item the shop's table does not list has no cap.
+        template <class Held, class Max>
+        void clamp(const ShopDef &shop, Held &&held, Max &&maxQty)
+        {
+            auto it = rows_.find(shop.area);
+            if (it == rows_.end())
+                return;
+            for (StockEntry &e : it->second)
+            {
+                if (e.item.empty())
+                    continue;
+                int allowed = std::max(0, maxQty(e.item) - held(e.item));
+                for (const ShopItem &i : shop.items)
+                    if (i.item == e.item)
+                    {
+                        allowed = std::min(allowed, i.cap);
+                        break;
+                    }
+                e.stock = std::min(e.stock, allowed);
+                if (e.stock <= 0)
+                    e = StockEntry{};
+            }
+        }
+
+        // The slot of an item in a shop, or -1.
+        int find(const Id &area, const Id &item) const
+        {
+            const Row *r = rowOf(area);
+            if (!r)
+                return -1;
+            for (int i = 0; i < kSlots; ++i)
+                if (!(*r)[size_t(i)].item.empty() && (*r)[size_t(i)].item == item)
                     return i;
             return -1;
         }
-    };
-
-    // Parses a MAME text dump (dump stock.bin,e6b,18c,2): lines like "000E6B:  022B 0001 0220 ...  ascii".
-    inline bool loadStockDump(const char *path, ShopStock &s)
-    {
-        FILE *f = std::fopen(path, "rb");
-        if (!f)
-            return false;
-        std::vector<uint16_t> w;
-        char line[512];
-        while (w.size() < 22 * 18 && std::fgets(line, sizeof line, f))
+        // Purchase: stock -= 1, and a zero stock clears the entry. Returns true if the entry is now empty (Item_TickDeliveryCountdown).
+        bool buyOne(const Id &area, int slot)
         {
-            char *p = std::strchr(line, ':');
-            if (!p)
-                continue;
-            ++p;
-            for (int k = 0; k < 8 && w.size() < 22 * 18; ++k)
-            { // at most 8 words per line, so the ASCII column is never read
-                char *end = nullptr;
-                const unsigned long v = std::strtoul(p, &end, 16);
-                if (end - p < 4)
-                    break; // a word token includes its leading space, so this is > 4 chars when valid
-                w.push_back(uint16_t(v));
-                p = end;
+            StockEntry &e = rows_[area][size_t(slot)];
+            if (e.stock <= 0)
+                return false;
+            if (--e.stock == 0)
+            {
+                e = StockEntry{};
+                return true;
             }
-        }
-        std::fclose(f);
-        if (w.size() != 22 * 18)
             return false;
-        for (int r = 0; r < 22; ++r)
-            for (int i = 0; i < 9; ++i)
-                s.rows[r][i] = {w[size_t(r) * 18 + size_t(i) * 2], w[size_t(r) * 18 + size_t(i) * 2 + 1]};
-        return true;
-    }
+        }
+
+    private:
+        std::map<Id, Row> rows_;
+    };
 
     struct ShopEvent
     { // trimmed: category/eventId are always 0 / none for shop items
@@ -185,32 +266,39 @@ namespace gp
 
     // DeliverPurchasedQuantity. `give` = Item_IncrementOwnedAndSave. Money is the caller's job: money -= qty * price.
     template <class Give, class SoldOut>
-    void deliverPurchase(ShopStock &s, int row, int item, int qty, Give &&give, SoldOut &&soldOut)
+    void deliverPurchase(ShopStock &s, const Id &area, const Id &item, int qty, Give &&give, SoldOut &&soldOut)
     {
-        const int slot = s.find(row, item);
+        const int slot = s.find(area, item);
         if (slot < 0)
             return;
         for (int n = 0; n < qty; ++n)
         {
-            if (s.buyOne(row, slot))
+            if (s.buyOne(area, slot))
                 soldOut(item); // Item_TickDeliveryCountdown
             give(item);        // Item_IncrementOwnedAndSave
         }
     }
 
-    // SpawnShopItemStock: one spawn per stocked entry, in stock order, stopping at the slot count.
-    template <class Rnd>
-    int spawnShopItemStock(PendingList &p, const ShopStock &s, int area, int row,
-                           const std::vector<IPoint> &slots, Rnd &&rnd)
+    // SpawnShopItemStock: one spawn per stocked entry, in stock order, stopping at the slot count. `number` turns an item id into the number the world
+    // items carry (the db's item index), or -1 for an item the game does not know (skipped).
+    template <class Rnd, class Number>
+    int spawnShopItemStock(PendingList &p, const ShopStock &s, int area, const Id &areaId, const std::vector<IPoint> &slots, Rnd &&rnd, Number &&number)
     {
+        const ShopStock::Row *row = s.rowOf(areaId);
+        if (!row)
+            return 0;
         int n = 0;
-        for (int i = 0; i < 9 && n < int(slots.size()); ++i)
+        for (const StockEntry &e : *row)
         {
-            const StockEntry &e = s.rows[row][i];
-            if (e.w0 == 0)
+            if (n >= int(slots.size()))
+                break;
+            if (!e.present())
+                continue;
+            const int it = number(e.item);
+            if (it < 0)
                 continue;
             ++n;
-            spawnAtRandomFreeSlot(p, area, slots, e.item(), 3, false, rnd);
+            spawnAtRandomFreeSlot(p, area, slots, it, 3, false, rnd);
         }
         return n;
     }
