@@ -10,6 +10,7 @@
 #pragma once
 #include "audio_clip.hpp"
 #include "audio_registry.hpp"
+#include "midi.hpp"
 #include "rom_audio.hpp"
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -268,14 +269,25 @@ namespace gp
         const AudioClip *modClip(const ModSound &m, bool music)
         {
             char key[512];
-            std::snprintf(key, sizeof key, "mod:%s|%g|%g|%g|%g|%d", m.path.c_str(), double(m.gain), m.semitones, m.loopStart, m.loopEnd, music ? 1 : 0);
-            auto it = clips_.find(key);
+            std::snprintf(key, sizeof key, "mod:%s|%g|%g|%g|%g|%d|%d", m.path.c_str(), double(m.gain), m.semitones, m.loopStart, m.loopEnd, music ? 1 : 0, m.midi && retro_ ? 1 : 0);
+            std::string mapKey = key;
+            for (const auto &kv : m.programs)
+                mapKey += "|p" + std::to_string(kv.first) + "=" + std::to_string(kv.second);
+            for (const auto &kv : m.drums)
+                mapKey += "|d" + std::to_string(kv.first) + "=" + std::to_string(kv.second);
+            mapKey += m.gmNumbers ? "|gm" : "|rom";
+            for (const auto &kv : m.channels)
+                mapKey += "|c" + std::to_string(kv.first) + "=" + std::to_string(kv.second);
+            for (int c : m.slideChannels)
+                mapKey += "|s" + std::to_string(c);
+            auto it = clips_.find(mapKey);
             if (it != clips_.end())
                 return it->second.get();
             std::unique_ptr<AudioClip> c;
             PcmData pcm;
             std::string why;
-            if (loadSoundFile(m.path, pcm, why))
+            const bool loaded = m.midi ? renderMidi(m, pcm, why) : loadSoundFile(m.path, pcm, why);
+            if (loaded)
             {
                 c = std::make_unique<AudioClip>(makeClip(pcm, kRate, m.gain, m.semitones, music ? m.loopStart : 0, music ? m.loopEnd : 0));
                 if (c->frames() == 0)
@@ -286,8 +298,38 @@ namespace gp
             else
                 std::printf("audio: %s (%s)\n", why.c_str(), m.id.c_str());
             const AudioClip *p = c.get();
-            clips_[key] = std::move(c);
+            clips_[mapKey] = std::move(c);
             return p;
+        }
+
+        // A MIDI file played with the ROM's instruments, as sound at the mixer's rate. Needs the ROM (setRom).
+        bool renderMidi(const ModSound &m, PcmData &out, std::string &why)
+        {
+            if (!romAudio_)
+                return why = "a MIDI file needs the ROM's instruments (no ROM given)", false;
+            std::vector<uint8_t> bytes;
+            if (!readFileBytes(m.path, bytes))
+                return why = "cannot read " + m.path, false;
+            midi::Options o;
+            o.programs = m.programs;
+            o.drums = m.drums;
+            o.slideChannels = m.slideChannels;
+            o.channels = m.channels;
+            o.gmPrograms = o.gmDrums = m.gmNumbers;
+            o.programCount = int(romAudio_->programCount()) - 1; // the last group is the drum kit
+            o.drumCount = int(romAudio_->drumCount());
+            midi::Result r;
+            if (!midi::toSong(bytes, o, r, why))
+                return false;
+            const std::vector<float> f = romAudio_->renderSong(r.song, kRate);
+            if (f.empty())
+                return why = "the MIDI file renders to nothing", false;
+            out.rate = kRate;
+            out.channels = 2;
+            out.pcm.resize(f.size());
+            for (size_t i = 0; i < f.size(); ++i)
+                out.pcm[i] = int16_t(std::clamp(f[i], -1.f, 1.f) * 32000.f);
+            return true;
         }
 
         // Loads (once) audio/<kind>/<id>.wav, trying the decimal and the 0x name. Null if there is none.

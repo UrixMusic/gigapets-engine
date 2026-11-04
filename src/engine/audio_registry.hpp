@@ -22,6 +22,11 @@ namespace gp
         float gain = 1.f; // 1 = as the file is
         double semitones = 0; // played this much higher (and so faster) or lower
         double loopStart = 0, loopEnd = 0; // music only, in seconds of the file; 0 = the whole of it
+        bool midi = false;                 // music only: a MIDI file, played with the ROM's instruments (engine/midi.hpp)
+        std::map<int, int> programs, drums; // for a MIDI file: its program -> the ROM's instrument, its drum note -> the ROM's drum
+        bool gmNumbers = true;              // for a MIDI file: its programs and drum notes are General MIDI (else the ROM's own numbers)
+        std::map<int, int> channels;        // for a MIDI file: the channel (0..15) -> the ROM's instrument it starts with
+        std::vector<int> slideChannels;     // for a MIDI file: the channels (0..15) where two notes starting and ending together are a slide
     };
 
     struct AudioRegistry

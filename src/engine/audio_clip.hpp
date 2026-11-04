@@ -221,6 +221,31 @@ namespace gp
         return why = "a sound file must be .wav or .ogg", false;
     }
 
+    // A 16-bit PCM WAV file of interleaved samples.
+    inline bool writeWav16(const std::string &path, const std::vector<int16_t> &pcm, int rate, int channels = 2)
+    {
+        std::ofstream f(path, std::ios::binary);
+        if (!f)
+            return false;
+        auto p32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) f.put(char(v >> (8 * i))); };
+        auto p16 = [&](uint32_t v) { f.put(char(v)); f.put(char(v >> 8)); };
+        const uint32_t bytes = uint32_t(pcm.size() * 2);
+        f.write("RIFF", 4);
+        p32(36 + bytes);
+        f.write("WAVEfmt ", 8);
+        p32(16);
+        p16(1);
+        p16(uint32_t(channels));
+        p32(uint32_t(rate));
+        p32(uint32_t(rate * channels * 2));
+        p16(uint32_t(channels * 2));
+        p16(16);
+        f.write("data", 4);
+        p32(bytes);
+        f.write(reinterpret_cast<const char *>(pcm.data()), std::streamsize(bytes));
+        return bool(f);
+    }
+
     // The clip at the mixer's rate, stereo, times `gain`, played `semitones` higher (and so shorter) or lower. More than two channels: the
     // first two. The loop points (seconds of the file, 0 = none / the end) are carried over.
     inline AudioClip makeClip(const PcmData &in, int outRate, float gain = 1.f, double semitones = 0, double loopStartSec = 0, double loopEndSec = 0)

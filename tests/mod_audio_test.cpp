@@ -28,6 +28,16 @@ static void writeWav(const fs::path &p)
     std::ofstream f(p, std::ios::binary);
     f.write(reinterpret_cast<const char *>(w.data()), std::streamsize(w.size()));
 }
+// A MIDI file: one note on channel 1 (program 40), one drum note (36) on channel 10.
+static void writeMidi(const fs::path &p)
+{
+    const std::vector<uint8_t> trk = {0x00, 0xc0, 40, 0x00, 0x90, 60, 100, 0x00, 0x99, 36, 100, 0x83, 0x60, 0x80, 60, 0, 0x00, 0x89, 36, 0, 0x00, 0xff, 0x2f, 0x00};
+    std::vector<uint8_t> w = {'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 0, 0, 1, 0x01, 0xe0, 'M', 'T', 'r', 'k', 0, 0, 0, uint8_t(trk.size())};
+    w.insert(w.end(), trk.begin(), trk.end());
+    fs::create_directories(p.parent_path());
+    std::ofstream f(p, std::ios::binary);
+    f.write(reinterpret_cast<const char *>(w.data()), std::streamsize(w.size()));
+}
 static bool mentions(const std::vector<std::string> &v, const std::string &s)
 {
     for (const auto &e : v)
@@ -52,6 +62,7 @@ int main()
     fs::remove_all(root);
     writeFile(root / "snd" / "manifest.json", R"({"id":"snd","version":"1.0","game_api":"1"})");
     writeWav(root / "snd" / "audio" / "a.wav");
+    writeMidi(root / "snd" / "audio" / "m.mid");
     writeFile(root / "snd" / "audio" / "notsound.ogg", "garbage");
     writeFile(root / "snd" / "data" / "a.json", R"([
  {"type":"sound","mode":"add","id":"snd:sound/meow","file":"audio/a.wav","volume":150,"pitch":-3.5},
@@ -60,6 +71,7 @@ int main()
  {"type":"music","mode":"add","id":"snd:music/theme","file":"audio/a.wav","loop_start":0.25,"loop_end":1.5},
  {"type":"music","mode":"replace","id":"base:music/4","file":"audio/a.wav","pitch":12},
  {"type":"sound","mode":"replace","id":"snd:sound/bark","volume":80},
+ {"type":"music","mode":"add","id":"snd:music/midi","file":"audio/m.mid","programs":{"40":9},"drums":{"36":5},"numbers":"rom","slide_channels":[1,3],"channels":{"1":4,"16":13},"loop_end":0.5},
  {"type":"anim","mode":"add","id":"snd:anim/a","frames":[]},
  {"type":"species","mode":"add","id":"snd:species/s","based_on":"base:species/0",
   "art":{"voice":["snd:sound/meow",2,3,4,5,6,7,8,9,10,11,12,13],
@@ -73,13 +85,18 @@ int main()
     CHECK(mentions(rep.errors, "snd:anim/a"));
 
     const AudioRegistry &reg = audioRegistry();
-    CHECK(reg.sounds.size() == 2 && reg.songs.size() == 1 && reg.soundOver.size() == 1 && reg.songOver.size() == 1);
+    CHECK(reg.sounds.size() == 2 && reg.songs.size() == 2 && reg.soundOver.size() == 1 && reg.songOver.size() == 1);
     const int meow = modSoundNumber("snd:sound/meow"), bark = modSoundNumber("snd:sound/bark");
     CHECK(meow == kModSoundBase && bark == kModSoundBase + 1 && modSongNumber("snd:music/theme") == kModMusicBase);
     CHECK(reg.sounds[0].gain == 1.5f && reg.sounds[0].semitones == -3.5 && reg.sounds[0].path.find("a.wav") != std::string::npos);
     CHECK(reg.sounds[1].gain == 0.8f); // replaced by a later record: only the volume changed, the file stays
     CHECK(reg.soundOver.at(84).gain == 0.5f && reg.songOver.at(4).semitones == 12 && reg.songs[0].loopStart == 0.25 && reg.songs[0].loopEnd == 1.5);
     CHECK(soundFileFor(84) && soundFileFor(meow) && !soundFileFor(5) && songFileFor(4) && songFileFor(kModMusicBase) && !songFileFor(3));
+
+    { // the MIDI one: kept as a MIDI file with its maps
+        const ModSound &ms = reg.songs[1];
+        CHECK(ms.midi && ms.programs.size() == 1 && ms.programs.at(40) == 9 && ms.drums.at(36) == 5 && ms.loopEnd == 0.5 && ms.slideChannels == std::vector<int>({0, 2}) && ms.channels.size() == 2 && !ms.gmNumbers && reg.songs[0].gmNumbers && ms.channels.at(0) == 4 && ms.channels.at(15) == 13 && !reg.songs[0].midi);
+    }
 
     // a species names a mod's sounds by id, and the ROM's by number
     const SpeciesDef *sd = db.species("snd:species/s");
@@ -123,6 +140,7 @@ int main()
         writeFile(root / "bad" / "manifest.json", R"({"id":"bad","version":"1.0","game_api":"1"})");
         writeWav(root / "bad" / "a.wav");
         writeFile(root / "bad" / "n.ogg", "garbage");
+        writeMidi(root / "bad" / "m.mid");
         writeFile(root / "bad" / "data" / "x.json", "[" + rec + "]");
         ContentDB d2 = baseDb();
         const bool ok = mentions(importMods(d2, root).errors, want);
@@ -143,6 +161,22 @@ int main()
     CHECK(bad(R"({"type":"sound","mode":"add","id":"bad:sound/x","file":"a.wav","loop_start":1})", "unknown field"));
     CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"a.wav","loop_start":2,"loop_end":1})", "'loop_start' must come before"));
     CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"a.wav","loop_end":"soon"})", "seconds"));
+    writeMidi(root / "bad" / "m.mid");
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","programs":{"40":14}})", "0..13"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","drums":{"36":12}})", "0..11"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","programs":{"x":1}})", "maps a MIDI number"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"a.wav","programs":{"1":1}})", "only goes with a MIDI file"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","slide_channels":[0]})", "channel numbers"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","slide_channels":[17]})", "channel numbers"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"a.wav","slide_channels":[1]})", "only goes with a MIDI file"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","channels":{"1":14}})", "'channels' must be an object"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","channels":{"0":1}})", "'channels' must be an object"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","channels":[1]})", "'channels' must be an object"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"a.wav","channels":{"1":1}})", "only goes with a MIDI file"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","numbers":"general"})", "'numbers' must be"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"a.wav","numbers":"gm"})", "only goes with a MIDI file"));
+    CHECK(bad(R"({"type":"sound","mode":"add","id":"bad:sound/x","file":"m.mid"})", ".wav or .ogg"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"n.mid"})", "missing file"));
     CHECK(bad(R"({"type":"species","mode":"add","id":"bad:species/x","based_on":"base:species/0","art":{"voice":["bad:sound/none",2,3,4,5,6,7,8,9,10,11,12,13]}})", "no sound"));
 
     fs::remove_all(root);

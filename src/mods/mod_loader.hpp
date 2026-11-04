@@ -1,6 +1,7 @@
 // mod_loader.hpp - importMods: scan mods/, sort, apply records on top of the db (after importRom).
 // Phase 1: only the "text" record type exists. Every other type is a loud error, so typos can't pass silently.
 #pragma once
+#include "../engine/midi.hpp"           // a mod's MIDI music
 #include "../engine/audio_clip.hpp"     // reading a mod's sound files
 #include "../engine/audio_registry.hpp" // the sounds and songs of the mods
 #include "../game/npc_anim_ids.hpp" // a species' art and the numbers of a mod's animations
@@ -2003,9 +2004,12 @@ namespace gp
         //   { type: "sound", mode: "add", id: "mymod:sound/meow", file: "audio/meow.ogg", volume: 100, pitch: 0 }
         //   { type: "music", mode: "add", id: "mymod:music/theme", file: "audio/theme.ogg", loop_start: 4.0, loop_end: 60.5 }
         //   { type: "sound", mode: "replace", id: "base:sound/84", file: ... }   // plays the file where the game asks for the ROM's sound 84
-        // file: .wav or .ogg inside the mod's folder. volume: percent of the file's own level (0..400). pitch: semitones, + higher / faster.
+        // file: .wav or .ogg inside the mod's folder (music: or a .mid / .midi file, played with the ROM's instruments, with `programs` {midiProgram: romInstrument 0..13}
+        // and `drums` {midiDrumNote: romDrum 0..11} (programs and drum notes are General MIDI unless `numbers` is "rom") to say which of its instruments and drums are which; `channels` {"1": 3} gives a channel (1 to 16) its instrument
+        // (or name the editor's channel "Lead [3]"; `--export-instruments` writes what each number sounds like); `slide_channels` [3] lists the channels
+        // (1 to 16) where two notes starting and ending together are an FL Studio slide, see engine/midi.hpp). volume: percent of the file's own level (0..400). pitch: semitones, + higher / faster.
         // loop_start / loop_end (music only): seconds of the file; the song plays up to loop_end, then repeats from loop_start (0 = the whole song).
-        inline bool modFile(const ModManifest &m, const std::string &rel, std::string &out, std::string &why)
+        inline bool modFile(const ModManifest &m, const std::string &rel, std::string &out, std::string &why, bool midiOk = false)
         {
             const fs::path r = rel;
             if (r.is_absolute())
@@ -2016,7 +2020,7 @@ namespace gp
             const fs::path p = m.dir / r;
             if (!fs::exists(p))
                 return why = "missing file " + p.string(), false;
-            if (!checkSoundFile(p.string(), why))
+            if (!midiOk && !checkSoundFile(p.string(), why))
                 return why = p.string() + ": " + why, false;
             out = p.generic_string();
             return true;
@@ -2025,7 +2029,7 @@ namespace gp
         {
             const char *kind = music ? "music" : "sound";
             static const std::set<std::string> soundFields{"type", "mode", "id", "file", "volume", "pitch"};
-            static const std::set<std::string> musicFields{"type", "mode", "id", "file", "volume", "pitch", "loop_start", "loop_end"};
+            static const std::set<std::string> musicFields{"type", "mode", "id", "file", "volume", "pitch", "loop_start", "loop_end", "programs", "drums", "channels", "slide_channels", "numbers"};
             const auto &allowed = music ? musicFields : soundFields;
             for (auto it = rec.begin(); it != rec.end(); ++it)
                 if (!allowed.count(it.key()))
@@ -2075,11 +2079,97 @@ namespace gp
             {
                 if (!rec["file"].is_string())
                     return err(rep, file, m.id, "'" + id + "': 'file' must be a path");
-                if (!modFile(m, rec["file"].get<std::string>(), s.path, why))
+                const std::string ext = lowerExt(rec["file"].get<std::string>());
+                s.midi = music && (ext == ".mid" || ext == ".midi");
+                if (!modFile(m, rec["file"].get<std::string>(), s.path, why, s.midi))
                     return err(rep, file, m.id, "'" + id + "': " + why);
+                if (!s.midi)
+                {
+                    s.programs.clear();
+                    s.drums.clear();
+                    s.slideChannels.clear();
+                    s.channels.clear();
+                    s.gmNumbers = true;
+                }
             }
             else if (s.path.empty())
                 return err(rep, file, m.id, "'" + id + "': 'file' is required");
+            for (const char *k : {"programs", "drums"})
+                if (rec.contains(k))
+                {
+                    if (!s.midi)
+                        return err(rep, file, m.id, "'" + id + "': '" + k + "' only goes with a MIDI file");
+                    if (!rec[k].is_object())
+                        return err(rep, file, m.id, "'" + id + "': '" + k + "' must be an object like {\"40\": 9}");
+                    const bool prog = std::string(k) == "programs";
+                    auto &dst = prog ? s.programs : s.drums;
+                    dst.clear();
+                    for (auto it = rec[k].begin(); it != rec[k].end(); ++it)
+                    {
+                        char *end = nullptr;
+                        const long from = std::strtol(it.key().c_str(), &end, 10);
+                        if (it.key().empty() || *end || from < 0 || from > 127 || !it.value().is_number_integer())
+                            return err(rep, file, m.id, "'" + id + "': '" + k + "' maps a MIDI number (0 to 127) to a number: " + it.key());
+                        const int to = it.value().get<int>(), top = prog ? 13 : 11;
+                        if (to < 0 || to > top)
+                            return err(rep, file, m.id, "'" + id + "': '" + k + "' " + it.key() + " must go to 0.." + std::to_string(top) + " (the ROM's " + (prog ? "instruments" : "drums") + ")");
+                        dst[int(from)] = to;
+                    }
+                }
+            if (rec.contains("numbers"))
+            {
+                if (!s.midi)
+                    return err(rep, file, m.id, "'" + id + "': 'numbers' only goes with a MIDI file");
+                const std::string kind = rec["numbers"].is_string() ? rec["numbers"].get<std::string>() : "";
+                if (kind != "gm" && kind != "rom")
+                    return err(rep, file, m.id, "'" + id + "': 'numbers' must be \"gm\" (programs and drum notes as General MIDI, the default) or \"rom\" (the ROM's own)");
+                s.gmNumbers = kind == "gm";
+            }
+            if (rec.contains("channels"))
+            {
+                if (!s.midi)
+                    return err(rep, file, m.id, "'" + id + "': 'channels' only goes with a MIDI file");
+                if (!rec["channels"].is_object())
+                    return err(rep, file, m.id, "'" + id + "': 'channels' must be an object like {\"1\": 3} (the channel as your editor shows it, 1 to 16, and the ROM's instrument 0 to 13)");
+                s.channels.clear();
+                for (auto it = rec["channels"].begin(); it != rec["channels"].end(); ++it)
+                {
+                    char *end = nullptr;
+                    const long c = std::strtol(it.key().c_str(), &end, 10);
+                    if (it.key().empty() || *end || c < 1 || c > 16 || !it.value().is_number_integer() || it.value().get<int>() < 0 || it.value().get<int>() > 13)
+                        return err(rep, file, m.id, "'" + id + "': 'channels' must be an object like {\"1\": 3} (the channel as your editor shows it, 1 to 16, and the ROM's instrument 0 to 13): " + it.key());
+                    s.channels[int(c) - 1] = it.value().get<int>();
+                }
+            }
+            if (rec.contains("slide_channels"))
+            {
+                if (!s.midi)
+                    return err(rep, file, m.id, "'" + id + "': 'slide_channels' only goes with a MIDI file");
+                if (!rec["slide_channels"].is_array() || rec["slide_channels"].size() > 16)
+                    return err(rep, file, m.id, "'" + id + "': 'slide_channels' must be a list of channel numbers like [3] (1 to 16, as your editor shows them)");
+                s.slideChannels.clear();
+                for (const json &c : rec["slide_channels"])
+                {
+                    if (!c.is_number_integer() || c.get<int>() < 1 || c.get<int>() > 16)
+                        return err(rep, file, m.id, "'" + id + "': 'slide_channels' must be a list of channel numbers like [3] (1 to 16, as your editor shows them)");
+                    s.slideChannels.push_back(c.get<int>() - 1);
+                }
+            }
+            if (s.midi) // read it now, so a bad file or a note it cannot play is reported when the mod loads
+            {
+                midi::Options mo;
+                mo.programs = s.programs;
+                mo.drums = s.drums;
+                mo.slideChannels = s.slideChannels;
+                mo.channels = s.channels;
+                mo.gmPrograms = mo.gmDrums = s.gmNumbers;
+                std::vector<uint8_t> bytes;
+                midi::Result mr;
+                if (!readFileBytes(s.path, bytes) || !midi::toSong(bytes, mo, mr, why))
+                    return err(rep, file, m.id, "'" + id + "': " + s.path + ": " + why);
+                for (const std::string &w : mr.warnings)
+                    rep.warnings.push_back("[" + m.id + "] " + s.path + ": " + w);
+            }
             int percent = int(s.gain * 100 + 0.5f);
             if (!optInt(rec, "volume", percent, 0, 400, why))
                 return err(rep, file, m.id, "'" + id + "': " + why);

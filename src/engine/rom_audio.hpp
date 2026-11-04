@@ -41,8 +41,16 @@ namespace gp
         struct Event
         {
             int t = 0;
-            char k = 0; // n note, p program, b bend, f flag
+            char k = 0; // n note, p program, b bend (the ROM's: v = the phase), B bend (a MIDI file's: v = cents above the note), f flag
             int ch = 0, dur = 0, pb = 0, pan = 0, vol = 0, vel = 0, v = 0, gap = 1;
+        };
+
+        // A pitch bend on a channel from some time on (the voice reads them in order).
+        struct Bend
+        {
+            double t = 0;
+            int v = 0;
+            bool rel = false; // v is cents above the note's own pitch (else the ROM's absolute phase value)
         };
 
         struct Song
@@ -117,26 +125,31 @@ namespace gp
             // Song n rendered to stereo float at `rate`; the tail is folded back onto the start so it loops cleanly.
             std::vector<float> music(size_t n, int rate) const
             {
-                std::vector<float> out;
                 if (n >= songs_.size())
-                    return out;
-                const Song &S = songs_[n];
+                    return {};
+                return renderSong(songs_[n], rate);
+            }
+
+            // Any song (the ROM's, or one made from a MIDI file) with the ROM's instruments: stereo float at `rate`, looped as above.
+            std::vector<float> renderSong(const Song &S, int rate) const
+            {
+                std::vector<float> out;
                 const size_t body = size_t(S.end / kTicksPerSecond * rate);
                 if (!body)
                     return out;
                 const size_t total = body + size_t(4.0 * rate);
                 std::vector<float> mix(total * 2, 0.f);
                 std::array<int, 16> prog{};
-                std::array<std::vector<std::pair<double, int>>, 16> bends; // time, phase value
+                std::array<std::vector<Bend>, 16> bends;
                 for (const Event &q : S.ev)
-                    if (q.k == 'b' && q.ch < 16)
-                        bends[q.ch].push_back({q.t / kTicksPerSecond, q.v});
+                    if ((q.k == 'b' || q.k == 'B') && q.ch >= 0 && q.ch < 16)
+                        bends[q.ch].push_back({q.t / kTicksPerSecond, q.v, q.k == 'B'});
                 for (const Event &q : S.ev)
                 {
                     const double when = q.t / kTicksPerSecond;
                     if (q.k == 'p')
                     {
-                        if (q.ch < 16)
+                        if (q.ch >= 0 && q.ch < 16)
                             prog[q.ch] = q.v;
                         continue;
                     }
@@ -145,7 +158,7 @@ namespace gp
                     const float gain = float((q.vol * q.vel) >> 7) / 127.f;
                     if (q.ch == 9)
                     {
-                        if (q.pb < int(drums_.size()))
+                        if (q.pb >= 0 && q.pb < int(drums_.size()))
                             voice(mix, rate, *drums_[q.pb], when, 1.0, gain, q.pan, 0, nullptr);
                     }
                     else if (const Sample *e = pick(prog[q.ch & 15], q.pb))
@@ -165,6 +178,19 @@ namespace gp
                 return out;
             }
 
+            // The samples that make up instrument `prog` (one per note zone, lowest first), or none.
+            std::vector<const Sample *> instrumentSamples(int prog) const
+            {
+                std::vector<const Sample *> v;
+                if (prog < 0 || prog >= int(offs_.size()))
+                    return v;
+                const size_t s = offs_[prog], en = prog + 1 < int(offs_.size()) ? offs_[prog + 1] : list_.size();
+                for (size_t i = s; i < en && i < list_.size(); ++i)
+                    v.push_back(list_[i]);
+                return v;
+            }
+            size_t drumCount() const { return drums_.size(); }
+            size_t programCount() const { return offs_.size(); }
             const Sample *drum(size_t i) const { return i < drums_.size() ? drums_[i] : nullptr; }
             const std::vector<Song> &songs() const { return songs_; }
             size_t sampleCount() const { return all_.size(); }
@@ -444,7 +470,7 @@ namespace gp
 
             // Mixes one note into `mix` (stereo float). dur <= 0: let the sample/envelope end it.
             void voice(std::vector<float> &mix, int rate, const Sample &e, double when, double pitch, float gain, int pan, double dur,
-                       const std::vector<std::pair<double, int>> *bends) const
+                       const std::vector<Bend> *bends) const
             {
                 const uint32_t base = e.off + 40;
                 const double hdr = double(std::max<uint32_t>(e.rate ? e.rate : 11025, 8000));
@@ -514,10 +540,10 @@ namespace gp
                     if (t >= tEnd)
                         break;
                     if (bends)
-                        while (bi < bends->size() && (*bends)[bi].first <= when + t)
+                        while (bi < bends->size() && (*bends)[bi].t <= when + t)
                         {
-                            if ((*bends)[bi].first >= when - 0.001)
-                                step = (*bends)[bi].second * 281250.0 / 524288.0 / rate;
+                            if ((*bends)[bi].t >= when - 0.001)
+                                step = (*bends)[bi].rel ? pitch * hdr / rate * std::pow(2.0, (*bends)[bi].v / 1200.0) : (*bends)[bi].v * 281250.0 / 524288.0 / rate;
                             ++bi;
                         }
                     if (!e.hasLoop && pos >= introLen)
