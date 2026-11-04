@@ -4668,6 +4668,13 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             gp::ScriptApi &sapi = scripts.api();
             sapi.playSound = [&](int id, int vol)
             { sfx(id, vol); };
+            sapi.playMusic = [&](int song)
+            {
+                if (song < 0)
+                    gp::audio().stopMusic();
+                else
+                    gp::audio().playMusic(song);
+            };
             sapi.spawnObject = [&](const std::string &id, const std::string &type, int x, int y, int rx, int ry)
             {
                 const gp::ObjectType *ot = db.objectType(type);

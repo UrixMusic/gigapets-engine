@@ -1,6 +1,8 @@
 // mod_loader.hpp - importMods: scan mods/, sort, apply records on top of the db (after importRom).
 // Phase 1: only the "text" record type exists. Every other type is a loud error, so typos can't pass silently.
 #pragma once
+#include "../engine/audio_clip.hpp"     // reading a mod's sound files
+#include "../engine/audio_registry.hpp" // the sounds and songs of the mods
 #include "../game/npc_anim_ids.hpp" // a species' art and the numbers of a mod's animations
 #include "../content/db.hpp"
 #include "../game/item_use.hpp"  // itemActions(): the registry an item's use.action is checked against
@@ -701,6 +703,19 @@ namespace gp
             b = int(y);
             return true;
         }
+        // Optional "music": the ROM's song number 0..8, or the id of a mod's music record (made in pass 0, so it is known by the time areas load).
+        inline bool optMusic(const json &rec, int &out, std::string &why)
+        {
+            if (rec.contains("music") && rec["music"].is_string())
+            {
+                const int n = modSongNumber(rec["music"].get<std::string>());
+                if (n < 0)
+                    return why = "'music' names no music record: '" + rec["music"].get<std::string>() + "'", false;
+                out = n;
+                return true;
+            }
+            return optInt(rec, "music", out, 0, 8, why);
+        }
         inline bool needStr(const json &rec, const char *k, std::string &out, std::string &why)
         {
             if (!rec.contains(k) || !rec[k].is_string())
@@ -1155,7 +1170,7 @@ namespace gp
                     *dst[i] = mg[i].get<int>();
                 }
             }
-            if (!optInt(rec, "y_offset", a.collisionYOffset, -64, 64, why) || !optInt(rec, "music", a.music, 0, 8, why) ||
+            if (!optInt(rec, "y_offset", a.collisionYOffset, -64, 64, why) || !optMusic(rec, a.music, why) ||
                 !optInt(rec, "max_events", a.maxEvents, 0, 200, why) || !optBool(rec, "resume", a.resume, why) ||
                 !optBool(rec, "diggable", a.diggable, why))
                 return err(rep, file, m.id, "patch '" + id + "': " + why);
@@ -1238,7 +1253,7 @@ namespace gp
                     *dst[i] = mg[i].get<int>();
                 }
             }
-            if (!optInt(rec, "y_offset", a.collisionYOffset, -64, 64, why) || !optInt(rec, "music", a.music, 0, 8, why) ||
+            if (!optInt(rec, "y_offset", a.collisionYOffset, -64, 64, why) || !optMusic(rec, a.music, why) ||
                 !optInt(rec, "max_events", a.maxEvents, 0, 200, why) || !optBool(rec, "resume", a.resume, why) ||
                 !optBool(rec, "diggable", a.diggable, why))
                 return err(rep, file, m.id, "'" + id + "': " + why);
@@ -1984,6 +1999,115 @@ namespace gp
             rep.lastWriter[id] = m.id;
         }
 
+        // ---- sound and music records ----
+        //   { type: "sound", mode: "add", id: "mymod:sound/meow", file: "audio/meow.ogg", volume: 100, pitch: 0 }
+        //   { type: "music", mode: "add", id: "mymod:music/theme", file: "audio/theme.ogg", loop_start: 4.0, loop_end: 60.5 }
+        //   { type: "sound", mode: "replace", id: "base:sound/84", file: ... }   // plays the file where the game asks for the ROM's sound 84
+        // file: .wav or .ogg inside the mod's folder. volume: percent of the file's own level (0..400). pitch: semitones, + higher / faster.
+        // loop_start / loop_end (music only): seconds of the file; the song plays up to loop_end, then repeats from loop_start (0 = the whole song).
+        inline bool modFile(const ModManifest &m, const std::string &rel, std::string &out, std::string &why)
+        {
+            const fs::path r = rel;
+            if (r.is_absolute())
+                return why = "the file must be a path relative to the mod folder", false;
+            for (const auto &part : r)
+                if (part == "..")
+                    return why = "the file may not contain '..'", false;
+            const fs::path p = m.dir / r;
+            if (!fs::exists(p))
+                return why = "missing file " + p.string(), false;
+            if (!checkSoundFile(p.string(), why))
+                return why = p.string() + ": " + why, false;
+            out = p.generic_string();
+            return true;
+        }
+        inline void applyAudio(ContentDB &, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep, bool music)
+        {
+            const char *kind = music ? "music" : "sound";
+            static const std::set<std::string> soundFields{"type", "mode", "id", "file", "volume", "pitch"};
+            static const std::set<std::string> musicFields{"type", "mode", "id", "file", "volume", "pitch", "loop_start", "loop_end"};
+            const auto &allowed = music ? musicFields : soundFields;
+            for (auto it = rec.begin(); it != rec.end(); ++it)
+                if (!allowed.count(it.key()))
+                    return err(rep, file, m.id, "unknown field '" + it.key() + "' in " + kind + " record");
+            if (!rec.contains("id") || !rec["id"].is_string() || !rec.contains("mode") || !rec["mode"].is_string())
+                return err(rep, file, m.id, std::string(kind) + " record needs a string 'id' and 'mode'");
+            const std::string id = rec["id"].get<std::string>(), mode = rec["mode"].get<std::string>();
+            if (mode != "add" && mode != "replace")
+                return err(rep, file, m.id, "'" + id + "': " + kind + " records support mode 'add' and 'replace'");
+            AudioRegistry &reg = audioRegistry();
+            auto &mine = music ? reg.songs : reg.sounds;
+            const std::string prefix = std::string("base:") + kind + "/";
+            int romNumber = -1;
+            size_t existing = mine.size();
+            if (id.rfind(prefix, 0) == 0)
+            {
+                char *end = nullptr;
+                const long n = std::strtol(id.c_str() + prefix.size(), &end, 10);
+                if (mode != "replace" || id.size() == prefix.size() || *end || n < 0 || n >= (music ? kRomSongs : kRomSounds))
+                    return err(rep, file, m.id, "'" + id + "': the ROM's " + kind + "s are replaced with mode 'replace' and an id like '" + prefix + "84' (0 to " +
+                                                    std::to_string((music ? kRomSongs : kRomSounds) - 1) + ")");
+                romNumber = int(n);
+            }
+            else
+            {
+                for (size_t i = 0; i < mine.size(); ++i)
+                    if (mine[i].id == id)
+                        existing = i;
+                if (mode == "add")
+                {
+                    if (id.rfind(m.id + ":", 0) != 0)
+                        return err(rep, file, m.id, "add '" + id + "': new ids must use the mod's own prefix '" + m.id + ":'");
+                    if (!validIdChars(id))
+                        return err(rep, file, m.id, "add '" + id + "': id contains a space, ',', '=' or '|'");
+                    if (existing < mine.size())
+                        return err(rep, file, m.id, "add '" + id + "': duplicate id (use mode replace)");
+                }
+                else if (existing >= mine.size())
+                    return err(rep, file, m.id, "replace '" + id + "': no such " + kind);
+            }
+            ModSound s;
+            if (romNumber < 0 && mode == "replace")
+                s = mine[existing]; // a mod's own sound that another mod replaces: unlisted fields stay
+            s.id = id;
+            std::string rel, why;
+            if (rec.contains("file"))
+            {
+                if (!rec["file"].is_string())
+                    return err(rep, file, m.id, "'" + id + "': 'file' must be a path");
+                if (!modFile(m, rec["file"].get<std::string>(), s.path, why))
+                    return err(rep, file, m.id, "'" + id + "': " + why);
+            }
+            else if (s.path.empty())
+                return err(rep, file, m.id, "'" + id + "': 'file' is required");
+            int percent = int(s.gain * 100 + 0.5f);
+            if (!optInt(rec, "volume", percent, 0, 400, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            s.gain = float(percent) / 100.f;
+            if (rec.contains("pitch"))
+            {
+                if (!rec["pitch"].is_number() || rec["pitch"].get<double>() < -48 || rec["pitch"].get<double>() > 48)
+                    return err(rep, file, m.id, "'" + id + "': 'pitch' must be semitones, -48 to 48");
+                s.semitones = rec["pitch"].get<double>();
+            }
+            for (const char *k : {"loop_start", "loop_end"})
+                if (rec.contains(k))
+                {
+                    if (!rec[k].is_number() || rec[k].get<double>() < 0 || rec[k].get<double>() > 36000)
+                        return err(rep, file, m.id, "'" + id + "': '" + k + "' must be seconds of the file");
+                    (std::string(k) == "loop_start" ? s.loopStart : s.loopEnd) = rec[k].get<double>();
+                }
+            if (s.loopEnd > 0 && s.loopStart >= s.loopEnd)
+                return err(rep, file, m.id, "'" + id + "': 'loop_start' must come before 'loop_end'");
+            if (romNumber >= 0)
+                (music ? reg.songOver : reg.soundOver)[romNumber] = s;
+            else if (existing < mine.size())
+                mine[existing] = s;
+            else
+                mine.push_back(s);
+            rep.lastWriter[id] = m.id;
+        }
+
         // ---- species: a pet species of the mod's own (pass 3: it names anims, texts and items) ----
         //   { type: "species", mode: "add", id: "mymod:species/fox",
         //     based_on: "base:species/0",          // optional: start as a copy of another species (art and start values)
@@ -1995,7 +2119,7 @@ namespace gp
         struct ArtField
         {
             const char *name;
-            bool anim;   // may be given as a mod anim id
+            int anim;    // 0 a plain number, 1 may be given as a mod anim id, 2 as a mod sound id
             int n;       // 1 = a number, more = an array of exactly n
             std::function<int *(SpeciesArt &, int)> at;
         };
@@ -2019,7 +2143,7 @@ namespace gp
             GP_STYLE(tiredDecay); GP_STYLE(hungerDecay); GP_STYLE(thoughtDY); GP_STYLE(overheadDY); GP_STYLE(bubbleLower); GP_STYLE(bubbleRaise);
             GP_STYLE(colorBase); GP_STYLE(menuPortrait); GP_STYLE(npcPortraitTile);
             GP_ARR(trickMain, true, 3); GP_ARR(trickIntro, true, 3); GP_ARR(trickClosing, true, 3);
-            GP_ARR(voice, false, kPetVoiceCategories); GP_ARR(thoughtDX, false, 3); GP_ARR(trickRepeatLo, false, 3); GP_ARR(trickRepeatHi, false, 3);
+            GP_ARR(voice, 2, kPetVoiceCategories); GP_ARR(thoughtDX, false, 3); GP_ARR(trickRepeatLo, false, 3); GP_ARR(trickRepeatHi, false, 3);
             GP_ARR(trickIcons, false, 3); GP_ARR(potions, false, 5); GP_ARR(namePortrait, false, 3); GP_ARR(npcPortraitPal, false, 3);
 #undef GP_ROLE
 #undef GP_STYLE
@@ -2028,7 +2152,7 @@ namespace gp
         }
 
         // One number of a species' art: an integer, or (where `anim`) the id of a mod's anim record.
-        inline bool artNumber(const ContentDB &db, const json &v, bool anim, int &out, std::string &why)
+        inline bool artNumber(const ContentDB &db, const json &v, int kind, int &out, std::string &why)
         {
             if (v.is_number_integer())
             {
@@ -2038,7 +2162,7 @@ namespace gp
                 out = int(x);
                 return true;
             }
-            if (anim && v.is_string())
+            if (kind == 1 && v.is_string())
             {
                 const std::string s = v.get<std::string>();
                 if (!db.hasAnim(s))
@@ -2046,10 +2170,19 @@ namespace gp
                 out = modAnimNumber(s);
                 return true;
             }
-            why = anim ? "must be a number or the id of an anim" : "must be a number";
+            if (kind == 2 && v.is_string())
+            {
+                const std::string s = v.get<std::string>();
+                const int n = modSoundNumber(s);
+                if (n < 0)
+                    return why = "no sound '" + s + "'", false;
+                out = n;
+                return true;
+            }
+            why = kind == 1 ? "must be a number or the id of an anim" : kind == 2 ? "must be a sound number or the id of a sound" : "must be a number";
             return false;
         }
-        inline bool artIntList(const ContentDB &db, const json &v, bool anim, std::vector<int> &out, std::string &why)
+        inline bool artIntList(const ContentDB &db, const json &v, int kind, std::vector<int> &out, std::string &why)
         {
             if (!v.is_array() || v.size() > 64)
                 return why = "must be a list of numbers", false;
@@ -2057,7 +2190,7 @@ namespace gp
             for (const json &e : v)
             {
                 int x = 0;
-                if (!artNumber(db, e, anim, x, why))
+                if (!artNumber(db, e, kind, x, why))
                     return false;
                 r.push_back(x);
             }
@@ -2068,12 +2201,12 @@ namespace gp
         {
             if (!o.is_object())
                 return why = "each of 'trickRules' must be an object", false;
-            struct F { const char *k; int *p; bool anim; };
-            const F ints[] = {{"teacherRepeats", &t.teacherRepeats, false}, {"bulbScale", &t.bulbScale, false}, {"startSound", &t.startSound, false},
-                              {"startSoundVolume", &t.startSoundVolume, false}, {"soundFrame", &t.soundFrame, false}, {"frameSound", &t.frameSound, false},
-                              {"frameSoundVolume", &t.frameSoundVolume, false}, {"loopSoundAnim", &t.loopSoundAnim, true}, {"loopSound", &t.loopSound, false},
+            struct F { const char *k; int *p; int anim; };
+            const F ints[] = {{"teacherRepeats", &t.teacherRepeats, false}, {"bulbScale", &t.bulbScale, false}, {"startSound", &t.startSound, 2},
+                              {"startSoundVolume", &t.startSoundVolume, false}, {"soundFrame", &t.soundFrame, false}, {"frameSound", &t.frameSound, 2},
+                              {"frameSoundVolume", &t.frameSoundVolume, false}, {"loopSoundAnim", &t.loopSoundAnim, true}, {"loopSound", &t.loopSound, 2},
                               {"loopSoundVolume", &t.loopSoundVolume, false}, {"chainAnim", &t.chainAnim, true}, {"chainWaitAnim", &t.chainWaitAnim, true},
-                              {"chainFinalAnim", &t.chainFinalAnim, true}, {"chainFinalSound", &t.chainFinalSound, false}, {"chainFinalVolume", &t.chainFinalVolume, false}};
+                              {"chainFinalAnim", &t.chainFinalAnim, true}, {"chainFinalSound", &t.chainFinalSound, 2}, {"chainFinalVolume", &t.chainFinalVolume, false}};
             const struct { const char *k; bool *p; } bools[] = {{"cameraPan", &t.cameraPan}, {"closingReversed", &t.closingReversed},
                                                                 {"turnAroundAfter", &t.turnAroundAfter}, {"actorReactionExit", &t.actorReactionExit}};
             for (auto it = o.begin(); it != o.end(); ++it)
@@ -2105,7 +2238,7 @@ namespace gp
                 }
                 else if (k == "stopOnClose" || k == "chainSounds")
                 {
-                    if (!artIntList(db, it.value(), false, k == "stopOnClose" ? t.stopOnClose : t.chainSounds, why))
+                    if (!artIntList(db, it.value(), 2, k == "stopOnClose" ? t.stopOnClose : t.chainSounds, why))
                         return why = "'" + k + "' " + why, false;
                 }
                 else if (k == "chainReactions")
@@ -2123,7 +2256,7 @@ namespace gp
                             int *dst = q.key() == "roll" ? &r.roll : q.key() == "anim" ? &r.anim : q.key() == "sound" ? &r.sound : q.key() == "volume" ? &r.volume : nullptr;
                             if (!dst)
                                 return why = "unknown field '" + q.key() + "' in a chain reaction", false;
-                            if (!artNumber(db, q.value(), q.key() == "anim", *dst, why))
+                            if (!artNumber(db, q.value(), q.key() == "anim" ? 1 : q.key() == "sound" ? 2 : 0, *dst, why))
                                 return why = "'" + q.key() + "' " + why, false;
                         }
                         rs.push_back(r);
@@ -2383,7 +2516,7 @@ namespace gp
         //   pass 2: everything else: npc, item, object, exit (they refer to areas, texts, anims and object types)
         inline int passOf(const std::string &t)
         {
-            if (t == "text" || t == "anim" || t == "tileset" || t == "collision" || t == "objtype" || t == "palette")
+            if (t == "text" || t == "anim" || t == "tileset" || t == "collision" || t == "objtype" || t == "palette" || t == "sound" || t == "music")
                 return 0;
             if (t == "area")
                 return 1;
@@ -2436,6 +2569,10 @@ namespace gp
                     applyObjType(db, m, file, r, rep);
                 else if (type == "palette")
                     applyPalette(db, m, file, r, rep);
+                else if (type == "sound")
+                    applyAudio(db, m, file, r, rep, false);
+                else if (type == "music")
+                    applyAudio(db, m, file, r, rep, true);
                 else if (type == "area")
                     applyArea(db, m, file, r, rep);
                 else if (type == "object")
@@ -2469,6 +2606,7 @@ namespace gp
     inline ModReport importMods(ContentDB &db, const fs::path &modsDir)
     {
         ModReport rep;
+        forgetModAudio();
         forgetModSpecies(); // the front end and the game each load the mods: the species of a mod must not be added twice
         if (!fs::exists(modsDir))
             return rep;

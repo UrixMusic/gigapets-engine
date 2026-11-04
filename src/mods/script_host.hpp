@@ -22,6 +22,7 @@ extern "C"
 #include <set>
 #include <string>
 #include <vector>
+#include "../engine/audio_registry.hpp" // a mod's sound and music ids
 #include "../engine/registry.hpp"
 
 namespace gp
@@ -85,7 +86,8 @@ namespace gp
         std::function<PlayerInfo()> playerInfo;
         // Called for every script error as it happens ("[mod] what: message"), so runtime errors in hooks are not
         // silent. Errors are also always collected in ScriptHost::errors().
-        std::function<void(int id, int volume)> playSound; // sound.play: a sound effect of the game (the ids are the ROM's)
+        std::function<void(int id, int volume)> playSound; // sound.play: a sound effect of the game (the ROM's numbers, or a mod's sound by its id)
+        std::function<void(int song)> playMusic;           // sound.music: a song (the ROM's number, or a mod's music by its id); -1 stops the music
         std::function<void(const std::string &message)> onError;
     };
 
@@ -223,6 +225,7 @@ namespace gp
             bind("profile", "keys", l_kvKeys<true>);
             bind("Scene", "hooks", l_sceneHooks);
             bind("sound", "play", l_soundPlay);
+            bind("sound", "music", l_soundMusic);
             bind("scene", "open", l_scOpen);
             bind("scene", "close", l_scClose);
             bind("scene", "isOpen", l_scIsOpen);
@@ -1566,11 +1569,40 @@ namespace gp
         static int l_soundPlay(lua_State *L)
         {
             ScriptHost &h = self(L);
-            const int id = int(luaL_checkinteger(L, 1)), vol = int(luaL_optinteger(L, 2, 255));
-            luaL_argcheck(L, id >= 0 && id <= 511, 1, "a sound number from 0 to 511");
+            int id = 0;
+            if (lua_type(L, 1) == LUA_TSTRING) // a mod's sound by its id ("mymod:sound/meow")
+            {
+                id = modSoundNumber(lua_tostring(L, 1));
+                luaL_argcheck(L, id >= 0, 1, "no sound with that id (add one with a sound record)");
+            }
+            else
+            {
+                id = int(luaL_checkinteger(L, 1));
+                luaL_argcheck(L, id >= 0 && id <= 511, 1, "a sound number from 0 to 511, or the id of a mod's sound");
+            }
+            const int vol = int(luaL_optinteger(L, 2, 255));
             luaL_argcheck(L, vol >= 0 && vol <= 255, 2, "a volume from 0 to 255");
             if (h.api_.playSound)
                 h.api_.playSound(id, vol);
+            return 0;
+        }
+        // sound.music(song): starts a song, looped: the ROM's number (0..63) or a mod's music by its id; nil or false stops the music.
+        static int l_soundMusic(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            int song = -1;
+            if (lua_type(L, 1) == LUA_TSTRING)
+            {
+                song = modSongNumber(lua_tostring(L, 1));
+                luaL_argcheck(L, song >= 0, 1, "no music with that id (add one with a music record)");
+            }
+            else if (lua_isnumber(L, 1))
+            {
+                song = int(luaL_checkinteger(L, 1));
+                luaL_argcheck(L, song >= 0 && song < kRomSongs, 1, "a song number from 0 to 63, or the id of a mod's music");
+            }
+            if (h.api_.playMusic)
+                h.api_.playMusic(song);
             return 0;
         }
         // ---- scenes: the Lua side ----

@@ -8,6 +8,8 @@
 // The mixer is the device's callback: 44.1 kHz, 16-bit stereo, up to kVoices sounds at once, the master volume (0..100,
 // the options screen's) applied to all of it and the music switch to the music only.
 #pragma once
+#include "audio_clip.hpp"
+#include "audio_registry.hpp"
 #include "rom_audio.hpp"
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -21,36 +23,6 @@
 
 namespace gp
 {
-
-    // One decoded sound: interleaved stereo samples at the mixer's rate.
-    struct AudioClip
-    {
-        std::vector<int16_t> pcm;
-        size_t frames() const { return pcm.size() / 2; }
-    };
-
-    // The mixing arithmetic, apart from SDL so it can be tested: adds `frames` frames of the clip from `pos` into `out`
-    // (interleaved stereo, 32-bit accumulators) at `gain` (0..1), wrapping when `loop`. Returns the new position, or
-    // the clip's end if it ran out.
-    inline size_t mixClip(const AudioClip &c, size_t pos, bool loop, float gain, int32_t *out, size_t frames)
-    {
-        const size_t n = c.frames();
-        if (n == 0)
-            return 0;
-        for (size_t i = 0; i < frames; ++i)
-        {
-            if (pos >= n)
-            {
-                if (!loop)
-                    return n;
-                pos = 0;
-            }
-            out[i * 2] += int32_t(float(c.pcm[pos * 2]) * gain);
-            out[i * 2 + 1] += int32_t(float(c.pcm[pos * 2 + 1]) * gain);
-            ++pos;
-        }
-        return pos;
-    }
 
     class Audio
     {
@@ -156,7 +128,7 @@ namespace gp
         {
             if (!dev_)
                 return;
-            const AudioClip *c = clip(dir_ + "/sfx", id);
+            const AudioClip *c = sfxClipFor(id);
             if (!c)
                 return;
             lock();
@@ -167,6 +139,27 @@ namespace gp
             Voice &v = same ? *same : freeVoice();
             v = Voice{c, 0, false, false, id, std::clamp(volume, 0, 255) / 255.f};
             unlock();
+        }
+
+        // The clip a sound number plays: a mod's file (its own sound, or one that replaces the ROM's), else the ROM's. Null when there is none.
+        // (Public so it can be tested without a sound device.)
+        const AudioClip *sfxClipFor(int id)
+        {
+            if (const ModSound *m = soundFileFor(id))
+                if (const AudioClip *c = modClip(*m, false))
+                    return c;
+            if (id >= kModSoundBase)
+                return nullptr; // a mod's sound whose file would not load: nothing to fall back to
+            return clip(dir_ + "/sfx", id);
+        }
+        const AudioClip *musicClipFor(int n)
+        {
+            if (const ModSound *m = songFileFor(n))
+                if (const AudioClip *c = modClip(*m, true))
+                    return c;
+            if (n >= kModMusicBase)
+                return nullptr;
+            return clip(dir_ + "/music", n);
         }
 
         // Is a sound effect with this id still playing? (IsSoundIdActive)
@@ -185,7 +178,7 @@ namespace gp
         {
             if (!dev_ || n == music_)
                 return;
-            const AudioClip *c = clip(dir_ + "/music", n);
+            const AudioClip *c = musicClipFor(n);
             lock();
             music_ = n;
             musicVoice_ = Voice{c, 0, true, true, n};
@@ -269,6 +262,32 @@ namespace gp
                 musicVoice_.pos = mixClip(*musicVoice_.clip, musicVoice_.pos, true, volume_ * musicVol_, acc.data(), frames);
             for (size_t i = 0; i < frames * 2; ++i)
                 out[i] = int16_t(std::clamp(acc[i], -32768, 32767));
+        }
+
+        // A mod's sound file as a clip at the mixer's rate with its volume, pitch and loop points; read once, kept by what it was made with.
+        const AudioClip *modClip(const ModSound &m, bool music)
+        {
+            char key[512];
+            std::snprintf(key, sizeof key, "mod:%s|%g|%g|%g|%g|%d", m.path.c_str(), double(m.gain), m.semitones, m.loopStart, m.loopEnd, music ? 1 : 0);
+            auto it = clips_.find(key);
+            if (it != clips_.end())
+                return it->second.get();
+            std::unique_ptr<AudioClip> c;
+            PcmData pcm;
+            std::string why;
+            if (loadSoundFile(m.path, pcm, why))
+            {
+                c = std::make_unique<AudioClip>(makeClip(pcm, kRate, m.gain, m.semitones, music ? m.loopStart : 0, music ? m.loopEnd : 0));
+                if (c->frames() == 0)
+                    c.reset();
+                else if (!music)
+                    fadeEnds(*c);
+            }
+            else
+                std::printf("audio: %s (%s)\n", why.c_str(), m.id.c_str());
+            const AudioClip *p = c.get();
+            clips_[key] = std::move(c);
+            return p;
         }
 
         // Loads (once) audio/<kind>/<id>.wav, trying the decimal and the 0x name. Null if there is none.
