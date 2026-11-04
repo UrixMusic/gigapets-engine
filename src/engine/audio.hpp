@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -38,6 +39,7 @@ namespace gp
         {
             close();
             stopWorker();
+            stopScan();
         }
 
         // Opens the device. False (and the game stays silent) if there is none.
@@ -104,6 +106,34 @@ namespace gp
             }
         }
         bool retro() const { return retro_; }
+
+        // Live music: a song that is notes (the ROM's, or a mod's MIDI file) is played as it goes, a few hundred frames at a time, instead of
+        // being rendered whole first. It starts at once and needs no memory for the finished song; a song that is a sound file (Ogg, WAV), or
+        // a MIDI one with a pitch change or loop points set in its record, is played from the baked clip as before. The music in progress
+        // starts again in the new mode.
+        void setLive(bool on)
+        {
+            if (on == live_)
+                return;
+            live_ = on;
+            if (music_ >= 0)
+            {
+                const int m = music_;
+                music_ = -1;
+                playMusic(m);
+            }
+            else if (!on)
+            {
+                lock();
+                musicLive_.reset();
+                unlock();
+            }
+        }
+        bool live() const { return live_; }
+        // Is the music playing now made as it goes? (For the tests.)
+        bool playingLive() const { return musicLive_ != nullptr; }
+        // How far the live song is turned down so it does not clip (0 until its peak is known). For the tests.
+        float liveScale() const { return liveGoal_.load(); }
 
         void setVolume(int percent)
         {
@@ -204,9 +234,12 @@ namespace gp
         {
             if (!dev_ || n == music_)
                 return;
+            if (live_ && startLive(n))
+                return;
             const AudioClip *c = musicClipAsync(n);
             lock();
             music_ = n;
+            musicLive_.reset();
             pendingMusic_ = !c && workerBusy_.load() && songFileFor(n) ? n : -1; // a mod's song still being made: silence until it is, then it starts by itself
             musicVoice_ = c ? Voice{c, 0, true, true, n} : Voice{};
             unlock();
@@ -236,6 +269,7 @@ namespace gp
             lock();
             music_ = -1;
             pendingMusic_ = -1;
+            musicLive_.reset();
             musicVoice_ = Voice{};
             unlock();
         }
@@ -293,6 +327,21 @@ namespace gp
                 }
             if (musicVoice_.clip && musicOn_)
                 musicVoice_.pos = mixClip(*musicVoice_.clip, musicVoice_.pos, true, volume_ * musicVol_, acc.data(), frames);
+            if (musicLive_ && musicOn_)
+            {
+                std::vector<float> f(frames * 2, 0.f);
+                musicLive_->render(f.data(), frames);
+                const float goal = liveGoal_.load(std::memory_order_acquire); // 0: the scan for how loud the song gets is still running
+                const float k = 1.f / (kRate * 0.7f);
+                const float level = volume_ * musicVol_ * liveBase_ * 32000.f;
+                for (size_t i = 0; i < frames; ++i)
+                {
+                    if (goal > 0)
+                        liveGain_ += (goal - liveGain_) * k; // eases to the right level (the baked song is turned down as a whole when it would clip)
+                    for (int c = 0; c < 2; ++c)
+                        acc[i * 2 + size_t(c)] += int32_t(std::clamp(f[i * 2 + size_t(c)] * liveGain_, -1.f, 1.f) * level);
+                }
+            }
             for (size_t i = 0; i < frames * 2; ++i)
                 out[i] = int16_t(std::clamp(acc[i], -32768, 32767));
         }
@@ -409,8 +458,107 @@ namespace gp
             workerReady_.store(false);
         }
 
-        // A MIDI file played with the ROM's instruments, as sound at the mixer's rate. Needs the ROM (setRom).
-        bool renderMidi(const ModSound &m, PcmData &out, std::string &why, const std::atomic<bool> *cancel = nullptr) const
+        // ---- live music ----
+        // Starts song n as it goes if it can be (see setLive). The baked song is turned down as a whole when its loudest moment would clip,
+        // and a song played as it goes cannot know that beforehand: it starts at a middle level while another thread plays it through once to
+        // find the peak, then eases to the right one. The peak is kept, so the next time the song comes round it starts right.
+        bool startLive(int n)
+        {
+            if (!romAudio_)
+                return false;
+            rau::Song own;
+            const rau::Song *song = nullptr;
+            float base = 1.f;
+            std::string key;
+            if (const ModSound *m = songFileFor(n))
+            {
+                std::string why;
+                if (!m->midi || m->semitones != 0 || m->loopStart != 0 || m->loopEnd != 0)
+                    return false;
+                if (!midiSong(*m, own, why))
+                {
+                    std::printf("audio: %s (%s)\n", why.c_str(), m->id.c_str());
+                    return false;
+                }
+                song = &own;
+                base = m->gain;
+                key = modKey(*m, true) + "|live";
+            }
+            else
+            {
+                if (n < 0 || n >= kModMusicBase || size_t(n) >= romAudio_->songCount())
+                    return false;
+                char hex[32];
+                std::snprintf(hex, sizeof hex, "/0x%x.wav", n);
+                std::error_code ec;
+                if (std::filesystem::exists(dir_ + "/music/" + std::to_string(n) + ".wav", ec) || std::filesystem::exists(dir_ + "/music" + hex, ec))
+                    return false; // a wav file in the audio folder wins over the ROM's song
+                song = &romAudio_->songs()[size_t(n)];
+                key = "rom:" + std::to_string(n) + (retro_ ? "r" : "");
+            }
+            auto player = std::make_unique<rau::SongPlayer>(*romAudio_, *song, kRate);
+            if (!player->playable())
+                return false;
+            stopScan();
+            float known = 0.f;
+            {
+                std::lock_guard<std::mutex> g(peakLock_);
+                const auto it = peaks_.find(key);
+                if (it != peaks_.end())
+                    known = it->second;
+            }
+            lock();
+            music_ = n;
+            pendingMusic_ = -1;
+            musicVoice_ = Voice{};
+            musicLive_ = std::move(player);
+            liveBase_ = base;
+            liveGain_ = known > 0 ? known : 0.5f;
+            liveGoal_.store(known, std::memory_order_release);
+            unlock();
+            if (known <= 0)
+            {
+                scanCancel_.store(false);
+                scanThread_ = std::thread([this, s = *song, key] { scanPeak(s, key); });
+            }
+            return true;
+        }
+
+        // Plays the song through once (without sound) to find how far to turn it down; leaves the answer for the mixer.
+        void scanPeak(const rau::Song &song, const std::string &key)
+        {
+            rau::SongPlayer p(*romAudio_, song, kRate);
+            const size_t body = size_t(song.end / rau::kTicksPerSecond * kRate), total = body + size_t(4.0 * kRate), from = std::min<size_t>(body, size_t(4.0 * kRate));
+            std::vector<float> buf(4096 * 2);
+            float pk = 0;
+            for (size_t pos = 0; pos < total;)
+            {
+                if (scanCancel_.load(std::memory_order_relaxed))
+                    return;
+                const size_t n = std::min<size_t>(4096, total - pos);
+                std::fill(buf.begin(), buf.begin() + std::ptrdiff_t(n * 2), 0.f);
+                p.render(buf.data(), n);
+                for (size_t i = 0; i < n; ++i)
+                    if (pos + i >= from) // the first seconds of the first time round lack the tail the loop folds onto them: the second time's count
+                        pk = std::max(pk, std::max(std::fabs(buf[i * 2]), std::fabs(buf[i * 2 + 1])));
+                pos += n;
+            }
+            const float scale = pk > 0.98f ? 0.98f / pk : 1.f;
+            {
+                std::lock_guard<std::mutex> g(peakLock_);
+                peaks_[key] = scale;
+            }
+            liveGoal_.store(scale, std::memory_order_release);
+        }
+        void stopScan()
+        {
+            scanCancel_.store(true);
+            if (scanThread_.joinable())
+                scanThread_.join();
+        }
+
+        // A MIDI file as a song of the ROM's kind (notes on the ROM's instruments). Needs the ROM (setRom).
+        bool midiSong(const ModSound &m, rau::Song &song, std::string &why) const
         {
             if (!romAudio_)
                 return why = "a MIDI file needs the ROM's instruments (no ROM given)", false;
@@ -427,6 +575,16 @@ namespace gp
             o.drumCount = int(romAudio_->drumCount());
             midi::Result r;
             if (!midi::toSong(bytes, o, r, why))
+                return false;
+            song = std::move(r.song);
+            return true;
+        }
+
+        // A MIDI file played with the ROM's instruments, as sound at the mixer's rate. Needs the ROM (setRom).
+        bool renderMidi(const ModSound &m, PcmData &out, std::string &why, const std::atomic<bool> *cancel = nullptr) const
+        {
+            midi::Result r;
+            if (!midiSong(m, r.song, why))
                 return false;
             const std::vector<float> f = romAudio_->renderSong(r.song, kRate, cancel);
             if (f.empty())
@@ -524,6 +682,14 @@ namespace gp
         int asyncSong_ = -1, wantSong_ = -1;
         std::thread worker_;
         Voice musicVoice_;
+        bool live_ = false;
+        std::unique_ptr<rau::SongPlayer> musicLive_; // the music playing as it goes (setLive), else null
+        float liveGain_ = 1.f, liveBase_ = 1.f;      // how far it is turned down now, and the record's own gain
+        std::atomic<float> liveGoal_{0.f};           // how far it should be turned down; 0 = not known yet
+        std::thread scanThread_;
+        std::atomic<bool> scanCancel_{false};
+        std::mutex peakLock_;
+        std::map<std::string, float> peaks_;
         std::array<Voice, kVoices> voices_{};
         std::map<std::string, std::unique_ptr<AudioClip>> clips_;
         std::unique_ptr<rau::RomAudio> romAudio_;

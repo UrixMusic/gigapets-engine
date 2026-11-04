@@ -85,6 +85,22 @@ namespace gp
             }
         }
 
+        // One note being played: everything it needs to carry on from one stretch of output to the next. The baked render runs each note
+        // to its end in one go; the live player (SongPlayer) runs them a few hundred frames at a time.
+        struct Playing
+        {
+            const Sample *e = nullptr;
+            const std::vector<Bend> *bends = nullptr;
+            double when = 0, step = 0, pos = 0, tEnd = 1e9, hdr = 0; // when: where in the song it starts (seconds; the bends are read by it)
+            size_t i0 = 0, maxLen = 0, bi = 0, ti = 0;                // i0: the first output frame; maxLen: frames after which it is cut
+            float gain = 0, gl = 1, gr = 1;
+            std::vector<std::pair<double, int>> tl; // envelope timeline: (time since start, level 0..127); 128 = no envelope
+            uint32_t introLen = 0, bodyLen = 0, base = 0;
+            double noteStep = 0; // the step the note's own pitch gives (a relative bend is cents above it)
+            bool done = true;
+            double baseStep() const { return noteStep; }
+        };
+
         constexpr double kEnvTick = 32 / 70312.5, kEnvRamp = 832 / 70312.5;
         constexpr double kTicksPerSecond = 200; // fitted in the editor, not from the ROM
 
@@ -483,14 +499,31 @@ namespace gp
             void voice(std::vector<float> &mix, int rate, const Sample &e, double when, double pitch, float gain, int pan, double dur,
                        const std::vector<Bend> *bends) const
             {
-                const uint32_t base = e.off + 40;
-                const double hdr = double(std::max<uint32_t>(e.rate ? e.rate : 11025, 8000));
-                const float gl = pan < 64 ? 1.f : std::min(1.f, float(127 - pan) * 2.f / 128.f);
-                const float gr = pan < 64 ? std::min(1.f, float(pan) * 2.f / 128.f) : 1.f;
+                const size_t i0 = size_t(std::max(0.0, when) * rate), maxF = mix.size() / 2;
+                Playing p = begin(e, rate, i0, when, pitch, gain, pan, dur, bends, i0 < maxF ? maxF - i0 : 0);
+                run(p, mix.data(), 0, maxF, rate);
+            }
+
+        public:
+            // A note ready to play from output frame i0 (`when` seconds into the song), cut after maxLen frames. dur <= 0: let the
+            // sample/envelope end it.
+            Playing begin(const Sample &e, int rate, size_t i0, double when, double pitch, float gain, int pan, double dur,
+                          const std::vector<Bend> *bends, size_t maxLen) const
+            {
+                Playing p;
+                p.e = &e;
+                p.bends = bends;
+                p.when = when;
+                p.i0 = i0;
+                p.maxLen = maxLen;
+                p.gain = gain;
+                p.base = e.off + 40;
+                p.hdr = double(std::max<uint32_t>(e.rate ? e.rate : 11025, 8000));
+                p.gl = pan < 64 ? 1.f : std::min(1.f, float(127 - pan) * 2.f / 128.f);
+                p.gr = pan < 64 ? std::min(1.f, float(pan) * 2.f / 128.f) : 1.f;
                 const Env &env = envelope(e);
 
-                // envelope timeline: (time since start, level 0..127); level 128 = no envelope (constant)
-                std::vector<std::pair<double, int>> tl;
+                std::vector<std::pair<double, int>> &tl = p.tl;
                 double tEnd = 1e9;
                 if (env.has)
                 {
@@ -525,49 +558,149 @@ namespace gp
                     if (dur > 0)
                         tEnd = dur + 0.01;
                 }
-
+                p.tEnd = tEnd;
                 // sample layout: intro then loop body
-                const uint32_t introLen = e.hasLoop ? e.ie : e.pl, bodyLen = e.hasLoop ? e.pl - e.ls : 0;
+                p.introLen = e.hasLoop ? e.ie : e.pl;
+                p.bodyLen = e.hasLoop ? e.pl - e.ls : 0;
+                p.step = p.noteStep = pitch * p.hdr / rate;
+                p.done = maxLen == 0;
+                return p;
+            }
+
+            // Adds the note's frames from `frame0` to `frame0 + n` (output frame numbers) to `out` (stereo float, out[0] is frame0).
+            // Sets p.done when the note is over.
+            void run(Playing &p, float *out, size_t frame0, size_t n, int rate) const
+            {
+                if (p.done)
+                    return;
+                const Sample &e = *p.e;
                 auto sampleAt = [&](double pos) -> float {
                     if (e.hasLoop)
                     {
-                        if (pos >= introLen && bodyLen)
-                            pos = introLen + std::fmod(pos - introLen, double(bodyLen));
-                        if (pos < introLen)
-                            return interp(base, introLen, pos);
-                        return interp(base + e.ls, bodyLen, pos - introLen);
+                        if (pos >= p.introLen && p.bodyLen)
+                            pos = p.introLen + std::fmod(pos - p.introLen, double(p.bodyLen));
+                        if (pos < p.introLen)
+                            return interp(p.base, p.introLen, pos);
+                        return interp(p.base + e.ls, p.bodyLen, pos - p.introLen);
                     }
-                    return interp(base, introLen, pos);
+                    return interp(p.base, p.introLen, pos);
                 };
-
-                size_t i0 = size_t(std::max(0.0, when) * rate);
-                double step = pitch * hdr / rate, pos = 0;
-                size_t bi = 0;
-                const size_t maxF = mix.size() / 2;
-                size_t ti = 0;
-                for (size_t f = i0; f < maxF; ++f)
+                const size_t last = std::min(frame0 + n, p.i0 + p.maxLen);
+                size_t f = std::max(frame0, p.i0);
+                for (; f < last; ++f)
                 {
-                    const double t = double(f - i0) / rate;
-                    if (t >= tEnd)
-                        break;
-                    if (bends)
-                        while (bi < bends->size() && (*bends)[bi].t <= when + t)
+                    const double t = double(f - p.i0) / rate;
+                    if (t >= p.tEnd)
+                    {
+                        p.done = true;
+                        return;
+                    }
+                    if (p.bends)
+                        while (p.bi < p.bends->size() && (*p.bends)[p.bi].t <= p.when + t)
                         {
-                            if ((*bends)[bi].t >= when - 0.001)
-                                step = (*bends)[bi].rel ? pitch * hdr / rate * std::pow(2.0, (*bends)[bi].v / 1200.0) : (*bends)[bi].v * 281250.0 / 524288.0 / rate;
-                            ++bi;
+                            const Bend &bd = (*p.bends)[p.bi];
+                            if (bd.t >= p.when - 0.001)
+                                p.step = bd.rel ? (p.baseStep() * std::pow(2.0, bd.v / 1200.0)) : bd.v * 281250.0 / 524288.0 / rate;
+                            ++p.bi;
                         }
-                    if (!e.hasLoop && pos >= introLen)
-                        break;
-                    while (ti + 1 < tl.size() && tl[ti + 1].first <= t)
-                        ++ti;
-                    const float lvl = tl[ti].second == 128 ? 1.f : float(tl[ti].second) / 128.f;
-                    const float v = sampleAt(pos) * gain * lvl;
-                    mix[f * 2] += v * gl;
-                    mix[f * 2 + 1] += v * gr;
-                    pos += step;
+                    if (!e.hasLoop && p.pos >= p.introLen)
+                    {
+                        p.done = true;
+                        return;
+                    }
+                    while (p.ti + 1 < p.tl.size() && p.tl[p.ti + 1].first <= t)
+                        ++p.ti;
+                    const float lvl = p.tl[p.ti].second == 128 ? 1.f : float(p.tl[p.ti].second) / 128.f;
+                    const float v = sampleAt(p.pos) * p.gain * lvl;
+                    out[(f - frame0) * 2] += v * p.gl;
+                    out[(f - frame0) * 2 + 1] += v * p.gr;
+                    p.pos += p.step;
                 }
+                if (f >= p.i0 + p.maxLen)
+                    p.done = true;
             }
+        };
+
+        // A song played as it goes: the same notes, instruments, envelopes and bends as RomAudio::renderSong, but made a few hundred frames
+        // at a time (from the audio callback) instead of in one go. It starts at once and uses no memory for the finished song. It loops, with
+        // the notes still ringing at the end carrying on over the start (as the baked loop folds its tail onto its start). One difference: the
+        // baked song is turned down as a whole if its loudest moment would clip; here nothing is known beforehand, so a loud one is clipped
+        // by the mixer.
+        class SongPlayer
+        {
+        public:
+            SongPlayer(const RomAudio &ra, const Song &s, int rate, float gain = 1.f) : ra_(ra), S_(s), rate_(rate), gain_(gain)
+            {
+                std::stable_sort(S_.ev.begin(), S_.ev.end(), [](const Event &a, const Event &b) { return a.t < b.t; });
+                body_ = size_t(S_.end / kTicksPerSecond * rate);
+                total_ = body_ + size_t(4.0 * rate);
+                for (const Event &q : S_.ev)
+                    if ((q.k == 'b' || q.k == 'B') && q.ch >= 0 && q.ch < 16)
+                        bends_[size_t(q.ch)].push_back({q.t / kTicksPerSecond, q.v, q.k == 'B'});
+            }
+
+            // False when there is nothing to play (no length, or no notes).
+            bool playable() const { return body_ > 0 && !S_.ev.empty(); }
+
+            // Adds the next `frames` frames of the song to `out` (stereo float, already holding what else is playing).
+            void render(float *out, size_t frames)
+            {
+                if (!playable())
+                    return;
+                const size_t end = pos_ + frames;
+                for (;;)
+                {
+                    if (ev_ >= S_.ev.size()) // the song's notes are all started: the next time round begins at the end of the body
+                    {
+                        base_ += body_;
+                        ev_ = 0;
+                        prog_ = {};
+                    }
+                    const Event &q = S_.ev[ev_];
+                    const size_t i0 = size_t(std::max(0.0, q.t / kTicksPerSecond) * rate_);
+                    if (base_ + i0 >= end)
+                        break;
+                    ++ev_;
+                    start(q, base_ + i0, i0);
+                }
+                for (Playing &p : voices_)
+                    ra_.run(p, out, pos_, frames, rate_);
+                voices_.erase(std::remove_if(voices_.begin(), voices_.end(), [](const Playing &p) { return p.done; }), voices_.end());
+                pos_ = end;
+            }
+
+        private:
+            void start(const Event &q, size_t i0g, size_t i0l)
+            {
+                const double when = q.t / kTicksPerSecond;
+                if (q.k == 'p')
+                {
+                    if (q.ch >= 0 && q.ch < 16)
+                        prog_[size_t(q.ch)] = q.v;
+                    return;
+                }
+                if (q.k != 'n')
+                    return;
+                const size_t maxLen = total_ > i0l ? total_ - i0l : 0;
+                const float gain = float((q.vol * q.vel) >> 7) / 127.f * gain_;
+                if (q.ch == 9)
+                {
+                    if (q.pb >= 0 && q.pb < int(ra_.drumCount()))
+                        voices_.push_back(ra_.begin(*ra_.drum(size_t(q.pb)), rate_, i0g, when, 1.0, gain, q.pan, 0, nullptr, maxLen));
+                }
+                else if (const Sample *e = ra_.pick(prog_[size_t(q.ch & 15)], q.pb))
+                    voices_.push_back(ra_.begin(*e, rate_, i0g, when, std::pow(2.0, (q.pb - e->root) / 12.0), gain, q.pan, q.dur / kTicksPerSecond,
+                                                &bends_[size_t(q.ch & 15)], maxLen));
+            }
+
+            const RomAudio &ra_;
+            Song S_;
+            int rate_;
+            float gain_;
+            size_t body_ = 0, total_ = 0, pos_ = 0, base_ = 0, ev_ = 0;
+            std::array<int, 16> prog_{};
+            std::array<std::vector<Bend>, 16> bends_;
+            std::vector<Playing> voices_;
         };
 
     } // namespace rau

@@ -222,6 +222,7 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
         {{-1, -1, -1}, 0x1e, "Window Mode"},
         {{-1, -1, -1}, 0x1e, "Aspect Ratio"},
         {{-1, -1, -1}, 0x1e, "Retro Audio"},
+        {{-1, -1, -1}, 0x1e, "Music Playback"},
         {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, // the key rows: named below
         {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""},
         {{0x9d7, 0x9dd, 0x9ed}, 0x82, nullptr},
@@ -289,6 +290,9 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
             break;
         case gp::kOptRetro:
             value(i, y, o.retroAudio ? "On" : "Off", true);
+            break;
+        case gp::kOptLive:
+            value(i, y, o.liveMusic ? "Live" : "Baked", true);
             break;
         case gp::kOptWindowMode:
             value(i, y, kWindowNames[std::clamp(o.windowMode, 0, gp::kWindowModeCount - 1)], true);
@@ -2100,6 +2104,10 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                             opts.retroAudio = !opts.retroAudio;
                             gp::audio().setRetro(opts.retroAudio);
                             feSound(gp::fe::kSfxConfirm, 0x7f); // hear the difference
+                            break;
+                        case gp::kOptLive:
+                            opts.liveMusic = !opts.liveMusic;
+                            gp::audio().setLive(opts.liveMusic);
                             break;
                         default:
                             break;

@@ -147,6 +147,7 @@ int main(int argc, char **argv)
             const gp::Settings s = gp::loadSettings(); // the options screen's volume and music switch
             gp::audio().open("audio");
             gp::audio().setRetro(s.retroAudio);
+            gp::audio().setLive(s.liveMusic);
             gp::audio().setRom(*host.ctx.rom);
             gp::audio().setVolume(s.volume);
             gp::audio().setMusicVolume(s.musicVolume);
