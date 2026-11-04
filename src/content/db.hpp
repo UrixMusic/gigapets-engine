@@ -504,6 +504,34 @@ namespace gp
                     return &e;
             return nullptr;
         }
+        // Stock rules: same id replaces in place, a new id appends; the order is the order they fire in.
+        void put(StockRuleDef r)
+        {
+            for (StockRuleDef &e : stockRules_)
+                if (e.id == r.id)
+                {
+                    e = std::move(r);
+                    return;
+                }
+            stockRules_.push_back(std::move(r));
+        }
+        const std::vector<StockRuleDef> &stockRules() const { return stockRules_; }
+        StockRuleDef *stockRuleMutable(const Id &id)
+        {
+            for (StockRuleDef &e : stockRules_)
+                if (e.id == id)
+                    return &e;
+            return nullptr;
+        }
+        void eraseStockRule(const Id &id)
+        {
+            for (size_t i = 0; i < stockRules_.size(); ++i)
+                if (stockRules_[i].id == id)
+                {
+                    stockRules_.erase(stockRules_.begin() + std::ptrdiff_t(i));
+                    return;
+                }
+        }
         void eraseShop(const Id &id)
         {
             for (size_t i = 0; i < shops_.size(); ++i)
@@ -603,6 +631,7 @@ namespace gp
         BefriendRules befriend_;
         std::map<Id, MinigameDef> minigames_;
         std::vector<ShopDef> shops_;
+        std::vector<StockRuleDef> stockRules_;
         std::vector<QuestTypeDef> questTypes_;
         std::map<Id, OfferSetDef> offerSets_;
         std::vector<Id> offerOrder_;

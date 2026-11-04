@@ -42,4 +42,6 @@ struct WalkServices
     std::function<void()> showMap;
     // Jeremy's Yes: the item screen in sell mode (ShowSellMenu). Assigned later in runWalk.
     std::function<void()> startSell;
+    // The pet has been made ill by a script (SetActiveIllness: the cure goes to the pharmacy). Assigned later in runWalk.
+    std::function<void()> petFellIll;
 };

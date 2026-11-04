@@ -97,6 +97,35 @@ namespace gp
             return true;
         }
 
+        // ClaimLRUCacheSlot (0x2db9a, what the game's own stock injections call): like insert, but a full row gives up its oldest entry (the lowest
+        // order number) for the new item.
+        bool claim(const Id &area, const Id &item)
+        {
+            if (item.empty())
+                return false;
+            if (insert(area, item))
+                return true;
+            Row &r = rows_[area];
+            int oldest = 0, highest = 0;
+            for (int i = 0; i < kSlots; ++i)
+            {
+                if (r[size_t(i)].idx < r[size_t(oldest)].idx)
+                    oldest = i;
+                highest = std::max(highest, r[size_t(i)].idx);
+            }
+            r[size_t(oldest)] = {item, 1, highest + 1};
+            return true;
+        }
+        // Takes an item out of a shop's stock altogether. False if it was not there.
+        bool removeItem(const Id &area, const Id &item)
+        {
+            const int slot = find(area, item);
+            if (slot < 0)
+                return false;
+            rows_[area][size_t(slot)] = StockEntry{};
+            return true;
+        }
+
         template <class Rnd>
         void rollOne(const ShopDef &shop, Rnd &&rnd)
         {
@@ -175,6 +204,81 @@ namespace gp
     private:
         std::map<Id, Row> rows_;
     };
+
+    // What happened that a stock rule may answer.
+    struct StockEvent
+    {
+        enum Kind
+        {
+            Area,
+            TurnIn,
+            Illness
+        } kind = Area;
+        Id area;                          // Area: the area the pet walked into
+        int quest = 0, mode = 0;          // TurnIn: the quest number just handed in, and its type mode
+        std::vector<Id> objectives, spawns; // TurnIn: what the quest asked for and what it scattered
+        Id cure;                          // Illness: the item that cures it
+    };
+
+    // The ROM's stock injections as data: every rule that matches the event puts its item into its shop (ShopStock::claim). `shopArea` turns a ShopDef id
+    // into the area the stock is kept under (empty = no such shop); `held` / `offered` answer for an item id. The objectives of a quest type go in
+    // item by item with the rules inside (as ProcessQuestTurnIn does: for each objective, its shops in turn).
+    template <class ShopArea, class Held, class Offered>
+    void applyStockRules(const std::vector<StockRuleDef> &rules, ShopStock &st, const StockEvent &ev, ShopArea &&shopArea, Held &&held, Offered &&offered)
+    {
+        auto put = [&](const StockRuleDef &r, const Id &item)
+        {
+            if (item.empty())
+                return;
+            const Id area = shopArea(r.shop);
+            if (!area.empty())
+                st.claim(area, item);
+        };
+        auto modeOk = [&](const StockRuleDef &r)
+        {
+            if (r.modes.empty())
+                return r.on == "quest" ? ev.mode == 5 : true;
+            return std::find(r.modes.begin(), r.modes.end(), ev.mode) != r.modes.end();
+        };
+        auto passes = [&](const StockRuleDef &r, const Id &item)
+        { return (r.onlyItem.empty() || r.onlyItem == item) && (r.exceptItem.empty() || r.exceptItem != item); };
+        auto fire = [&](const StockRuleDef &r) // the rules that put in one thing
+        {
+            if (r.from == "first_objective")
+                put(r, ev.objectives.empty() ? Id() : ev.objectives.front());
+            else if (r.from == "first_spawn")
+                put(r, ev.spawns.empty() ? Id() : ev.spawns.front());
+            else if (r.from == "cure")
+                put(r, ev.cure);
+            else if (r.from == "item")
+                put(r, r.item);
+        };
+        if (ev.kind == StockEvent::Area)
+        {
+            for (const StockRuleDef &r : rules)
+                if (r.on == "area" && r.area == ev.area && !(r.unlessHeld && held(r.item)) && !(r.unlessOffered && offered(r.item)))
+                    put(r, r.item);
+        }
+        else if (ev.kind == StockEvent::Illness)
+        {
+            for (const StockRuleDef &r : rules)
+                if (r.on == "illness")
+                    fire(r);
+        }
+        else
+        {
+            for (size_t k = 0; k < ev.objectives.size() && k < 3; ++k)
+                for (const StockRuleDef &r : rules)
+                    if ((r.on == "type" || r.on == "quest") && r.from == "each_objective" && modeOk(r) && (r.on == "type" || r.quest == ev.quest) && passes(r, ev.objectives[k]))
+                        put(r, ev.objectives[k]);
+            for (const StockRuleDef &r : rules)
+                if (r.on == "type" && modeOk(r))
+                    fire(r);
+            for (const StockRuleDef &r : rules)
+                if (r.on == "quest" && r.quest == ev.quest && modeOk(r))
+                    fire(r);
+        }
+    }
 
     struct ShopEvent
     { // trimmed: category/eventId are always 0 / none for shop items

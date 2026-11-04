@@ -3,6 +3,7 @@
 #include "../src/loaders/import.hpp"
 #include "../src/mods/mod_loader.hpp"
 #include <iostream>
+#include <set>
 
 using namespace gp;
 
@@ -93,6 +94,20 @@ int main(int argc, char **argv)
         CHECK(r[1].item.empty());                            // can carry no more: the entry goes
     }
 
+    { // ClaimLRUCacheSlot: a full row gives up its oldest entry; RemoveItem
+        ShopStock st;
+        for (int i = 1; i <= 9; ++i)
+            st.insert("a", "I" + std::to_string(i));
+        st.insert("a", "I1"); // I1 is the oldest by order number, whatever its stock
+        CHECK(st.claim("a", "I5") && st.row("a")[4].stock == 2);   // already there: one more
+        CHECK(st.claim("a", "NEW"));
+        auto &r = st.row("a");
+        CHECK(r[0].item == "NEW" && r[0].stock == 1 && r[0].idx == 10 && r[1].item == "I2"); // the oldest (I1, order 1) went; the new one is one past the highest
+        CHECK(st.claim("a", "NEW2") && r[1].item == "NEW2" && r[1].idx == 11);
+        CHECK(!st.claim("a", ""));
+        CHECK(st.removeItem("a", "NEW") && r[0].item.empty() && !st.removeItem("a", "NEW") && !st.removeItem("zz", "NEW"));
+    }
+
     // ---- the ROM's tables
     Rom rom(argc > 1 ? argv[1] : "rom.u7");
     ContentDB base;
@@ -122,6 +137,97 @@ int main(int argc, char **argv)
             for (const StockEntry &e : *st.rowOf(d.area))
                 stocked += e.present() ? 1 : 0;
         CHECK(stocked > 22 * 3);
+    }
+
+    { // the ROM's stock injections, as records
+        const std::vector<StockRuleDef> &rules = base.stockRules();
+        CHECK(rules.size() == 18);
+        bool shopsKnown = true;
+        for (const StockRuleDef &r : rules)
+            shopsKnown = shopsKnown && base.shop(r.shop) != nullptr;
+        CHECK(shopsKnown);
+        auto area = [&](const Id &shop) -> Id { const ShopDef *d = base.shop(shop); return d ? d->area : Id(); };
+        std::set<Id> held, offered;
+        auto go = [&](ShopStock &st, const StockEvent &ev) {
+            applyStockRules(rules, st, ev, area, [&](const Id &i) { return held.count(i) > 0; }, [&](const Id &i) { return offered.count(i) > 0; });
+        };
+        auto has = [&](ShopStock &st, int shopArea, int item) { return st.find("base:area/" + std::to_string(shopArea), "base:item/" + std::to_string(item)) >= 0; };
+        { // on entering an area
+            ShopStock st;
+            StockEvent ev;
+            ev.area = "base:area/1";
+            go(st, ev);
+            CHECK(has(st, 12, 193));
+            ShopStock st2;
+            held.insert("base:item/193");
+            go(st2, ev);
+            CHECK(!has(st2, 12, 193)); // the pet has it already
+            held.clear();
+            ShopStock st3;
+            ev.area = "base:area/7";
+            go(st3, ev);
+            CHECK(has(st3, 23, 176));
+            offered.insert("base:item/176");
+            ShopStock st4;
+            go(st4, ev);
+            CHECK(!has(st4, 23, 176)); // handed in to the King already
+            offered.clear();
+            ShopStock st5;
+            ev.area = "base:area/3";
+            go(st5, ev);
+            CHECK(st5.rowOf("base:area/12") == nullptr);
+        }
+        { // a quest of mode 4 / 6: every objective item to three shops, item 90 to two others
+            ShopStock st;
+            StockEvent ev;
+            ev.kind = StockEvent::TurnIn;
+            ev.quest = 7;
+            ev.mode = 4;
+            ev.objectives = {"base:item/41", "base:item/90", "base:item/42"};
+            go(st, ev);
+            CHECK(has(st, 10, 41) && has(st, 17, 41) && has(st, 18, 41) && has(st, 10, 42) && has(st, 18, 42));
+            CHECK(!has(st, 10, 90) && !has(st, 17, 90) && !has(st, 18, 90) && has(st, 12, 90) && has(st, 19, 90));
+            CHECK(!has(st, 12, 41) && !has(st, 19, 41));
+            ShopStock st2;
+            ev.mode = 3;
+            go(st2, ev);
+            CHECK(st2.rowOf("base:area/10") == nullptr); // other modes stock nothing here
+            ShopStock st3;
+            ev.mode = 2;
+            ev.spawns = {"base:item/77", "base:item/78"};
+            go(st3, ev);
+            CHECK(has(st3, 19, 77) && !has(st3, 19, 78) && !has(st3, 10, 41));
+        }
+        { // the story quests by number
+            ShopStock st;
+            StockEvent ev;
+            ev.kind = StockEvent::TurnIn;
+            ev.mode = 5;
+            ev.quest = 89;
+            go(st, ev);
+            CHECK(has(st, 12, 35) && has(st, 17, 31) && has(st, 12, 25));
+            ShopStock st2;
+            ev.quest = 20;
+            ev.objectives = {"base:item/60", "base:item/61"};
+            go(st2, ev);
+            CHECK(has(st2, 19, 60) && !has(st2, 19, 61));
+            ShopStock st3;
+            ev.quest = 55;
+            go(st3, ev);
+            CHECK(has(st3, 26, 247));
+            ShopStock st4;
+            ev.mode = 3; // the numbers only count for the story quests
+            go(st4, ev);
+            CHECK(st4.rowOf("base:area/26") == nullptr);
+        }
+        { // a sick pet's cure goes to the pharmacy
+            ShopStock st;
+            StockEvent ev;
+            ev.kind = StockEvent::Illness;
+            ev.cure = "base:item/80";
+            go(st, ev);
+            CHECK(has(st, 19, 80));
+        }
     }
 
     // ---- the record
@@ -191,6 +297,54 @@ int main(int argc, char **argv)
     CHECK(bad(R"({"type":"shop","mode":"patch","id":"base:shop/10","rolls":500})", "rolls"));
     CHECK(bad(R"({"type":"shop","mode":"patch","id":"nope:shop/1","rolls":1})", "no such shop"));
     CHECK(bad(R"({"type":"shop","mode":"remove","id":"base:shop/10","rolls":1})", "unknown field"));
+    { // the shop_stock record
+        ModReport rep;
+        ContentDB db = load(R"([
+ {"type":"shop_stock","mode":"add","id":"sh:stock/gem","shop":"base:shop/10","on":"area","area":"base:area/0","item":"base:item/100","unless_held":true},
+ {"type":"shop_stock","mode":"add","id":"sh:stock/q","shop":"base:shop/11","on":"quest","quest":30,"from":"first_objective"},
+ {"type":"shop_stock","mode":"add","id":"sh:stock/t","shop":"base:shop/12","on":"type","modes":[1,2],"from":"each_objective","except_item":"base:item/90"},
+ {"type":"shop_stock","mode":"patch","id":"base:stock/193","item":"base:item/194","unless_held":false},
+ {"type":"shop_stock","mode":"remove","id":"base:stock/cure"}
+])", rep);
+        for (const auto &e : rep.errors)
+            std::cerr << e << "\n";
+        CHECK(rep.errors.empty());
+        auto find = [&](const Id &id) -> const StockRuleDef * { for (const StockRuleDef &r : db.stockRules()) if (r.id == id) return &r; return nullptr; };
+        const StockRuleDef *g = find("sh:stock/gem"), *q = find("sh:stock/q"), *t = find("sh:stock/t"), *p = find("base:stock/193");
+        CHECK(g && g->on == "area" && g->area == "base:area/0" && g->item == "base:item/100" && g->unlessHeld && !g->unlessOffered);
+        CHECK(q && q->quest == 30 && q->from == "first_objective");
+        CHECK(t && t->modes == std::vector<int>({1, 2}) && t->exceptItem == "base:item/90");
+        CHECK(p && p->item == "base:item/194" && !p->unlessHeld && p->shop == "base:shop/12");
+        CHECK(find("base:stock/cure") == nullptr && db.stockRules().size() == 18 + 3 - 1);
+    }
+    {
+        auto badS = [&](const std::string &rec, const std::string &want) {
+            ModReport rep;
+            load("[" + rec + "]", rep);
+            const bool ok = mentions(rep.errors, want);
+            if (!ok)
+                std::cerr << "  wanted: " << want << " for " << rec << "\n";
+            return ok;
+        };
+        const std::string h = R"({"type":"shop_stock","mode":"add","id":"sh:stock/x","shop":"base:shop/10",)";
+        CHECK(badS(R"({"type":"shop_stock","mode":"add","id":"sh:stock/x","on":"area"})", "'shop' and 'on' are required"));
+        CHECK(badS(h + R"("on":"area","area":"base:area/0"})", "unknown item"));
+        CHECK(badS(R"({"type":"shop_stock","mode":"add","id":"sh:stock/x","shop":"nope:shop/1","on":"illness","from":"cure"})", "unknown shop"));
+        CHECK(badS(h + R"("on":"sometimes","item":"base:item/1"})", "'on' must be"));
+        CHECK(badS(h + R"("on":"area","area":"base:area/0","from":"nothing"})", "'from' must be"));
+        CHECK(badS(h + R"("on":"area","area":"base:area/999","item":"base:item/1"})", "existing 'area'"));
+        CHECK(badS(h + R"("on":"quest","from":"first_objective"})", "needs 'quest'"));
+        CHECK(badS(h + R"("on":"type","from":"each_objective"})", "needs 'modes'"));
+        CHECK(badS(h + R"("on":"area","area":"base:area/0","from":"first_objective"})", "fixed 'item'"));
+        CHECK(badS(h + R"("on":"quest","quest":3,"from":"cure"})", "only goes with"));
+        CHECK(badS(h + R"("on":"quest","quest":3,"item":"base:item/1","only_item":"base:item/2"})", "each_objective"));
+        CHECK(badS(h + R"("on":"quest","quest":3,"item":"base:item/1","unless_held":true})", "unless_held"));
+        CHECK(badS(h + R"("on":"area","area":"base:area/0","item":"base:item/1","unless_held":1})", "true or false"));
+        CHECK(badS(h + R"("on":"type","modes":["a"],"from":"each_objective"})", "list of quest type modes"));
+        CHECK(badS(R"({"type":"shop_stock","mode":"patch","id":"nope:stock/1","item":"base:item/1"})", "no such shop_stock rule"));
+        CHECK(badS(R"({"type":"shop_stock","mode":"remove","id":"base:stock/cure","item":"base:item/1"})", "unknown field"));
+        CHECK(badS(R"({"type":"shop_stock","mode":"patch","id":"base:stock/193","item":"base:item/9999"})", "unknown item"));
+    }
     fs::remove_all(root);
 
     std::cerr << (g_fail ? std::to_string(g_fail) + " failed\n" : "shop_test: all passed\n");

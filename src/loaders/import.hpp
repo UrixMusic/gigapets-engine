@@ -978,6 +978,8 @@ namespace gp
             db.put(s);
         for (ShopDef &s : baseShops(rom)) // the stock tables the shops roll from
             db.put(std::move(s));
+        for (StockRuleDef &r : baseStockRules()) // and what puts more into them
+            db.put(std::move(r));
         for (const QuestCountSpawn &q : kQuestCountSpawns) // what a quest's turn-in places
             db.put(QuestSpawnDef{"base:quest_spawn/" + std::to_string(q.count), q.count, q.area, legacyItemId(q.item), q.x, q.y, q.state});
         for (const QuestRandomSpawn &q : kQuestRandomSpawns) // the rewards that go on free random spots

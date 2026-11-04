@@ -59,6 +59,19 @@ namespace gp
         // (nothing is shown). `answer(true)` for Yes, `answer(false)` for No is called when the player chooses; the host then
         // carries the waiting script on.
         std::function<bool(const std::string &textId, const SayVars &vars, std::function<void(bool)> answer)> ask;
+        // Shop stock (shop.stock / add / remove / restock). A shop is named by its shop id ("base:shop/10") or by its area's id ("base:area/10"). The
+        // host has already checked the characters of the ids. shopStock fills `out` with the shop's entries (false = no such shop); shopAdd puts the item
+        // in n times, as the game's own injections do (a full shop gives up its oldest entry) and returns how many went in (0 for an unknown shop or item);
+        // shopRemove takes an item out altogether (false = it was not there); shopRestock adds one weighted pick to the shop, or to every shop for "".
+        struct ShopLine
+        {
+            std::string item;
+            int count = 0;
+        };
+        std::function<bool(const std::string &shop, std::vector<ShopLine> &out)> shopStock;
+        std::function<int(const std::string &shop, const std::string &item, int n)> shopAdd;
+        std::function<bool(const std::string &shop, const std::string &item)> shopRemove;
+        std::function<bool(const std::string &shop)> shopRestock;
         // The HUD objectives (objective.set / clear / has). The host has already checked the id (the mod's prefix, allowed
         // characters) and the numbers. setObjective returns false for a text or item id the db doesn't know, or when too many
         // are up (nothing changes); `item` and `text` are empty when not given, `need` is 0 when there is no counter.
@@ -232,6 +245,10 @@ namespace gp
             bind("objective", "set", l_objSet);
             bind("objective", "clear", l_objClear);
             bind("objective", "has", l_objHas);
+            bind("shop", "stock", l_shopStock);
+            bind("shop", "add", l_shopAdd);
+            bind("shop", "remove", l_shopRemove);
+            bind("shop", "restock", l_shopRestock);
         }
         ~ScriptHost()
         {
@@ -2030,6 +2047,61 @@ namespace gp
             ScriptHost &h = self(L);
             const char *id = luaL_checkstring(L, 1);
             lua_pushboolean(L, h.api_.hasObjective && idCharsOk(id) && h.api_.hasObjective(id));
+            return 1;
+        }
+
+        // ---- shops ----
+        // shop.stock(shop) -> { {item = id, count = n}, ... } in the order the shop lists them, or nil for no such shop.
+        static int l_shopStock(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *shop = luaL_checkstring(L, 1);
+            std::vector<ScriptApi::ShopLine> lines;
+            if (!h.api_.shopStock || !idCharsOk(shop) || !h.api_.shopStock(shop, lines))
+            {
+                lua_pushnil(L);
+                return 1;
+            }
+            lua_createtable(L, int(lines.size()), 0);
+            for (size_t i = 0; i < lines.size(); ++i)
+            {
+                lua_createtable(L, 0, 2);
+                lua_pushstring(L, lines[i].item.c_str());
+                lua_setfield(L, -2, "item");
+                lua_pushinteger(L, lines[i].count);
+                lua_setfield(L, -2, "count");
+                lua_rawseti(L, -2, lua_Integer(i + 1));
+            }
+            return 1;
+        }
+        // shop.add(shop, item [, n = 1]) -> how many were put in (0: no such shop or item). A shop holds nine different items; one that is full gives up its
+        // oldest.
+        static int l_shopAdd(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *shop = luaL_checkstring(L, 1);
+            const char *item = luaL_checkstring(L, 2);
+            const lua_Integer n = luaL_optinteger(L, 3, 1);
+            if (n < 1 || n > 99)
+                return luaL_argerror(L, 3, "the number must be 1 to 99");
+            lua_pushinteger(L, h.api_.shopAdd && idCharsOk(shop) && idCharsOk(item) ? h.api_.shopAdd(shop, item, int(n)) : 0);
+            return 1;
+        }
+        // shop.remove(shop, item) -> true if it was in the shop's stock.
+        static int l_shopRemove(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *shop = luaL_checkstring(L, 1);
+            const char *item = luaL_checkstring(L, 2);
+            lua_pushboolean(L, h.api_.shopRemove && idCharsOk(shop) && idCharsOk(item) && h.api_.shopRemove(shop, item));
+            return 1;
+        }
+        // shop.restock([shop]) -> true if it did something: one more weighted pick of the shop's table, for one shop or all.
+        static int l_shopRestock(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *shop = luaL_optstring(L, 1, "");
+            lua_pushboolean(L, h.api_.shopRestock && (!*shop || idCharsOk(shop)) && h.api_.shopRestock(shop));
             return 1;
         }
 

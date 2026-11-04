@@ -1764,6 +1764,114 @@ namespace gp
             rep.lastWriter[id] = m.id;
         }
 
+        // shop_stock: something that puts an item into a shop's stock when something happens (see StockRuleDef; the base game's own are "base:stock/...").
+        // { type: "shop_stock", mode: "add", id: "mymod:stock/x", shop: "base:shop/12", on: "area", area: "mymod:area/cave", item: "mymod:item/gem", unless_held: true }
+        // on: "area" (the pet walks into `area`), "quest" (quest number `quest` is handed in; `modes` default [5]), "type" (a quest of one of `modes`), "illness".
+        // from: "item" (the fixed `item`, the default), "first_objective", "each_objective" (only_item / except_item narrow it), "first_spawn", "cure" (on "illness").
+        // mode "patch" changes any of these fields, mode "remove" takes the rule away.
+        inline void applyShopStock(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
+        {
+            static const std::set<std::string> allowed{"type", "mode", "id", "shop", "on", "area", "quest", "modes", "from", "item", "only_item", "except_item", "unless_held", "unless_offered"};
+            static const std::set<std::string> ons{"area", "quest", "type", "illness"};
+            static const std::set<std::string> froms{"item", "first_objective", "each_objective", "first_spawn", "cure"};
+            const std::string mode = rec.contains("mode") && rec["mode"].is_string() ? rec["mode"].get<std::string>() : "";
+            std::string id, why;
+            StockRuleDef r;
+            bool patch = false;
+            if (mode == "patch" || mode == "remove")
+            {
+                for (auto it = rec.begin(); it != rec.end(); ++it)
+                    if (!allowed.count(it.key()) || (mode == "remove" && it.key() != "type" && it.key() != "mode" && it.key() != "id"))
+                        return err(rep, file, m.id, "unknown field '" + it.key() + "' in a shop_stock " + mode + " record");
+                if (!needStr(rec, "id", id, why))
+                    return err(rep, file, m.id, "shop_stock record: " + why);
+                StockRuleDef *old = db.stockRuleMutable(id);
+                if (!old)
+                    return err(rep, file, m.id, mode + " '" + id + "': no such shop_stock rule");
+                if (mode == "remove")
+                {
+                    db.eraseStockRule(id);
+                    rep.lastWriter[id] = m.id;
+                    return;
+                }
+                r = *old;
+                patch = true;
+            }
+            else if (!beginAdd(m, file, rec, rep, "shop_stock", allowed, [&](const std::string &i)
+                               { return db.stockRuleMutable(i) != nullptr; }, id))
+                return;
+            else
+                r.id = id;
+            if (rec.contains("shop") && !optStr(rec, "shop", r.shop, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            if (rec.contains("on") && !optStr(rec, "on", r.on, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            if (rec.contains("from") && !optStr(rec, "from", r.from, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            if (!patch && (!rec.contains("shop") || !rec.contains("on")))
+                return err(rep, file, m.id, "'" + id + "': 'shop' and 'on' are required");
+            if (!db.shop(r.shop))
+                return err(rep, file, m.id, "'" + id + "': unknown shop '" + r.shop + "'");
+            if (!ons.count(r.on))
+                return err(rep, file, m.id, "'" + id + "': 'on' must be \"area\", \"quest\", \"type\" or \"illness\"");
+            if (!froms.count(r.from))
+                return err(rep, file, m.id, "'" + id + "': 'from' must be \"item\", \"first_objective\", \"each_objective\", \"first_spawn\" or \"cure\"");
+            for (const char *k : {"area", "item", "only_item", "except_item"})
+                if (rec.contains(k))
+                {
+                    Id &dst = std::string(k) == "area" ? r.area : std::string(k) == "item" ? r.item : std::string(k) == "only_item" ? r.onlyItem : r.exceptItem;
+                    if (!optStr(rec, k, dst, why))
+                        return err(rep, file, m.id, "'" + id + "': " + why);
+                }
+            if (rec.contains("quest") && !optInt(rec, "quest", r.quest, 1, 1000, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            for (const char *k : {"unless_held", "unless_offered"})
+                if (rec.contains(k))
+                {
+                    if (!rec[k].is_boolean())
+                        return err(rep, file, m.id, "'" + id + "': '" + k + "' must be true or false");
+                    (std::string(k) == "unless_held" ? r.unlessHeld : r.unlessOffered) = rec[k].get<bool>();
+                }
+            if (rec.contains("modes"))
+            {
+                if (!rec["modes"].is_array() || rec["modes"].size() > 16)
+                    return err(rep, file, m.id, "'" + id + "': 'modes' must be a list of quest type modes like [4, 6]");
+                r.modes.clear();
+                for (const json &e : rec["modes"])
+                {
+                    if (!e.is_number_integer() || e.get<int>() < 0 || e.get<int>() > 100)
+                        return err(rep, file, m.id, "'" + id + "': 'modes' must be a list of quest type modes like [4, 6]");
+                    r.modes.push_back(e.get<int>());
+                }
+            }
+            if (r.on == "area" && !db.area(r.area))
+                return err(rep, file, m.id, "'" + id + "': an 'area' rule needs an existing 'area' (it says '" + r.area + "')");
+            if (r.on == "quest" && r.quest < 1)
+                return err(rep, file, m.id, "'" + id + "': a 'quest' rule needs 'quest' (the number handed in)");
+            if (r.on == "type" && r.modes.empty())
+                return err(rep, file, m.id, "'" + id + "': a 'type' rule needs 'modes'");
+            if (r.on == "illness" && r.from != "cure" && r.from != "item")
+                return err(rep, file, m.id, "'" + id + "': an 'illness' rule puts in the 'cure' or a fixed 'item'");
+            if (r.on == "area" && r.from != "item")
+                return err(rep, file, m.id, "'" + id + "': an 'area' rule puts in a fixed 'item'");
+            if (r.from == "item" && !db.item(r.item))
+                return err(rep, file, m.id, "'" + id + "': unknown item '" + r.item + "'");
+            if (r.from == "cure" && r.on != "illness")
+                return err(rep, file, m.id, "'" + id + "': 'cure' only goes with 'on': \"illness\"");
+            for (const Id *i : {&r.onlyItem, &r.exceptItem})
+                if (!i->empty() && !db.item(*i))
+                    return err(rep, file, m.id, "'" + id + "': unknown item '" + *i + "'");
+            if ((!r.onlyItem.empty() || !r.exceptItem.empty()) && r.from != "each_objective")
+                return err(rep, file, m.id, "'" + id + "': only_item / except_item go with 'from': \"each_objective\"");
+            if ((r.unlessHeld || r.unlessOffered) && r.on != "area")
+                return err(rep, file, m.id, "'" + id + "': unless_held / unless_offered go with 'on': \"area\"");
+            if (patch)
+                db.stockRuleMutable(id) ? (void)(*db.stockRuleMutable(id) = std::move(r)) : (void)0;
+            else
+                db.put(std::move(r));
+            rep.lastWriter[id] = m.id;
+        }
+
         // gate: a barrier object that goes for good once the pet meets a condition (the base game's five guards in Magma Mountain are
         // "base:gate/5/25", "/15", "/7", "/1" and "/22"). { barrier = an object id, kind = "tricks" (tricks known >= need) | "stat"
         // (any of stats - "halos", "pitchforks", "stars", "lightbulbs" - >= need) | "money" (>= need) | "quests" (quests done >= need,
@@ -2998,9 +3106,11 @@ namespace gp
                 return 0;
             if (t == "area")
                 return 1;
+            if (t == "shop_stock")
+                return 4; // names shops, which are made in pass 3
             return t == "spot" || t == "find" || t == "quest_spawn" || t == "gate" || t == "minigame" || t == "species" || t == "shop" ? 3 : 2; // they name areas and items, so they come last
         }
-        inline constexpr int kPasses = 4;
+        inline constexpr int kPasses = 5;
 
         inline void applyFile(ContentDB &db, const ModManifest &m, const fs::path &file, ModReport &rep, int pass)
         {
@@ -3077,6 +3187,8 @@ namespace gp
                     applyMinigame(db, m, file, r, rep);
                 else if (type == "shop")
                     applyShop(db, m, file, r, rep);
+                else if (type == "shop_stock")
+                    applyShopStock(db, m, file, r, rep);
                 else if (type == "species")
                     applySpecies(db, m, file, r, rep);
                 else

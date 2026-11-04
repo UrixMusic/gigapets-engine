@@ -408,6 +408,27 @@ namespace gp
         std::vector<ShopItem> items;
     };
 
+    // Something that puts an item into a shop's stock when something happens (the ROM's ClaimLRUCacheSlot calls: a full shop drops its oldest entry).
+    //   on "area":    the pet walks into `area` (the ROM: item 193 into the second shop once the pet reaches Gigatown...)
+    //   on "quest":   quest number `quest` is handed in (a quest of one of `modes`, default 5 = the story quests)
+    //   on "type":    a quest of one of `modes` is handed in (the ROM's modes 2, 4 and 6)
+    //   on "illness": the pet falls ill
+    // `from` says what goes in: "item" (the fixed `item`), "first_objective" / "each_objective" (the quest's objective items, up to 3),
+    // "first_spawn" (the first item the quest scattered), "cure" (the item that cures the illness). `only_item` / `except_item` narrow
+    // "each_objective". `unless_held` / `unless_offered` (on "area") skip the rule when the pet holds the item or has handed it in.
+    struct StockRuleDef
+    {
+        Id id;
+        Id shop; // a ShopDef id
+        std::string on = "area";
+        Id area;
+        int quest = 0;
+        std::vector<int> modes;
+        std::string from = "item";
+        Id item, onlyItem, exceptItem;
+        bool unlessHeld = false, unlessOffered = false;
+    };
+
     struct FixedSpotDef
     {
         Id id;

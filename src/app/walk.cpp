@@ -450,6 +450,25 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             gp::spawnShopItemStock(pending, shopStock, a.legacyId, a.id, a.spawnPoints, shopRnd, itemNumberOf);
         };
 
+        // The stock rules (what the ROM's ClaimLRUCacheSlot calls do, as records): something happened that may put an item into a shop.
+        auto applyStock = [&](const gp::StockEvent &ev)
+        {
+            gp::applyStockRules(db.stockRules(), shopStock, ev,
+                                [&](const gp::Id &shop) -> gp::Id { const gp::ShopDef *s = db.shop(shop); return s ? s->area : gp::Id(); },
+                                [&](const gp::Id &i) { return player.itemCount(i) > 0; },
+                                [&](const gp::Id &i) { return player.hasFlag(gp::offeredKey(i)); });
+        };
+
+        auto petFellIll = [&] // SetActiveIllness: the cure goes to the pharmacy
+        {
+            if (player.illnessId < 0 || player.illnessId > 9)
+                return;
+            gp::StockEvent ev;
+            ev.kind = gp::StockEvent::Illness;
+            ev.cure = gp::illnessCureItem(itemDefs, player.illnessId);
+            applyStock(ev);
+        };
+
         int itemSlot = 0x1e; // GUESS: tune with [ and ] while the menu is open
         constexpr int kMaxSlotProbe = 16;
 
@@ -1553,6 +1572,12 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         auto enterAreaEvents = [&](const gp::AreaDef &a, bool newZone)
         {
             gp::audio().stopSfx(); // ExitCurrentArea: Sound_StopAllChannels
+            {
+                gp::StockEvent ev; // Game_ProcessTick: some areas add to a shop's stock when the pet arrives
+                ev.kind = gp::StockEvent::Area;
+                ev.area = a.id;
+                applyStock(ev);
+            }
             if (gp::QuestNudge::applies(player.questsCompleted, quests.q.phase))
                 nudge.restart(long(gameTicks)); // Game_ProcessTick: an area change restarts the reminder
             if (const int song = a.music >= 0 ? a.music : gp::rau::zoneSong(a.legacyId); song >= 0)
@@ -1641,6 +1666,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         break;
                     case 2:
                         player.illnessId = randIn(0, 9);
+                        petFellIll(); // SetActiveIllness
                         break;
                     case 3:
                         player.adjustCare(gp::Cleanliness, -80);
@@ -5036,12 +5062,67 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (const gp::NpcDef *r = npcAt(d.receiver))
                 info.receiverId = r->id;
             // What this quest's turn-in places in the world (quest_spawn records; the quest number is the one just handed in).
+            {
+                gp::StockEvent ev; // ProcessQuestTurnIn: a hand-in can put items into shops
+                ev.kind = gp::StockEvent::TurnIn;
+                ev.quest = quests.counter;
+                ev.mode = d.typeMode;
+                for (const gp::QuestEntry &e : d.objectives)
+                    ev.objectives.push_back(e.item);
+                for (const gp::QuestEntry &e : d.spawn)
+                    ev.spawns.push_back(e.item);
+                applyStock(ev);
+            }
             gp::spawnQuestCountItems(events, db.questSpawnsFor(quests.counter), [&](const gp::Id &i) { return gp::legacyItemNumber(i); },
                                     [&](int a) { return db.areaByLegacy(a); }, rnd);
             return scripts.fireQuestComplete(info).suppress;
         };
 
         walk::bindScripts(svc); // world.drop, rand.* (and later player.* / flags): walk_script_bindings.hpp
+        svc.petFellIll = petFellIll;
+        { // shop.*: the stock lives here, so the callbacks do too
+            auto shopOf = [&](const std::string &name) -> const gp::ShopDef *
+            { const gp::ShopDef *s = db.shop(name); return s ? s : db.shopForArea(name); };
+            gp::ScriptApi &sapi = scripts.api();
+            sapi.shopStock = [&](const std::string &name, std::vector<gp::ScriptApi::ShopLine> &out)
+            {
+                const gp::ShopDef *s = shopOf(name);
+                if (!s)
+                    return false;
+                if (const gp::ShopStock::Row *row = shopStock.rowOf(s->area))
+                    for (const gp::StockEntry &e : *row)
+                        if (e.present())
+                            out.push_back({e.item, e.stock});
+                return true;
+            };
+            sapi.shopAdd = [&](const std::string &name, const std::string &item, int n)
+            {
+                const gp::ShopDef *s = shopOf(name);
+                if (!s || !db.item(item))
+                    return 0;
+                for (int i = 0; i < n; ++i)
+                    shopStock.claim(s->area, item);
+                return n;
+            };
+            sapi.shopRemove = [&](const std::string &name, const std::string &item)
+            {
+                const gp::ShopDef *s = shopOf(name);
+                return s && shopStock.removeItem(s->area, item);
+            };
+            sapi.shopRestock = [&](const std::string &name)
+            {
+                if (name.empty())
+                {
+                    shopStock.restock(db.shops(), shopRnd);
+                    return !db.shops().empty();
+                }
+                const gp::ShopDef *s = shopOf(name);
+                if (!s)
+                    return false;
+                shopStock.rollOne(*s, shopRnd);
+                return true;
+            };
+        }
 
         gp::QuestTextEnv &txt = quests.txt; // adjust to the real member name
 

@@ -249,7 +249,11 @@ inline void bindScripts(WalkServices &svc)
     api.getIllness = [&svc]
     { return svc.player.isHealthy() ? -1 : svc.player.illnessId; };
     api.setIllness = [&svc](int illness)
-    { svc.player.illnessId = illness < 0 ? gp::kHealthy : illness; };
+    {
+        svc.player.illnessId = illness < 0 ? gp::kHealthy : illness;
+        if (svc.petFellIll)
+            svc.petFellIll();
+    };
 }
 
 } // namespace walk
