@@ -12,6 +12,8 @@
 #include <cmath>
 #include <cstdint>
 #include <atomic>
+#include <deque>
+#include <memory>
 #include <map>
 #include <mutex>
 #include <vector>
@@ -34,6 +36,7 @@ namespace gp
             uint32_t env = 0;
             int root = 0, zoneTop = 0;
             bool hasLoop = false;
+            std::shared_ptr<const std::vector<float>> data; // a mod's sample: its own samples (mono, -1..1; off, len, ls count them) instead of the ROM's bytes
         };
 
         // Linear amplitude 0..1 with the envelope breakpoints: [seconds, level 0..127].
@@ -42,6 +45,7 @@ namespace gp
             std::vector<std::pair<double, int>> pts;
             double stopT = -1;
             bool has = false;
+            double ramp = 832 / 70312.5; // seconds for the level to fall 32 steps once the note ends (the release)
         };
 
         struct Event
@@ -96,12 +100,44 @@ namespace gp
             float gain = 0, gl = 1, gr = 1;
             std::vector<std::pair<double, int>> tl; // envelope timeline: (time since start, level 0..127); 128 = no envelope
             uint32_t introLen = 0, bodyLen = 0, base = 0;
+            const std::vector<float> *data = nullptr; // a mod's sample
             double noteStep = 0; // the step the note's own pitch gives (a relative bend is cents above it)
             bool done = true;
             double baseStep() const { return noteStep; }
         };
 
         constexpr double kEnvTick = 32 / 70312.5, kEnvRamp = 832 / 70312.5;
+        constexpr uint32_t kCustomOff = 0x80000000u; // a mod's samples have "offsets" from here (the cache of envelopes is kept by it)
+
+        // A simple envelope: up to the top in `attack` seconds, down to `sustain` (0..1) in `decay`, held until the note ends, then out in `release`.
+        inline Env adsr(double attack, double decay, double sustain, double release)
+        {
+            Env e;
+            e.has = true;
+            sustain = std::clamp(sustain, 0.0, 1.0);
+            attack = std::max(0.0, attack);
+            decay = std::max(0.0, decay);
+            const double step = 0.002; // the level is held between points, so they come often
+            int last = 0;
+            for (double t = step; t <= attack + decay + step; t += step)
+            {
+                double lvl = 1;
+                if (t < attack)
+                    lvl = t / attack;
+                else if (decay > 0 && t < attack + decay)
+                    lvl = 1 - (1 - sustain) * (t - attack) / decay;
+                else if (t >= attack)
+                    lvl = decay > 0 ? sustain : 1;
+                const int v = int(std::lround(lvl * 127));
+                if (v != last)
+                    e.pts.push_back({t, v});
+                last = v;
+            }
+            if (e.pts.empty() || e.pts.back().second != int(std::lround((decay > 0 ? sustain : 1) * 127)))
+                e.pts.push_back({attack + decay + step, int(std::lround((decay > 0 ? sustain : 1) * 127))});
+            e.ramp = std::max(0.001, release) / 4; // from the top, four steps of 32 take the release
+            return e;
+        }
         constexpr double kTicksPerSecond = 200; // fitted in the editor, not from the ROM
 
         class RomAudio
@@ -203,6 +239,94 @@ namespace gp
                 return out;
             }
 
+            // ---- a mod's instruments and drums ----
+            // A sample of a mod's: mono, -1..1, played at `rate`. A loop (frames loopStart..loopEnd) keeps a held note sounding.
+            struct CustomZone
+            {
+                std::vector<float> pcm;
+                uint32_t rate = 44100;
+                int root = 60, top = 127; // the MIDI note the sample is at, and the highest note it is used for
+                bool loop = false;
+                uint32_t loopStart = 0, loopEnd = 0;
+            };
+            struct CustomInstrument
+            {
+                int program = 0; // 0..13 replaces the ROM's, 14 and up is a new one
+                std::vector<CustomZone> zones;
+                double attack = 0.005, decay = 0, sustain = 1, release = 0.05; // seconds, level 0..1
+            };
+            struct CustomDrum
+            {
+                int index = 0; // 0..11 replaces the ROM's, 12 and up is a new one
+                CustomZone zone;
+            };
+
+            // Puts the mod's instruments and drums in place of the ROM's (everything from an earlier call is forgotten). Not while a song is
+            // being rendered or played from this.
+            void setCustom(const std::vector<CustomInstrument> &ins, const std::vector<CustomDrum> &drums)
+            {
+                {
+                    std::lock_guard<std::recursive_mutex> guard(envLock_);
+                    for (auto it = envs_.lower_bound(kCustomOff); it != envs_.end();)
+                        it = envs_.erase(it);
+                }
+                custom_.clear();
+                cs_.clear();
+                drums_ = romDrums_;
+                extraPrograms_ = 0;
+                auto make = [&](const CustomZone &z, bool pitched) -> Sample * {
+                    if (z.pcm.empty())
+                        return nullptr;
+                    Sample s;
+                    s.spf = true;
+                    s.off = kCustomOff + uint32_t(cs_.size());
+                    s.rate = z.rate;
+                    s.len = s.pl = s.ie = uint32_t(z.pcm.size());
+                    s.root = z.root;
+                    s.zoneTop = pitched ? z.top : 127;
+                    s.data = std::make_shared<const std::vector<float>>(z.pcm);
+                    if (z.loop)
+                    {
+                        s.ls = std::min<uint32_t>(z.loopStart, s.len - 1);
+                        s.pl = z.loopEnd > s.ls + 1 && z.loopEnd <= s.len ? z.loopEnd : s.len;
+                        s.ie = s.ls;
+                        s.hasLoop = s.pl > s.ls;
+                    }
+                    cs_.push_back(s);
+                    return &cs_.back();
+                };
+                for (const CustomInstrument &ci : ins)
+                {
+                    std::vector<const Sample *> zs;
+                    std::vector<CustomZone> sorted = ci.zones;
+                    std::stable_sort(sorted.begin(), sorted.end(), [](const CustomZone &a, const CustomZone &b) { return a.top < b.top; });
+                    for (const CustomZone &z : sorted)
+                        if (Sample *s = make(z, true))
+                        {
+                            zs.push_back(s);
+                            std::lock_guard<std::recursive_mutex> guard(envLock_);
+                            envs_[s->off] = adsr(ci.attack, ci.decay, ci.sustain, ci.release);
+                        }
+                    if (zs.empty() || ci.program < 0)
+                        continue;
+                    custom_[ci.program] = zs;
+                    if (ci.program >= int(offs_.size()) - 1)
+                        extraPrograms_ = std::max<size_t>(extraPrograms_, size_t(ci.program) + 2 - offs_.size());
+                }
+                for (const CustomDrum &cd : drums)
+                    if (Sample *s = make(cd.zone, false))
+                    {
+                        if (cd.index < 0 || cd.index > 255)
+                            continue;
+                        if (size_t(cd.index) >= drums_.size())
+                            drums_.resize(size_t(cd.index) + 1, nullptr);
+                        drums_[size_t(cd.index)] = s;
+                    }
+                for (const Sample *&d : drums_) // a gap (a drum number nobody gave) plays the first one rather than nothing
+                    if (!d && !drums_.empty())
+                        d = drums_[0];
+            }
+
             // The samples that make up instrument `prog` (one per note zone, lowest first), or none.
             std::vector<const Sample *> instrumentSamples(int prog) const
             {
@@ -215,7 +339,7 @@ namespace gp
                 return v;
             }
             size_t drumCount() const { return drums_.size(); }
-            size_t programCount() const { return offs_.size(); }
+            size_t programCount() const { return offs_.size() + extraPrograms_; } // (the last ROM group is the drum kit; a mod's new instruments count after it)
             const Sample *drum(size_t i) const { return i < drums_.size() ? drums_[i] : nullptr; }
             const std::vector<Song> &songs() const { return songs_; }
             size_t sampleCount() const { return all_.size(); }
@@ -223,6 +347,14 @@ namespace gp
             // First entry of the program's group with pb <= its zone top (0x04b41e).
             const Sample *pick(int prog, int pb) const
             {
+                const auto cu = custom_.find(prog);
+                if (cu != custom_.end()) // a mod's instrument: its zones, lowest first
+                {
+                    for (const Sample *z : cu->second)
+                        if (pb <= z->zoneTop)
+                            return z;
+                    return cu->second.back();
+                }
                 if (prog < 0 || prog >= int(offs_.size()))
                     return nullptr;
                 const size_t s = offs_[prog], en = prog + 1 < int(offs_.size()) ? offs_[prog + 1] : list_.size();
@@ -241,7 +373,10 @@ namespace gp
             std::map<uint32_t, size_t> byOff_;
             std::vector<Song> songs_;
             std::vector<uint32_t> offs_;
-            std::vector<const Sample *> list_, drums_;
+            std::vector<const Sample *> list_, drums_, romDrums_;
+            std::deque<Sample> cs_;                              // a mod's samples
+            std::map<int, std::vector<const Sample *>> custom_; // a mod's instruments by number
+            size_t extraPrograms_ = 0;
             mutable std::map<uint32_t, Env> envs_;
             mutable std::recursive_mutex envLock_; // a song may be rendered on another thread while the game plays a sound
 
@@ -413,6 +548,7 @@ namespace gp
                 }
                 for (size_t i = offs_.back(); i < list_.size(); ++i)
                     drums_.push_back(list_[i]);
+                romDrums_ = drums_;
             }
 
             // Sample value at a fractional position (0..1 scale, data starts at byte `base`).
@@ -425,6 +561,20 @@ namespace gp
                 if (nearest)
                     return a;
                 const float c = i + 1 < n ? (float(b(base + i + 1)) - 128.f) / 128.f : a;
+                return a + (c - a) * float(pos - i);
+            }
+
+            float read(const Playing &p, uint32_t base, uint32_t n, double pos) const
+            {
+                if (!p.data)
+                    return interp(base, n, pos);
+                const uint32_t i = uint32_t(pos);
+                if (i >= n || size_t(base) + i >= p.data->size())
+                    return 0.f;
+                const float a = (*p.data)[base + i];
+                if (nearest)
+                    return a;
+                const float c = i + 1 < n && size_t(base) + i + 1 < p.data->size() ? (*p.data)[base + i + 1] : a;
                 return a + (c - a) * float(pos - i);
             }
 
@@ -517,7 +667,8 @@ namespace gp
                 p.i0 = i0;
                 p.maxLen = maxLen;
                 p.gain = gain;
-                p.base = e.off + 40;
+                p.data = e.data.get();
+                p.base = p.data ? 0 : e.off + 40;
                 p.hdr = double(std::max<uint32_t>(e.rate ? e.rate : 11025, 8000));
                 p.gl = pan < 64 ? 1.f : std::min(1.f, float(127 - pan) * 2.f / 128.f);
                 p.gr = pan < 64 ? std::min(1.f, float(pan) * 2.f / 128.f) : 1.f;
@@ -546,7 +697,7 @@ namespace gp
                         {
                             tl.push_back({tt, L});
                             L -= 32;
-                            tt += kEnvRamp;
+                            tt += env.ramp;
                         }
                         tl.push_back({tt, 0});
                         tEnd = tt;
@@ -580,10 +731,10 @@ namespace gp
                         if (pos >= p.introLen && p.bodyLen)
                             pos = p.introLen + std::fmod(pos - p.introLen, double(p.bodyLen));
                         if (pos < p.introLen)
-                            return interp(p.base, p.introLen, pos);
-                        return interp(p.base + e.ls, p.bodyLen, pos - p.introLen);
+                            return read(p, p.base, p.introLen, pos);
+                        return read(p, p.base + e.ls, p.bodyLen, pos - p.introLen);
                     }
-                    return interp(p.base, p.introLen, pos);
+                    return read(p, p.base, p.introLen, pos);
                 };
                 const size_t last = std::min(frame0 + n, p.i0 + p.maxLen);
                 size_t f = std::max(frame0, p.i0);
@@ -620,6 +771,42 @@ namespace gp
                     p.done = true;
             }
         };
+
+        // A song with other instruments: `channels` (channel 0..15 -> instrument) is what a channel plays from the start whatever the song's own
+        // program changes say, `programs` swaps one instrument number for another wherever the song uses it, `drums` one drum for another.
+        inline Song patchSong(const Song &in, const std::map<int, int> &programs, const std::map<int, int> &drums, const std::map<int, int> &channels)
+        {
+            Song s;
+            s.end = in.end;
+            for (const auto &kv : channels)
+            {
+                Event e;
+                e.k = 'p';
+                e.t = 0;
+                e.ch = kv.first;
+                e.v = kv.second;
+                s.ev.push_back(e);
+            }
+            for (Event e : in.ev)
+            {
+                if (e.k == 'p')
+                {
+                    if (channels.count(e.ch))
+                        continue;
+                    const auto it = programs.find(e.v);
+                    if (it != programs.end())
+                        e.v = it->second;
+                }
+                else if (e.k == 'n' && e.ch == 9)
+                {
+                    const auto it = drums.find(e.pb);
+                    if (it != drums.end())
+                        e.pb = it->second;
+                }
+                s.ev.push_back(e);
+            }
+            return s;
+        }
 
         // A song played as it goes: the same notes, instruments, envelopes and bends as RomAudio::renderSong, but made a few hundred frames
         // at a time (from the audio callback) instead of in one go. It starts at once and uses no memory for the finished song. It loops, with

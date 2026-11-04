@@ -53,6 +53,7 @@ namespace gp
             std::map<int, int> channels;    // MIDI channel 0..15 -> the ROM's instrument 0..13 it starts with
             bool gmPrograms = true, gmDrums = true; // read program changes / drum notes as General MIDI (else as the ROM's own numbers)
             std::vector<int> slideChannels; // MIDI channels 0..15 where a note inside another note is a slide
+            std::map<std::string, int> instrumentIds; // instrument ids a track's name may give in square brackets ("Lead [mymod:instrument/harp]") -> the number
         };
 
         struct Result
@@ -177,6 +178,20 @@ namespace gp
                                 if (marked && q < rb && nm.find_first_not_of("0123456789", q) >= rb)
                                 {
                                     trackProgram[tracks - 1] = std::atoi(nm.substr(q, rb - q).c_str());
+                                    numbered = true;
+                                }
+                            }
+                            if (!numbered && rb != std::string::npos)
+                            {
+                                std::string inner = nm.substr(lb + 1, rb - lb - 1);
+                                while (!inner.empty() && inner.front() == ' ')
+                                    inner.erase(inner.begin());
+                                while (!inner.empty() && inner.back() == ' ')
+                                    inner.pop_back();
+                                const auto idIt = opt.instrumentIds.find(inner);
+                                if (idIt != opt.instrumentIds.end())
+                                {
+                                    trackProgram[tracks - 1] = idIt->second;
                                     numbered = true;
                                 }
                             }

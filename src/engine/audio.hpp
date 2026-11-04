@@ -17,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -196,6 +197,7 @@ namespace gp
         // decode): returns null until it is, and asking again then gives the clip. A song that cannot be made stays null.
         const AudioClip *musicClipAsync(int n)
         {
+            syncCustom();
             adoptAsync();
             const ModSound *m = songFileFor(n);
             if (!m)
@@ -210,11 +212,15 @@ namespace gp
 
         const AudioClip *musicClipFor(int n)
         {
+            syncCustom();
             if (const ModSound *m = songFileFor(n))
                 if (const AudioClip *c = modClip(*m, true))
                     return c;
             if (n >= kModMusicBase)
                 return nullptr;
+            rau::Song patched;
+            if (patchFor(n, patched))
+                return patchedClip(n, patched);
             return clip(dir_ + "/music", n);
         }
 
@@ -232,7 +238,10 @@ namespace gp
         // Music track n, looped. Asking for the one already playing leaves it running.
         void playMusic(int n)
         {
-            if (!dev_ || n == music_)
+            if (!dev_)
+                return;
+            syncCustom();
+            if (n == music_)
                 return;
             if (live_ && startLive(n))
                 return;
@@ -359,6 +368,12 @@ namespace gp
                 k += "|d" + std::to_string(kv.first) + "=" + std::to_string(kv.second);
             for (const auto &kv : m.channels)
                 k += "|c" + std::to_string(kv.first) + "=" + std::to_string(kv.second);
+            for (const auto &kv : m.programIds)
+                k += "|P" + std::to_string(kv.first) + "=" + kv.second;
+            for (const auto &kv : m.drumIds)
+                k += "|D" + std::to_string(kv.first) + "=" + kv.second;
+            for (const auto &kv : m.channelIds)
+                k += "|C" + std::to_string(kv.first) + "=" + kv.second;
             for (int c : m.slideChannels)
                 k += "|s" + std::to_string(c);
             return k;
@@ -458,6 +473,138 @@ namespace gp
             workerReady_.store(false);
         }
 
+        // ---- a mod's instruments and drums ----
+        // Hands the registry's instrument and drum records to the ROM's sound engine when they have changed (the mods were loaded again).
+        // Everything made with the old ones is forgotten: the songs playing stop, and the clips are made again when they are asked for.
+        void syncCustom()
+        {
+            AudioRegistry &reg = audioRegistry();
+            if (!romAudio_ || customGen_ == reg.generation)
+                return;
+            customGen_ = reg.generation;
+            const bool any = !reg.instruments.empty() || !reg.drums.empty() || !reg.songPatches.empty();
+            if (!any && !hadCustom_)
+                return; // nothing to put in, nothing to take out
+            hadCustom_ = any;
+            stopScan();
+            stopWorker();
+            wantSong_ = -1;
+            lock();
+            musicVoice_ = Voice{};
+            musicLive_.reset();
+            pendingMusic_ = -1;
+            for (Voice &v : voices_)
+                v = Voice{};
+            asyncClip_.reset();
+            clips_.clear();
+            music_ = -1;
+            unlock();
+            {
+                std::lock_guard<std::mutex> g(peakLock_);
+                peaks_.clear();
+            }
+            auto zone = [&](const std::string &path, float gain, double semitones, rau::RomAudio::CustomZone &z, const std::string &id) -> bool {
+                PcmData pcm;
+                std::string why;
+                if (!loadSoundFile(path, pcm, why) || pcm.frames() == 0)
+                {
+                    std::printf("audio: %s (%s)\n", why.empty() ? "no sound in the file" : why.c_str(), id.c_str());
+                    return false;
+                }
+                const size_t ch = size_t(std::max(pcm.channels, 1)), n = pcm.frames();
+                z.pcm.resize(n);
+                for (size_t i = 0; i < n; ++i)
+                {
+                    float sum = 0;
+                    for (size_t c = 0; c < ch; ++c)
+                        sum += pcm.pcm[i * ch + c];
+                    z.pcm[i] = sum / float(ch) / 32768.f * gain;
+                }
+                z.rate = uint32_t(std::max(1.0, pcm.rate * std::pow(2.0, semitones / 12.0)));
+                return true;
+            };
+            std::vector<rau::RomAudio::CustomInstrument> ins;
+            for (const ModInstrument &mi : reg.instruments)
+            {
+                rau::RomAudio::CustomInstrument ci;
+                ci.program = mi.program;
+                ci.attack = mi.attack;
+                ci.decay = mi.decay;
+                ci.sustain = mi.sustain;
+                ci.release = mi.release;
+                for (const ModZone &mz : mi.zones)
+                {
+                    rau::RomAudio::CustomZone z;
+                    if (!zone(mz.path, mz.gain, 0, z, mi.id))
+                        continue;
+                    z.root = mz.root;
+                    z.top = mz.top;
+                    if (mz.loop)
+                    {
+                        z.loop = true;
+                        z.loopStart = uint32_t(std::max(0.0, mz.loopStart) * z.rate);
+                        z.loopEnd = mz.loopEnd > 0 ? uint32_t(mz.loopEnd * z.rate) : 0;
+                    }
+                    ci.zones.push_back(std::move(z));
+                }
+                ins.push_back(std::move(ci));
+            }
+            std::vector<rau::RomAudio::CustomDrum> drums;
+            for (const ModDrum &md : reg.drums)
+            {
+                rau::RomAudio::CustomDrum cd;
+                cd.index = md.index;
+                if (zone(md.path, md.gain, md.semitones, cd.zone, md.id))
+                    drums.push_back(std::move(cd));
+            }
+            romAudio_->setCustom(ins, drums);
+        }
+
+        // ---- a ROM song with other instruments ----
+        // Does a wav file in the audio folder replace the ROM's song n?
+        bool wavOverride(int n) const
+        {
+            char hex[32];
+            std::snprintf(hex, sizeof hex, "/0x%x.wav", n);
+            std::error_code ec;
+            return std::filesystem::exists(dir_ + "/music/" + std::to_string(n) + ".wav", ec) || std::filesystem::exists(dir_ + "/music" + hex, ec);
+        }
+        // The ROM's song n with the instruments a mod's record (no file, only programs / drums / channels) changes. False if nothing does.
+        bool patchFor(int n, rau::Song &out) const
+        {
+            if (!romAudio_ || n < 0 || n >= kModMusicBase || size_t(n) >= romAudio_->songCount() || wavOverride(n))
+                return false;
+            const ModSound *p = songPatchFor(n);
+            if (!p)
+                return false;
+            std::map<int, int> programs, drums, channels;
+            std::vector<std::string> unknown;
+            resolveModSound(*p, programs, drums, channels, &unknown);
+            for (const std::string &u : unknown)
+                std::printf("audio: %s (%s)\n", u.c_str(), p->id.c_str());
+            out = rau::patchSong(romAudio_->songs()[size_t(n)], programs, drums, channels);
+            return true;
+        }
+        const AudioClip *patchedClip(int n, const rau::Song &song)
+        {
+            const std::string key = std::string(retro_ ? "retro:" : "") + "patch/" + std::to_string(n);
+            const auto it = clips_.find(key);
+            if (it != clips_.end())
+                return it->second.get();
+            std::unique_ptr<AudioClip> c;
+            const std::vector<float> f = romAudio_->renderSong(song, kRate);
+            if (!f.empty())
+            {
+                c = std::make_unique<AudioClip>();
+                c->pcm.resize(f.size());
+                for (size_t i = 0; i < f.size(); ++i)
+                    c->pcm[i] = int16_t(std::clamp(f[i], -1.f, 1.f) * 32000.f);
+            }
+            const AudioClip *p = c.get();
+            clips_[key] = std::move(c);
+            return p;
+        }
+
         // ---- live music ----
         // Starts song n as it goes if it can be (see setLive). The baked song is turned down as a whole when its loudest moment would clip,
         // and a song played as it goes cannot know that beforehand: it starts at a middle level while another thread plays it through once to
@@ -488,13 +635,18 @@ namespace gp
             {
                 if (n < 0 || n >= kModMusicBase || size_t(n) >= romAudio_->songCount())
                     return false;
-                char hex[32];
-                std::snprintf(hex, sizeof hex, "/0x%x.wav", n);
-                std::error_code ec;
-                if (std::filesystem::exists(dir_ + "/music/" + std::to_string(n) + ".wav", ec) || std::filesystem::exists(dir_ + "/music" + hex, ec))
+                if (wavOverride(n))
                     return false; // a wav file in the audio folder wins over the ROM's song
-                song = &romAudio_->songs()[size_t(n)];
-                key = "rom:" + std::to_string(n) + (retro_ ? "r" : "");
+                if (patchFor(n, own))
+                {
+                    song = &own;
+                    key = "patch:" + std::to_string(n) + (retro_ ? "r" : "");
+                }
+                else
+                {
+                    song = &romAudio_->songs()[size_t(n)];
+                    key = "rom:" + std::to_string(n) + (retro_ ? "r" : "");
+                }
             }
             auto player = std::make_unique<rau::SongPlayer>(*romAudio_, *song, kRate);
             if (!player->playable())
@@ -566,10 +718,12 @@ namespace gp
             if (!readFileBytes(m.path, bytes))
                 return why = "cannot read " + m.path, false;
             midi::Options o;
-            o.programs = m.programs;
-            o.drums = m.drums;
+            std::vector<std::string> unknown;
+            resolveModSound(m, o.programs, o.drums, o.channels, &unknown);
+            for (const std::string &u : unknown)
+                std::printf("audio: %s (%s)\n", u.c_str(), m.id.c_str());
             o.slideChannels = m.slideChannels;
-            o.channels = m.channels;
+            o.instrumentIds = instrumentIdTable();
             o.gmPrograms = o.gmDrums = m.gmNumbers;
             o.programCount = int(romAudio_->programCount()) - 1; // the last group is the drum kit
             o.drumCount = int(romAudio_->drumCount());
@@ -683,6 +837,8 @@ namespace gp
         std::thread worker_;
         Voice musicVoice_;
         bool live_ = false;
+        int customGen_ = -1;      // the registry's generation the ROM engine's instruments were made from
+        bool hadCustom_ = false;  // it holds mod instruments or drums
         std::unique_ptr<rau::SongPlayer> musicLive_; // the music playing as it goes (setLive), else null
         float liveGain_ = 1.f, liveBase_ = 1.f;      // how far it is turned down now, and the record's own gain
         std::atomic<float> liveGoal_{0.f};           // how far it should be turned down; 0 = not known yet

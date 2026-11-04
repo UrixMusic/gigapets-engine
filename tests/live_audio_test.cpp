@@ -55,6 +55,15 @@ int main(int argc, char **argv)
         a.playMusic(6);
         check("a MIDI song with a pitch change is baked", a.music() == 6 && !a.playingLive());
     }
+    { // a ROM song with another instrument on a channel is live too
+        ModSound patch;
+        patch.id = "base:music/7";
+        patch.channels[0] = 3;
+        audioRegistry().songPatches[7] = patch;
+        ++audioRegistry().generation;
+        a.playMusic(7);
+        check("a patched ROM song is live", a.music() == 7 && a.playingLive());
+    }
     a.setLive(false);
     a.playMusic(4);
     check("off again: baked", a.music() == 4 && !a.playingLive());

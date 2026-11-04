@@ -2025,6 +2025,232 @@ namespace gp
             out = p.generic_string();
             return true;
         }
+        // ---- instrument and drum records (the sounds a MIDI song is played with, see engine/midi.hpp) ----
+        //   { type: "instrument", mode: "add", id: "mymod:instrument/harp", file: "audio/harp.wav", root: 60, loop_start: 0.4, loop_end: 1.1,
+        //     attack: 0.005, decay: 0.2, sustain: 0.6, release: 0.1, volume: 100 }
+        //   { type: "instrument", mode: "replace", id: "base:instrument/3", zones: [ {file: "low.wav", root: 48, top: 59, loop_start: 0.3}, {file: "high.wav", root: 72} ] }
+        //   { type: "drum", mode: "add", id: "mymod:drum/clap", file: "audio/clap.wav", volume: 100, pitch: 0 }
+        //   { type: "drum", mode: "replace", id: "base:drum/5", file: ... }
+        // An instrument is one sample (file, root, ...) or `zones`: several, each for the notes up to its `top` (highest note, default 127). root: the MIDI note the
+        // sample sounds at (default 60 = middle C); the note played speeds it up or slows it down from there. With loop_start / loop_end (seconds of the file; end
+        // defaults to the file's end) a held note repeats that stretch until it ends, with none the sample plays once. attack, decay and release are seconds,
+        // sustain a level from 0 to 1. A drum is played from its start whatever the note (pitch only shifts it); it has no loop. The ROM's instruments are 0 to 13
+        // and its drums 0 to 11 (replace them with "base:instrument/3" / "base:drum/5"); a mod's own come after, in the order they load: 14, 15... and 12, 13...
+        // Use these numbers in a music record's programs / drums / channels, or "Lead [i14]" in the editor's channel names.
+        inline void applyInstrument(const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
+        {
+            static const std::set<std::string> fields{"type", "mode", "id", "file", "volume", "root", "top", "loop_start", "loop_end", "zones", "attack", "decay", "sustain", "release"};
+            static const std::set<std::string> zoneFields{"file", "volume", "root", "top", "loop_start", "loop_end"};
+            for (auto it = rec.begin(); it != rec.end(); ++it)
+                if (!fields.count(it.key()))
+                    return err(rep, file, m.id, "unknown field '" + it.key() + "' in instrument record");
+            if (!rec.contains("id") || !rec["id"].is_string() || !rec.contains("mode") || !rec["mode"].is_string())
+                return err(rep, file, m.id, "instrument record needs a string 'id' and 'mode'");
+            const std::string id = rec["id"].get<std::string>(), mode = rec["mode"].get<std::string>();
+            if (mode != "add" && mode != "replace")
+                return err(rep, file, m.id, "'" + id + "': instrument records support mode 'add' and 'replace'");
+            AudioRegistry &reg = audioRegistry();
+            int program = -1;
+            size_t existing = reg.instruments.size();
+            const std::string prefix = "base:instrument/";
+            if (id.rfind(prefix, 0) == 0)
+            {
+                char *end = nullptr;
+                const long n = std::strtol(id.c_str() + prefix.size(), &end, 10);
+                if (mode != "replace" || id.size() == prefix.size() || *end || n < 0 || n >= kRomInstrumentCount)
+                    return err(rep, file, m.id, "'" + id + "': the ROM's instruments are replaced with mode 'replace' and an id like 'base:instrument/3' (0 to 13)");
+                program = int(n);
+            }
+            if (program >= 0 || mode == "replace" || mode == "add")
+                for (size_t i = 0; i < reg.instruments.size(); ++i)
+                    if (reg.instruments[i].id == id)
+                        existing = i;
+            if (program < 0)
+            {
+                if (mode == "add")
+                {
+                    if (id.rfind(m.id + ":", 0) != 0)
+                        return err(rep, file, m.id, "add '" + id + "': new ids must use the mod's own prefix '" + m.id + ":'");
+                    if (!validIdChars(id))
+                        return err(rep, file, m.id, "add '" + id + "': id contains a space, ',', '=' or '|'");
+                    if (existing < reg.instruments.size())
+                        return err(rep, file, m.id, "add '" + id + "': duplicate id (use mode replace)");
+                }
+                else if (existing >= reg.instruments.size())
+                    return err(rep, file, m.id, "replace '" + id + "': no such instrument");
+            }
+            ModInstrument ins;
+            if (existing < reg.instruments.size())
+                ins = reg.instruments[existing]; // another mod's replacement of it: unlisted fields stay
+            ins.id = id;
+            if (program >= 0)
+                ins.program = program;
+            else if (existing >= reg.instruments.size())
+            {
+                int own = 0;
+                for (const ModInstrument &o : reg.instruments)
+                    own += o.program >= kRomInstrumentCount ? 1 : 0;
+                ins.program = kRomInstrumentCount + own;
+            }
+            std::string why;
+            // one zone from a record's fields (the instrument's own, or one of `zones`)
+            auto readZone = [&](const json &z, ModZone &out, bool needFile) -> bool {
+                if (z.contains("file"))
+                {
+                    if (!z["file"].is_string())
+                        return why = "'file' must be a path", false;
+                    if (!modFile(m, z["file"].get<std::string>(), out.path, why))
+                        return false;
+                }
+                else if (needFile && out.path.empty())
+                    return why = "'file' is required", false;
+                int percent = int(out.gain * 100 + 0.5f);
+                if (!optInt(z, "volume", percent, 0, 400, why) || !optInt(z, "root", out.root, 0, 127, why) || !optInt(z, "top", out.top, 0, 127, why))
+                    return false;
+                out.gain = float(percent) / 100.f;
+                for (const char *k : {"loop_start", "loop_end"})
+                    if (z.contains(k))
+                    {
+                        if (!z[k].is_number() || z[k].get<double>() < 0 || z[k].get<double>() > 3600)
+                            return why = std::string("'") + k + "' must be seconds of the file", false;
+                        out.loop = true;
+                        (std::string(k) == "loop_start" ? out.loopStart : out.loopEnd) = z[k].get<double>();
+                    }
+                if (out.loopEnd > 0 && out.loopStart >= out.loopEnd)
+                    return why = "'loop_start' must come before 'loop_end'", false;
+                return true;
+            };
+            if (rec.contains("zones"))
+            {
+                if (rec.contains("file") || rec.contains("root") || rec.contains("top") || rec.contains("loop_start") || rec.contains("loop_end") || rec.contains("volume"))
+                    return err(rep, file, m.id, "'" + id + "': give either the sample's fields or 'zones', not both");
+                if (!rec["zones"].is_array() || rec["zones"].empty() || rec["zones"].size() > 32)
+                    return err(rep, file, m.id, "'" + id + "': 'zones' must be a list of one to 32 samples");
+                ins.zones.clear();
+                for (const json &z : rec["zones"])
+                {
+                    if (!z.is_object())
+                        return err(rep, file, m.id, "'" + id + "': each zone must be an object like {\"file\": \"low.wav\", \"root\": 48, \"top\": 59}");
+                    for (auto it = z.begin(); it != z.end(); ++it)
+                        if (!zoneFields.count(it.key()))
+                            return err(rep, file, m.id, "'" + id + "': unknown field '" + it.key() + "' in a zone");
+                    ModZone mz;
+                    if (!readZone(z, mz, true))
+                        return err(rep, file, m.id, "'" + id + "': " + why);
+                    ins.zones.push_back(mz);
+                }
+            }
+            else if (rec.contains("file") || rec.contains("root") || rec.contains("top") || rec.contains("loop_start") || rec.contains("loop_end") || rec.contains("volume") || ins.zones.empty())
+            {
+                ModZone mz = ins.zones.size() == 1 ? ins.zones[0] : ModZone{};
+                if (!readZone(rec, mz, true))
+                    return err(rep, file, m.id, "'" + id + "': " + why);
+                ins.zones.assign(1, mz);
+            }
+            for (const char *k : {"attack", "decay", "release"})
+                if (rec.contains(k))
+                {
+                    if (!rec[k].is_number() || rec[k].get<double>() < 0 || rec[k].get<double>() > 30)
+                        return err(rep, file, m.id, "'" + id + "': '" + k + "' must be seconds, 0 to 30");
+                    (std::string(k) == "attack" ? ins.attack : std::string(k) == "decay" ? ins.decay : ins.release) = rec[k].get<double>();
+                }
+            if (rec.contains("sustain"))
+            {
+                if (!rec["sustain"].is_number() || rec["sustain"].get<double>() < 0 || rec["sustain"].get<double>() > 1)
+                    return err(rep, file, m.id, "'" + id + "': 'sustain' must be a level from 0 to 1");
+                ins.sustain = rec["sustain"].get<double>();
+            }
+            if (existing < reg.instruments.size())
+                reg.instruments[existing] = ins;
+            else
+                reg.instruments.push_back(ins);
+            ++reg.generation;
+            rep.lastWriter[id] = m.id;
+            if (ins.program >= kRomInstrumentCount)
+                rep.warnings.push_back("[" + m.id + "] " + id + " is instrument " + std::to_string(ins.program));
+        }
+
+        inline void applyDrum(const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
+        {
+            static const std::set<std::string> fields{"type", "mode", "id", "file", "volume", "pitch"};
+            for (auto it = rec.begin(); it != rec.end(); ++it)
+                if (!fields.count(it.key()))
+                    return err(rep, file, m.id, "unknown field '" + it.key() + "' in drum record");
+            if (!rec.contains("id") || !rec["id"].is_string() || !rec.contains("mode") || !rec["mode"].is_string())
+                return err(rep, file, m.id, "drum record needs a string 'id' and 'mode'");
+            const std::string id = rec["id"].get<std::string>(), mode = rec["mode"].get<std::string>();
+            if (mode != "add" && mode != "replace")
+                return err(rep, file, m.id, "'" + id + "': drum records support mode 'add' and 'replace'");
+            AudioRegistry &reg = audioRegistry();
+            int index = -1;
+            size_t existing = reg.drums.size();
+            const std::string prefix = "base:drum/";
+            if (id.rfind(prefix, 0) == 0)
+            {
+                char *end = nullptr;
+                const long n = std::strtol(id.c_str() + prefix.size(), &end, 10);
+                if (mode != "replace" || id.size() == prefix.size() || *end || n < 0 || n >= kRomDrumCount)
+                    return err(rep, file, m.id, "'" + id + "': the ROM's drums are replaced with mode 'replace' and an id like 'base:drum/5' (0 to 11)");
+                index = int(n);
+            }
+            for (size_t i = 0; i < reg.drums.size(); ++i)
+                if (reg.drums[i].id == id)
+                    existing = i;
+            if (index < 0)
+            {
+                if (mode == "add")
+                {
+                    if (id.rfind(m.id + ":", 0) != 0)
+                        return err(rep, file, m.id, "add '" + id + "': new ids must use the mod's own prefix '" + m.id + ":'");
+                    if (!validIdChars(id))
+                        return err(rep, file, m.id, "add '" + id + "': id contains a space, ',', '=' or '|'");
+                    if (existing < reg.drums.size())
+                        return err(rep, file, m.id, "add '" + id + "': duplicate id (use mode replace)");
+                }
+                else if (existing >= reg.drums.size())
+                    return err(rep, file, m.id, "replace '" + id + "': no such drum");
+            }
+            ModDrum d;
+            if (existing < reg.drums.size())
+                d = reg.drums[existing];
+            d.id = id;
+            if (index >= 0)
+                d.index = index;
+            else if (existing >= reg.drums.size())
+            {
+                int own = 0;
+                for (const ModDrum &o : reg.drums)
+                    own += o.index >= kRomDrumCount ? 1 : 0;
+                d.index = kRomDrumCount + own;
+            }
+            std::string why;
+            if (rec.contains("file"))
+            {
+                if (!rec["file"].is_string() || !modFile(m, rec["file"].get<std::string>(), d.path, why))
+                    return err(rep, file, m.id, "'" + id + "': " + (rec["file"].is_string() ? why : std::string("'file' must be a path")));
+            }
+            else if (d.path.empty())
+                return err(rep, file, m.id, "'" + id + "': 'file' is required");
+            int percent = int(d.gain * 100 + 0.5f);
+            if (!optInt(rec, "volume", percent, 0, 400, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            d.gain = float(percent) / 100.f;
+            if (rec.contains("pitch"))
+            {
+                if (!rec["pitch"].is_number() || rec["pitch"].get<double>() < -48 || rec["pitch"].get<double>() > 48)
+                    return err(rep, file, m.id, "'" + id + "': 'pitch' must be semitones, -48 to 48");
+                d.semitones = rec["pitch"].get<double>();
+            }
+            if (existing < reg.drums.size())
+                reg.drums[existing] = d;
+            else
+                reg.drums.push_back(d);
+            ++reg.generation;
+            rep.lastWriter[id] = m.id;
+            if (d.index >= kRomDrumCount)
+                rep.warnings.push_back("[" + m.id + "] " + id + " is drum " + std::to_string(d.index));
+        }
+
         inline void applyAudio(ContentDB &, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep, bool music)
         {
             const char *kind = music ? "music" : "sound";
@@ -2070,9 +2296,17 @@ namespace gp
                 else if (existing >= mine.size())
                     return err(rep, file, m.id, "replace '" + id + "': no such " + kind);
             }
+            // A ROM song with no file but programs / drums / channels: its notes stay, its instruments change.
+            const bool patch = music && romNumber >= 0 && !rec.contains("file") && (rec.contains("programs") || rec.contains("drums") || rec.contains("channels"));
+            if (patch)
+                for (const char *k : {"volume", "pitch", "loop_start", "loop_end", "slide_channels", "numbers"})
+                    if (rec.contains(k))
+                        return err(rep, file, m.id, "'" + id + "': '" + k + "' needs a 'file' (without one the record only changes the ROM song's instruments: programs, drums, channels)");
             ModSound s;
             if (romNumber < 0 && mode == "replace")
                 s = mine[existing]; // a mod's own sound that another mod replaces: unlisted fields stay
+            else if (patch && reg.songPatches.count(romNumber))
+                s = reg.songPatches[romNumber]; // another mod's changes to the same song: unlisted ones stay
             s.id = id;
             std::string rel, why;
             if (rec.contains("file"))
@@ -2087,11 +2321,16 @@ namespace gp
                 {
                     s.programs.clear();
                     s.drums.clear();
+                    s.programIds.clear();
+                    s.drumIds.clear();
+                    s.channelIds.clear();
                     s.slideChannels.clear();
                     s.channels.clear();
                     s.gmNumbers = true;
                 }
             }
+            else if (patch)
+                s.midi = true; // (read like a MIDI record's maps, but the numbers are the ROM's own)
             else if (s.path.empty())
                 return err(rep, file, m.id, "'" + id + "': 'file' is required");
             for (const char *k : {"programs", "drums"})
@@ -2103,14 +2342,21 @@ namespace gp
                         return err(rep, file, m.id, "'" + id + "': '" + k + "' must be an object like {\"40\": 9}");
                     const bool prog = std::string(k) == "programs";
                     auto &dst = prog ? s.programs : s.drums;
+                    auto &dstIds = prog ? s.programIds : s.drumIds;
                     dst.clear();
+                    dstIds.clear();
                     for (auto it = rec[k].begin(); it != rec[k].end(); ++it)
                     {
                         char *end = nullptr;
                         const long from = std::strtol(it.key().c_str(), &end, 10);
-                        if (it.key().empty() || *end || from < 0 || from > 127 || !it.value().is_number_integer())
-                            return err(rep, file, m.id, "'" + id + "': '" + k + "' maps a MIDI number (0 to 127) to a number: " + it.key());
-                        const int to = it.value().get<int>(), top = prog ? 13 : 11;
+                        if (it.key().empty() || *end || from < 0 || from > 127 || !(it.value().is_number_integer() || it.value().is_string()))
+                            return err(rep, file, m.id, "'" + id + "': '" + k + "' maps a MIDI number (0 to 127) to a number or an id: " + it.key());
+                        if (it.value().is_string())
+                        {
+                            dstIds[int(from)] = it.value().get<std::string>();
+                            continue;
+                        }
+                        const int to = it.value().get<int>(), top = 63; // (the ROM's are 0..13 and 0..11, a mod's instruments and drums come after)
                         if (to < 0 || to > top)
                             return err(rep, file, m.id, "'" + id + "': '" + k + "' " + it.key() + " must go to 0.." + std::to_string(top) + " (the ROM's " + (prog ? "instruments" : "drums") + ")");
                         dst[int(from)] = to;
@@ -2130,15 +2376,19 @@ namespace gp
                 if (!s.midi)
                     return err(rep, file, m.id, "'" + id + "': 'channels' only goes with a MIDI file");
                 if (!rec["channels"].is_object())
-                    return err(rep, file, m.id, "'" + id + "': 'channels' must be an object like {\"1\": 3} (the channel as your editor shows it, 1 to 16, and the ROM's instrument 0 to 13)");
+                    return err(rep, file, m.id, "'" + id + "': 'channels' must be an object like {\"1\": 3} (the channel as your editor shows it, 1 to 16, and the instrument: a number, 0 to 13 are the ROM's, or an id like \"mymod:instrument/harp\")");
                 s.channels.clear();
+                s.channelIds.clear();
                 for (auto it = rec["channels"].begin(); it != rec["channels"].end(); ++it)
                 {
                     char *end = nullptr;
                     const long c = std::strtol(it.key().c_str(), &end, 10);
-                    if (it.key().empty() || *end || c < 1 || c > 16 || !it.value().is_number_integer() || it.value().get<int>() < 0 || it.value().get<int>() > 13)
-                        return err(rep, file, m.id, "'" + id + "': 'channels' must be an object like {\"1\": 3} (the channel as your editor shows it, 1 to 16, and the ROM's instrument 0 to 13): " + it.key());
-                    s.channels[int(c) - 1] = it.value().get<int>();
+                    if (it.key().empty() || *end || c < 1 || c > 16 || !(it.value().is_string() || (it.value().is_number_integer() && it.value().get<int>() >= 0 && it.value().get<int>() <= 63)))
+                        return err(rep, file, m.id, "'" + id + "': 'channels' must be an object like {\"1\": 3} (the channel as your editor shows it, 1 to 16, and the instrument: a number, 0 to 13 are the ROM's, or an id like \"mymod:instrument/harp\"): " + it.key());
+                    if (it.value().is_string())
+                        s.channelIds[int(c) - 1] = it.value().get<std::string>();
+                    else
+                        s.channels[int(c) - 1] = it.value().get<int>();
                 }
             }
             if (rec.contains("slide_channels"))
@@ -2155,7 +2405,7 @@ namespace gp
                     s.slideChannels.push_back(c.get<int>() - 1);
                 }
             }
-            if (s.midi) // read it now, so a bad file or a note it cannot play is reported when the mod loads
+            if (s.midi && !patch) // read it now, so a bad file or a note it cannot play is reported when the mod loads
             {
                 midi::Options mo;
                 mo.programs = s.programs;
@@ -2163,6 +2413,7 @@ namespace gp
                 mo.slideChannels = s.slideChannels;
                 mo.channels = s.channels;
                 mo.gmPrograms = mo.gmDrums = s.gmNumbers;
+                mo.programCount = mo.drumCount = 64; // (a mod's instruments and drums load in their own order: not checked here)
                 std::vector<uint8_t> bytes;
                 midi::Result mr;
                 if (!readFileBytes(s.path, bytes) || !midi::toSong(bytes, mo, mr, why))
@@ -2189,7 +2440,14 @@ namespace gp
                 }
             if (s.loopEnd > 0 && s.loopStart >= s.loopEnd)
                 return err(rep, file, m.id, "'" + id + "': 'loop_start' must come before 'loop_end'");
-            if (romNumber >= 0)
+            if (patch)
+            {
+                s.midi = false;
+                s.gmNumbers = false;
+                reg.songPatches[romNumber] = s;
+                ++reg.generation;
+            }
+            else if (romNumber >= 0)
                 (music ? reg.songOver : reg.soundOver)[romNumber] = s;
             else if (existing < mine.size())
                 mine[existing] = s;
@@ -2606,7 +2864,7 @@ namespace gp
         //   pass 2: everything else: npc, item, object, exit (they refer to areas, texts, anims and object types)
         inline int passOf(const std::string &t)
         {
-            if (t == "text" || t == "anim" || t == "tileset" || t == "collision" || t == "objtype" || t == "palette" || t == "sound" || t == "music")
+            if (t == "text" || t == "anim" || t == "tileset" || t == "collision" || t == "objtype" || t == "palette" || t == "sound" || t == "music" || t == "instrument" || t == "drum")
                 return 0;
             if (t == "area")
                 return 1;
@@ -2663,6 +2921,10 @@ namespace gp
                     applyAudio(db, m, file, r, rep, false);
                 else if (type == "music")
                     applyAudio(db, m, file, r, rep, true);
+                else if (type == "instrument")
+                    applyInstrument(m, file, r, rep);
+                else if (type == "drum")
+                    applyDrum(m, file, r, rep);
                 else if (type == "area")
                     applyArea(db, m, file, r, rep);
                 else if (type == "object")
@@ -2732,6 +2994,36 @@ namespace gp
             }
             rep.loaded.push_back(m.id);
         }
+        // a song's instruments named by id must exist now that every mod's are there (a warning: the channel plays instrument 0 / the drum is left out)
+        for (const auto *list : {&audioRegistry().songs})
+            for (const ModSound &song : *list)
+                if (song.midi)
+                {
+                    std::map<int, int> p, d, c;
+                    std::vector<std::string> unknown;
+                    resolveModSound(song, p, d, c, &unknown);
+                    for (const std::string &u : unknown)
+                        rep.warnings.push_back(song.id + ": " + u);
+                }
+        for (const auto &kv : audioRegistry().songPatches)
+        {
+            std::map<int, int> p, d, c;
+            std::vector<std::string> unknown;
+            resolveModSound(kv.second, p, d, c, &unknown);
+            for (const std::string &u : unknown)
+                rep.warnings.push_back(kv.second.id + ": " + u);
+            if (audioRegistry().songOver.count(kv.first))
+                rep.warnings.push_back(kv.second.id + ": ignored, a mod replaces the song with a file");
+        }
+        for (const auto &kv : audioRegistry().songOver)
+            if (kv.second.midi)
+            {
+                std::map<int, int> p, d, c;
+                std::vector<std::string> unknown;
+                resolveModSound(kv.second, p, d, c, &unknown);
+                for (const std::string &u : unknown)
+                    rep.warnings.push_back(kv.second.id + ": " + u);
+            }
         // an npc's species is found by its id now that every mod's species is there; its number is what the code keeps
         for (const NpcDef *seen : db.allNpcs())
             if (!seen->speciesId.empty())

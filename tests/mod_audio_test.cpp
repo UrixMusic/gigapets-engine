@@ -162,14 +162,14 @@ int main()
     CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"a.wav","loop_start":2,"loop_end":1})", "'loop_start' must come before"));
     CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"a.wav","loop_end":"soon"})", "seconds"));
     writeMidi(root / "bad" / "m.mid");
-    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","programs":{"40":14}})", "0..13"));
-    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","drums":{"36":12}})", "0..11"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","programs":{"40":64}})", "must go to 0..63"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","drums":{"36":64}})", "must go to 0..63"));
     CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","programs":{"x":1}})", "maps a MIDI number"));
     CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"a.wav","programs":{"1":1}})", "only goes with a MIDI file"));
     CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","slide_channels":[0]})", "channel numbers"));
     CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","slide_channels":[17]})", "channel numbers"));
     CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"a.wav","slide_channels":[1]})", "only goes with a MIDI file"));
-    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","channels":{"1":14}})", "'channels' must be an object"));
+    CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","channels":{"1":64}})", "'channels' must be an object"));
     CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","channels":{"0":1}})", "'channels' must be an object"));
     CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"m.mid","channels":[1]})", "'channels' must be an object"));
     CHECK(bad(R"({"type":"music","mode":"add","id":"bad:music/x","file":"a.wav","channels":{"1":1}})", "only goes with a MIDI file"));
