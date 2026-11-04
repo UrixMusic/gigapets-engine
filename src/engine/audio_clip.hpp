@@ -15,6 +15,10 @@
 #include <string>
 #include <vector>
 
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC push_options
+#pragma GCC optimize("O2") // rendering a song or decoding a file is heavy: a build with no optimization takes seven times as long
+#endif
 // Ogg Vorbis (public domain, third_party/stb/stb_vorbis.c). It leaks a few short macro names, which are put back after it.
 #pragma push_macro("CHECK")
 #undef CHECK
@@ -285,3 +289,6 @@ namespace gp
     }
 
 } // namespace gp
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC pop_options
+#endif

@@ -11,9 +11,15 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <atomic>
 #include <map>
+#include <mutex>
 #include <vector>
 
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC push_options
+#pragma GCC optimize("O2") // rendering a song or decoding a file is heavy: a build with no optimization takes seven times as long
+#endif
 namespace gp
 {
     namespace rau
@@ -131,7 +137,8 @@ namespace gp
             }
 
             // Any song (the ROM's, or one made from a MIDI file) with the ROM's instruments: stereo float at `rate`, looped as above.
-            std::vector<float> renderSong(const Song &S, int rate) const
+            // `cancel` set while it renders: it gives up and returns nothing.
+            std::vector<float> renderSong(const Song &S, int rate, const std::atomic<bool> *cancel = nullptr) const
             {
                 std::vector<float> out;
                 const size_t body = size_t(S.end / kTicksPerSecond * rate);
@@ -146,6 +153,8 @@ namespace gp
                         bends[q.ch].push_back({q.t / kTicksPerSecond, q.v, q.k == 'B'});
                 for (const Event &q : S.ev)
                 {
+                    if (cancel && cancel->load(std::memory_order_relaxed))
+                        return {};
                     const double when = q.t / kTicksPerSecond;
                     if (q.k == 'p')
                     {
@@ -218,6 +227,7 @@ namespace gp
             std::vector<uint32_t> offs_;
             std::vector<const Sample *> list_, drums_;
             mutable std::map<uint32_t, Env> envs_;
+            mutable std::recursive_mutex envLock_; // a song may be rendered on another thread while the game plays a sound
 
             uint32_t b(uint32_t o) const { return o < r_.size() ? r_[o] : 0; }
             uint32_t w(uint32_t word) const { return b(word * 2) | (b(word * 2 + 1) << 8); }
@@ -404,6 +414,7 @@ namespace gp
 
             const Env &envelope(const Sample &e) const
             {
+                std::lock_guard<std::recursive_mutex> guard(envLock_);
                 auto it = envs_.find(e.off);
                 if (it != envs_.end())
                     return it->second;
@@ -561,3 +572,6 @@ namespace gp
 
     } // namespace rau
 } // namespace gp
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC pop_options
+#endif

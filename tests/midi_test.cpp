@@ -228,9 +228,9 @@ int main()
             return nth(nr.song, 'p', 0) ? nth(nr.song, 'p', 0)->v : -1;
         };
         CHECK(named("Trumpet lead") == 13 && named("my PIZZICATO strings") == 5 && named("Strings") == 11 && named("Bass") == 1 && named("Piano") == 2);
-        CHECK(named("3x Osc 1") == -1 && named("Trumpet [2]") == 2); // a number in brackets wins
+        CHECK(named("3x Osc 1") == -1 && named("Trumpet [i2]") == 2); // a number in brackets wins
     }
-    { // instruments from a track's name ("Lead [3]") or the channels map, where the file has no program changes (as FL writes it)
+    { // instruments from a track's name ("Lead [i3]") or the channels map, where the file has no program changes (as FL writes it)
         auto named = [](const std::string &name, std::initializer_list<int> notes)
         {
             Track t;
@@ -253,17 +253,25 @@ int main()
             return v;
         };
         midi::Result r;
-        CHECK(midi::toSong(file(1, 96, {named("Lead [3]", {60})}), opt, r, why) && programOf(r, 0) == 3 && r.warnings.empty());
+        CHECK(midi::toSong(file(1, 96, {named("Lead [i3]", {60})}), opt, r, why) && programOf(r, 0) == 3 && r.warnings.empty());
         CHECK(midi::toSong(file(1, 96, {named("Bass [i12] soft", {40})}), opt, r, why) && programOf(r, 0) == 12);
         CHECK(midi::toSong(file(1, 96, {named("3x Osc 1", {60})}), opt, r, why) && programOf(r, 0) == -1);       // no brackets: the default instrument
         CHECK(midi::toSong(file(1, 96, {named("Lead [fast]", {60})}), opt, r, why) && programOf(r, 0) == -1);   // not a number
-        CHECK(midi::toSong(file(1, 96, {named("Lead [20]", {60})}), opt, r, why) && programOf(r, 0) == -1 && r.warnings.size() == 1 && r.warnings[0].find("instrument 20") != std::string::npos);
+        CHECK(midi::toSong(file(1, 96, {named("Lead [i20]", {60})}), opt, r, why) && programOf(r, 0) == -1 && r.warnings.size() == 1 && r.warnings[0].find("instrument 20") != std::string::npos);
         midi::Options mapped;
         mapped.channels[0] = 7;
-        CHECK(midi::toSong(file(1, 96, {named("Lead [3]", {60})}), mapped, r, why) && programOf(r, 0) == 7); // the record's map wins over the name
-        Track pc = named("Lead [3]", {60});
+        CHECK(midi::toSong(file(1, 96, {named("Lead [i3]", {60})}), mapped, r, why) && programOf(r, 0) == 7); // the record's map wins over the name
+        Track pc = named("Lead [i3]", {60});
         pc.ev(0, {0xc0, 5}).ev(0, {0x90, 62, 100}).ev(96, {0x80, 62, 0}).end();
-        CHECK(midi::toSong(file(1, 96, {pc}), opt, r, why) && programOf(r, 0) == 3 && nth(r.song, 'p', 1) && nth(r.song, 'p', 1)->v == 5); // a program change in the file takes over
+        CHECK(midi::toSong(file(1, 96, {pc}), opt, r, why) && programOf(r, 0) == 3 && !nth(r.song, 'p', 1)); // a channel chosen by its name ignores the file's program changes
+        { // as FL writes it: names like "Bass[2]" (the number is FL's own) and a program 0 on every channel
+            Track fl = named("Bass[2]", {40});
+            fl.ev(0, {0xc0, 0}).ev(0, {0xc0, 0}).end();
+            CHECK(midi::toSong(file(1, 96, {fl}), opt, r, why) && programOf(r, 0) == 1 && !nth(r.song, 'p', 1));
+            Track unnamed = named("3x Osc 1", {40});
+            unnamed.ev(0, {0xc0, 5}).ev(0, {0x90, 62, 100}).ev(96, {0x80, 62, 0}).end();
+            CHECK(midi::toSong(file(1, 96, {unnamed}), opt, r, why) && nth(r.song, 'p', 0) && nth(r.song, 'p', 0)->v == 5); // no name to go by: the program change is the instrument
+        }
         Track drum = named("Drums [4]", {});
         drum.ev(0, {0x99, 1, 100}).ev(10, {0x89, 1, 0}).end();
         CHECK(midi::toSong(file(1, 96, {drum}), opt, r, why) && programOf(r, 9) == -1); // not for the drum channel

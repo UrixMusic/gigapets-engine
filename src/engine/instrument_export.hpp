@@ -56,7 +56,7 @@ namespace gp
         std::ostringstream txt;
         txt << "The ROM's 14 instruments and 12 drums, with the General MIDI sound each is closest to (a guess is marked with ?).\n"
                "A song written for any General MIDI player works as it is: a program change picks the closest instrument, and drum notes on channel 10 pick the closest\n"
-               "drum. To choose one yourself where your editor writes no program changes (FL Studio): name the channel with the instrument's number, \"Lead [3]\", or\n"
+               "drum. To choose one yourself where your editor writes no program changes (FL Studio): name the channel with the instrument's number, \"Lead [i3]\" (a plain [3] is FL's own), or\n"
                "with its sound, \"Trumpet\"; or list the channels in the music record, \"channels\": {\"1\": 3}. With \"numbers\": \"rom\" a program is the ROM's number\n"
                "(0 to 13) and a drum note is the drum number (0 to 11).\n\n";
         for (int prog = 0; prog < int(audio.programCount()) - 1; ++prog) // the last group is the drum kit
@@ -66,7 +66,7 @@ namespace gp
                 continue;
             const gm::RomInstrument &gmi = gm::romInstrument(prog);
             txt << "instrument " << prog << " = " << gmi.name << (gmi.guess ? "?" : "") << " (General MIDI program " << gmi.program << "; name a channel \"" << gmi.keyword
-                << "\" or \"[" << prog << "]\"): " << zones.size() << " sample" << (zones.size() == 1 ? "" : "s") << ", ";
+                << "\" or \"[i" << prog << "]\"): " << zones.size() << " sample" << (zones.size() == 1 ? "" : "s") << ", ";
             int lowest = 0;
             std::ostringstream detail;
             bool looped = false;

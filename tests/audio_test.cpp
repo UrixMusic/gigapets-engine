@@ -69,6 +69,31 @@ int main(int, char **)
         const AudioClip *song = a.musicClipFor(kModMusicBase);
         check("a mod's song carries its loop points", song && song->loopStart == 220 && song->loopEnd == 441); // 0.005 s, 0.01 s at 44.1 kHz
         check("a mod's sound number nobody added has no clip", !isModSound(kModSoundBase + 5) && a.sfxClipFor(kModSoundBase + 5) == nullptr);
+        { // a song made on another thread: null at first, then the clip; asking for two at once makes both
+            reg.songs.push_back({"m:music/b", dir + "a.wav", 0.5f, 0, 0, 0});
+            reg.songs.push_back({"m:music/gone", dir + "nowhere.wav", 1.f, 0, 0, 0});
+            auto wait = [&](int n) // asks until the clip is there (or the job is over without one)
+            {
+                const AudioClip *c = nullptr;
+                for (int i = 0; i < 500; ++i)
+                {
+                    c = a.musicClipAsync(n);
+                    if (c || !a.renderingMusic())
+                        break;
+                    SDL_Delay(10);
+                }
+                return c ? c : a.musicClipAsync(n);
+            };
+            const AudioClip *first = a.musicClipAsync(kModMusicBase + 1); // starts the job
+            const AudioClip *second = a.musicClipAsync(kModMusicBase + 2);  // asked for while the first is being made: its turn comes next
+            (void)first;
+            (void)second;
+            const AudioClip *b = wait(kModMusicBase + 1);
+            check("a song made in the background is its file at half volume", b && b->frames() == 1000 && b->pcm[400] == 0x800);
+            const AudioClip *gone = wait(kModMusicBase + 2);
+            check("a song whose file is missing stays null and the worker is free again", gone == nullptr && !a.renderingMusic());
+            check("asking again gives the same clip", a.musicClipAsync(kModMusicBase + 1) == b && a.musicClipFor(kModMusicBase + 1) == b);
+        }
         check("registry lookups", modSoundNumber("m:sound/a") == kModSoundBase && modSongNumber("m:music/a") == kModMusicBase && modSoundNumber("m:sound/zz") == -1);
         reg.clear();
         check("cleared", !isModSound(kModSoundBase) && soundFileFor(84) == nullptr);

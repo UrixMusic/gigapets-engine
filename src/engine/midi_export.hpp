@@ -2,7 +2,7 @@
 //
 // Format 1, 96 ticks to the quarter note at 125 bpm: that is exactly 200 MIDI ticks a second, the rate the game's songs are counted in, so every
 // time and length in the file is the song's own. One track for the tempo and notes about the song, then one track per channel the song uses, named
-// like "Trumpet [13]" (the General MIDI sound it is closest to and the instrument's number, which the importer reads back) or "Drums".
+// like "Trumpet [i13]" (the General MIDI sound it is closest to and the instrument's number, which the importer reads back) or "Drums".
 //   program      the instrument's General MIDI program (gm_map.hpp)
 //   drums        channel 10, each drum as its General MIDI drum note
 //   volume, pan  controllers 7 and 10 before each note that changes them (the ROM gives every note its own)
@@ -220,7 +220,7 @@ namespace gp
                 if (c == 9)
                     name = "Drums";
                 else if (firstProgram.count(c))
-                    name = std::string(gm::romInstrument(firstProgram[c]).name) + " [" + std::to_string(firstProgram[c]) + "]";
+                    name = std::string(gm::romInstrument(firstProgram[c]).name) + " [i" + std::to_string(firstProgram[c]) + "]";
                 std::vector<Ev> ev = kv.second;
                 ev.push_back(meta(0, 0x03, name));
                 tracks.push_back(trackBytes(ev, end));
@@ -244,7 +244,7 @@ namespace gp
         const rau::RomAudio audio(rom);
         std::ostringstream txt;
         txt << "The ROM's songs as MIDI files (96 ticks to the quarter note at 125 bpm = the game's 200 ticks a second, so every time is exact).\n"
-               "Each channel is its own track named like \"Trumpet [13]\": the General MIDI sound it is closest to and the ROM instrument's number. Drums are on\n"
+               "Each channel is its own track named like \"Trumpet [i13]\": the General MIDI sound it is closest to and the ROM instrument's number. Drums are on\n"
                "channel 10 as General MIDI drum notes. Use a changed file with a music record: { \"type\": \"music\", \"mode\": \"replace\", \"id\": \"base:music/4\",\n"
                "\"file\": \"audio/song_4.mid\" }.\n\n";
         for (size_t i = 0; i < audio.songs().size(); ++i)

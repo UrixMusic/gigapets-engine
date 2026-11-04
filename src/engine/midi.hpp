@@ -11,9 +11,10 @@
 //                closest GM sound to it, and any other GM program takes the nearest instrument of its family), so a song written for any GM player plays
 //                sensibly. `gmPrograms` / `gmDrums` off read them as the ROM's own numbers instead (programs 0..13, drum notes 0..11).
 //   program      the ROM has 14 instruments (0..13; its group 14 is the drum kit): the MIDI program number is taken as it is, or as the `programs` map says (program -> ROM program).
-//                Many editors (FL Studio) write no program changes at all, so a channel's instrument can also come from the track's name, written like
-//                "Lead [3]" (the number in square brackets; "[i3]" works too), or from the `channels` map (MIDI channel -> instrument). A program change
-//                in the file wins over both, from where it is. A channel with none of them plays instrument 0.
+//                Some editors (FL Studio) write a "program 0" (piano) on every channel whatever it plays, so a channel's instrument can be chosen without
+//                them: from the `channels` map (MIDI channel -> instrument), or from the track's name: a word ("Trumpet", see gm_map.hpp) or the instrument's
+//                number written "[i3]" ("Lead [i3]"; a plain "[3]" is ignored, FL puts its own channel numbers in brackets). A channel chosen that way ignores
+//                the program changes in the file; any other channel follows them. A channel with neither plays instrument 0.
 //   drums        the ROM has 12 drum sounds (0..11): the MIDI drum note is taken as the ROM's drum number, or as the `drums` map says
 //   pitch bend   a bend event in cents above the note, so a slide keeps its note's own pitch
 //   slides       FL Studio writes a slide as a second note laid over the main one (the slide note: it starts where the glide starts and ends where it ends,
@@ -35,6 +36,10 @@
 #include "gm_map.hpp"
 #include "rom_audio.hpp"
 
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC push_options
+#pragma GCC optimize("O2") // rendering a song or decoding a file is heavy: a build with no optimization takes seven times as long
+#endif
 namespace gp
 {
     namespace midi
@@ -166,9 +171,10 @@ namespace gp
                             if (rb != std::string::npos)
                             {
                                 size_t q = lb + 1;
-                                if (q < rb && (nm[q] == 'i' || nm[q] == 'I'))
+                                const bool marked = q < rb && (nm[q] == 'i' || nm[q] == 'I'); // "[i3]": a plain "[3]" is FL's own channel number
+                                if (marked)
                                     ++q;
-                                if (q < rb && nm.find_first_not_of("0123456789", q) >= rb)
+                                if (marked && q < rb && nm.find_first_not_of("0123456789", q) >= rb)
                                 {
                                     trackProgram[tracks - 1] = std::atoi(nm.substr(q, rb - q).c_str());
                                     numbered = true;
@@ -258,8 +264,8 @@ namespace gp
             std::vector<double> pendingOn[16];
             std::vector<rau::Event> &ev = out.song.ev;
             ev.clear();
-            { // where a channel starts: the `channels` map, else its track's name; played from the beginning, and a program change in the file takes over
-                std::map<int, int> initial = opt.channels;
+            std::map<int, int> initial = opt.channels; // channels whose instrument is chosen by the record or the track's name: the file's program changes do not move them
+            {
                 std::map<int, bool> warnedName;
                 for (const Raw &r : raw)
                 {
@@ -301,7 +307,7 @@ namespace gp
                 {
                 case 0xc0:
                 {
-                    if (r.ch == 9)
+                    if (r.ch == 9 || initial.count(r.ch))
                         break;
                     int prog = r.a;
                     const auto m = opt.programs.find(r.a);
@@ -518,3 +524,6 @@ namespace gp
 
     } // namespace midi
 } // namespace gp
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC pop_options
+#endif

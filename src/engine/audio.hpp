@@ -15,10 +15,14 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -30,7 +34,11 @@ namespace gp
     public:
         static constexpr int kRate = 44100, kVoices = 12;
 
-        ~Audio() { close(); }
+        ~Audio()
+        {
+            close();
+            stopWorker();
+        }
 
         // Opens the device. False (and the game stays silent) if there is none.
         bool open(const std::string &dir = "audio")
@@ -129,6 +137,7 @@ namespace gp
         {
             if (!dev_)
                 return;
+            adoptAsync();
             const AudioClip *c = sfxClipFor(id);
             if (!c)
                 return;
@@ -153,6 +162,22 @@ namespace gp
                 return nullptr; // a mod's sound whose file would not load: nothing to fall back to
             return clip(dir_ + "/sfx", id);
         }
+        // Like musicClipFor, but a mod's song that is not made yet is made on another thread (a long MIDI file takes seconds to render, an Ogg to
+        // decode): returns null until it is, and asking again then gives the clip. A song that cannot be made stays null.
+        const AudioClip *musicClipAsync(int n)
+        {
+            adoptAsync();
+            const ModSound *m = songFileFor(n);
+            if (!m)
+                return musicClipFor(n);
+            const auto it = clips_.find(modKey(*m, true));
+            if (it != clips_.end())
+                return it->second.get();
+            startAsync(n, *m);
+            return nullptr;
+        }
+        bool renderingMusic() const { return workerBusy_.load(); }
+
         const AudioClip *musicClipFor(int n)
         {
             if (const ModSound *m = songFileFor(n))
@@ -179,10 +204,11 @@ namespace gp
         {
             if (!dev_ || n == music_)
                 return;
-            const AudioClip *c = musicClipFor(n);
+            const AudioClip *c = musicClipAsync(n);
             lock();
             music_ = n;
-            musicVoice_ = Voice{c, 0, true, true, n};
+            pendingMusic_ = !c && workerBusy_.load() && songFileFor(n) ? n : -1; // a mod's song still being made: silence until it is, then it starts by itself
+            musicVoice_ = c ? Voice{c, 0, true, true, n} : Voice{};
             unlock();
         }
 
@@ -209,6 +235,7 @@ namespace gp
         {
             lock();
             music_ = -1;
+            pendingMusic_ = -1;
             musicVoice_ = Voice{};
             unlock();
         }
@@ -251,6 +278,11 @@ namespace gp
 
         void mix(int16_t *out, size_t frames)
         {
+            if (pendingMusic_ >= 0 && workerReady_.load(std::memory_order_acquire) && asyncSong_ == pendingMusic_ && music_ == pendingMusic_ && asyncClip_)
+            {
+                musicVoice_ = Voice{asyncClip_.get(), 0, true, true, music_}; // the song that was being made is ready
+                pendingMusic_ = -1;
+            }
             std::vector<int32_t> acc(frames * 2, 0);
             for (Voice &v : voices_)
                 if (v.clip)
@@ -265,45 +297,120 @@ namespace gp
                 out[i] = int16_t(std::clamp(acc[i], -32768, 32767));
         }
 
-        // A mod's sound file as a clip at the mixer's rate with its volume, pitch and loop points; read once, kept by what it was made with.
-        const AudioClip *modClip(const ModSound &m, bool music)
+        // What makes a mod's clip different from another made of the same file: kept in the cache under this.
+        std::string modKey(const ModSound &m, bool music) const
         {
             char key[512];
             std::snprintf(key, sizeof key, "mod:%s|%g|%g|%g|%g|%d|%d", m.path.c_str(), double(m.gain), m.semitones, m.loopStart, m.loopEnd, music ? 1 : 0, m.midi && retro_ ? 1 : 0);
-            std::string mapKey = key;
+            std::string k = key;
+            k += m.gmNumbers ? "|gm" : "|rom";
             for (const auto &kv : m.programs)
-                mapKey += "|p" + std::to_string(kv.first) + "=" + std::to_string(kv.second);
+                k += "|p" + std::to_string(kv.first) + "=" + std::to_string(kv.second);
             for (const auto &kv : m.drums)
-                mapKey += "|d" + std::to_string(kv.first) + "=" + std::to_string(kv.second);
-            mapKey += m.gmNumbers ? "|gm" : "|rom";
+                k += "|d" + std::to_string(kv.first) + "=" + std::to_string(kv.second);
             for (const auto &kv : m.channels)
-                mapKey += "|c" + std::to_string(kv.first) + "=" + std::to_string(kv.second);
+                k += "|c" + std::to_string(kv.first) + "=" + std::to_string(kv.second);
             for (int c : m.slideChannels)
-                mapKey += "|s" + std::to_string(c);
-            auto it = clips_.find(mapKey);
-            if (it != clips_.end())
-                return it->second.get();
-            std::unique_ptr<AudioClip> c;
+                k += "|s" + std::to_string(c);
+            return k;
+        }
+
+        // The clip of a mod's sound file (or null, with a message): volume, pitch and loop points applied. Safe to run on another thread.
+        std::unique_ptr<AudioClip> buildModClip(const ModSound &m, bool music, const std::atomic<bool> *cancel = nullptr) const
+        {
             PcmData pcm;
             std::string why;
-            const bool loaded = m.midi ? renderMidi(m, pcm, why) : loadSoundFile(m.path, pcm, why);
-            if (loaded)
+            const bool loaded = m.midi ? renderMidi(m, pcm, why, cancel) : loadSoundFile(m.path, pcm, why);
+            if (cancel && cancel->load())
+                return nullptr;
+            if (!loaded)
             {
-                c = std::make_unique<AudioClip>(makeClip(pcm, kRate, m.gain, m.semitones, music ? m.loopStart : 0, music ? m.loopEnd : 0));
-                if (c->frames() == 0)
-                    c.reset();
-                else if (!music)
-                    fadeEnds(*c);
-            }
-            else
                 std::printf("audio: %s (%s)\n", why.c_str(), m.id.c_str());
+                return nullptr;
+            }
+            auto c = std::make_unique<AudioClip>(makeClip(pcm, kRate, m.gain, m.semitones, music ? m.loopStart : 0, music ? m.loopEnd : 0));
+            if (c->frames() == 0)
+                return nullptr;
+            if (!music)
+                fadeEnds(*c);
+            return c;
+        }
+
+        // A mod's sound file as a clip at the mixer's rate with its volume, pitch and loop points; read once, kept by what it was made with.
+        const AudioClip *modClip(const ModSound &m, bool music)
+        {
+            const std::string key = modKey(m, music);
+            auto it = clips_.find(key);
+            if (it != clips_.end())
+                return it->second.get();
+            std::unique_ptr<AudioClip> c = buildModClip(m, music);
             const AudioClip *p = c.get();
-            clips_[mapKey] = std::move(c);
+            clips_[key] = std::move(c);
             return p;
         }
 
+        // ---- a song made on another thread ----
+        // One job at a time. The worker leaves its clip in asyncClip_ and sets workerReady_; the mixer starts the song from there (under the
+        // device lock, so nothing else touches it), and the next call from the game thread (adoptAsync) files the clip in the cache and starts
+        // the next job if a different song was asked for meanwhile.
+        void startAsync(int n, const ModSound &m)
+        {
+            if (workerBusy_.load())
+            {
+                wantSong_ = n;
+                return;
+            }
+            stopWorker(false);
+            asyncKey_ = modKey(m, true);
+            asyncSong_ = n;
+            asyncClip_.reset();
+            workerReady_.store(false);
+            cancel_.store(false);
+            workerBusy_.store(true);
+            worker_ = std::thread([this, m]
+                                  {
+                                      const auto t0 = std::chrono::steady_clock::now();
+                                      std::unique_ptr<AudioClip> c = buildModClip(m, true, &cancel_);
+                                      if (c)
+                                          std::printf("audio: made %s in %.1f s\n", m.id.c_str(), std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+                                      asyncClip_ = std::move(c);
+                                      workerReady_.store(true, std::memory_order_release);
+                                  });
+        }
+        void adoptAsync()
+        {
+            if (!workerReady_.load(std::memory_order_acquire))
+                return;
+            if (worker_.joinable())
+                worker_.join();
+            lock();
+            clips_[asyncKey_] = std::move(asyncClip_); // (the mixer may already be playing it: the object stays where it is)
+            if (pendingMusic_ == asyncSong_)
+                pendingMusic_ = -1;
+            workerReady_.store(false);
+            workerBusy_.store(false);
+            unlock();
+            if (wantSong_ >= 0)
+            {
+                const int n = wantSong_;
+                wantSong_ = -1;
+                if (const ModSound *m = songFileFor(n))
+                    if (clips_.find(modKey(*m, true)) == clips_.end())
+                        startAsync(n, *m);
+            }
+        }
+        void stopWorker(bool cancel = true)
+        {
+            if (cancel)
+                cancel_.store(true);
+            if (worker_.joinable())
+                worker_.join();
+            workerBusy_.store(false);
+            workerReady_.store(false);
+        }
+
         // A MIDI file played with the ROM's instruments, as sound at the mixer's rate. Needs the ROM (setRom).
-        bool renderMidi(const ModSound &m, PcmData &out, std::string &why)
+        bool renderMidi(const ModSound &m, PcmData &out, std::string &why, const std::atomic<bool> *cancel = nullptr) const
         {
             if (!romAudio_)
                 return why = "a MIDI file needs the ROM's instruments (no ROM given)", false;
@@ -321,7 +428,7 @@ namespace gp
             midi::Result r;
             if (!midi::toSong(bytes, o, r, why))
                 return false;
-            const std::vector<float> f = romAudio_->renderSong(r.song, kRate);
+            const std::vector<float> f = romAudio_->renderSong(r.song, kRate, cancel);
             if (f.empty())
                 return why = "the MIDI file renders to nothing", false;
             out.rate = kRate;
@@ -410,6 +517,12 @@ namespace gp
         float volume_ = 0.8f, musicVol_ = 1.f, sfxVol_ = 1.f;
         bool musicOn_ = true;
         int music_ = -1;
+        int pendingMusic_ = -1;                 // a song being made on the worker thread that should start when it is done
+        std::atomic<bool> workerBusy_{false}, workerReady_{false}, cancel_{false};
+        std::string asyncKey_;
+        std::unique_ptr<AudioClip> asyncClip_;
+        int asyncSong_ = -1, wantSong_ = -1;
+        std::thread worker_;
         Voice musicVoice_;
         std::array<Voice, kVoices> voices_{};
         std::map<std::string, std::unique_ptr<AudioClip>> clips_;
