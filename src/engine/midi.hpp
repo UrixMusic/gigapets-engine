@@ -21,7 +21,8 @@
 //                `slideChannels`: there a note that lies inside another note on the same channel is a slide of that note, which glides in a straight
 //                line (in semitones) from where it was to the slide note's pitch during the slide note's time, then stays there until the note ends.
 //                Two notes with exactly the same start and end: the one listed first is the slide.
-// Sustain holds notes released while the pedal is down until it comes up. A song ends with the last track's end (or its last note).
+// Sustain holds notes released while the pedal is down until it comes up. A song ends with the last track's end (or its last note), unless a marker or
+// text event reading "loop end" says where the song loops: notes still sounding then ring on into the start of the next round, as in the ROM's songs.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -62,7 +63,7 @@ namespace gp
             struct Raw
             {
                 uint64_t tick = 0;
-                int order = 0; // at the same tick: note offs, then the controllers, then note ons
+                int order = 0; // at the same tick: note offs first, then the rest in the file's order
                 size_t seq = 0;
                 int kind = 0;  // 0x80 off, 0x90 on, 0xb0 controller, 0xc0 program, 0xe0 bend
                 int ch = 0, a = 0, b = 0;
@@ -98,6 +99,7 @@ namespace gp
             std::vector<Raw> raw;
             std::vector<Tempo> tempos;
             uint64_t endTick = 0;
+            int64_t loopEndTick = -1; // a marker "loop end"
             size_t pos = 8 + size_t(hlen), seq = 0;
             int tracks = 0;
             std::map<int, int> trackProgram; // track -> the instrument its name asks for
@@ -148,6 +150,14 @@ namespace gp
                         uint32_t mlen = 0;
                         if (!varlen(mlen) || p + mlen > end)
                             return why = "a damaged MIDI track (meta event)", false;
+                        if (type == 0x01 || type == 0x06) // text or a marker: "loop end" says where the song loops
+                        {
+                            std::string low(reinterpret_cast<const char *>(&f[p]), mlen);
+                            for (char &ch : low)
+                                ch = char(std::tolower((unsigned char)ch));
+                            if (low.rfind("loop end", 0) == 0 || low.rfind("rom end", 0) == 0)
+                                loopEndTick = int64_t(tick);
+                        }
                         if (type == 0x03) // the track's name: "Lead [3]" asks for instrument 3
                         {
                             const std::string nm(reinterpret_cast<const char *>(&f[p]), mlen);
@@ -201,7 +211,7 @@ namespace gp
                         r.kind = 0x80; // a note on with no velocity is a note off
                     if (kind == 0xd0 || kind == 0xa0)
                         continue; // aftertouch: skipped
-                    r.order = r.kind == 0x80 ? 0 : r.kind == 0x90 ? 2 : 1;
+                    r.order = r.kind == 0x80 ? 0 : 1; // note offs first; the rest in the file's order (a controller then a note, then another controller and note, at one tick)
                     raw.push_back(r);
                 }
                 endTick = std::max(endTick, tick);
@@ -500,7 +510,7 @@ namespace gp
             }
             if (out.notes == 0)
                 return why = "the MIDI file has no notes in it", false;
-            out.seconds = std::max(endSec, lastEnd);
+            out.seconds = loopEndTick >= 0 ? toSec(uint64_t(loopEndTick)) : std::max(endSec, lastEnd);
             out.song.end = std::max(1, toTicks(out.seconds));
             std::stable_sort(ev.begin(), ev.end(), [](const rau::Event &a, const rau::Event &b) { return a.t < b.t; }); // already in order but for bends put ahead of their note
             return true;

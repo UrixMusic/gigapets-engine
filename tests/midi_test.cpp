@@ -131,6 +131,15 @@ int main()
         CHECK(b3 && b3->t > b2->t && std::abs(b3->v - 100) <= 1 && nth(r.song, 'n', 1)->t >= b3->t); // ...and repeated at the note's start
         CHECK(nth(r.song, 'B', 4) && nth(r.song, 'B', 4)->v > 1100 && nth(r.song, 'B', 4)->v <= 1200); // range 12: nearly an octave
     }
+    {   // a "loop end" marker says where the song loops; a note still sounding rings on past it
+        Track t;
+        t.ev(0, {0x90, 60, 100}).ev(960, {0x80, 60, 0}).end();
+        Track m;
+        m.ev(0, {0x90, 60, 100}).ev(480, {0xff, 0x06, 8, 'l', 'o', 'o', 'p', ' ', 'e', 'n', 'd'}).ev(480, {0x80, 60, 0}).end();
+        midi::Result r, plain;
+        CHECK(midi::toSong(file(0, 480, {m}), opt, r, why) && r.song.end == 100 && nth(r.song, 'n', 0)->dur == 200);
+        CHECK(midi::toSong(file(0, 480, {t}), opt, plain, why) && plain.song.end == 200); // without it, the song is as long as its last note
+    }
     {   // sustain: a note released under the pedal ends when the pedal comes up
         midi::Result r;
         Track t;

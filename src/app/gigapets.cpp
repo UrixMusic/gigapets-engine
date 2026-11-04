@@ -12,6 +12,8 @@
 #include "frontend_demo.cpp"
 #include "../mods/export_base.hpp"
 #include "../engine/instrument_export.hpp"
+#include "../engine/midi_export.hpp"
+#include "../engine/midi.hpp"
 
 int main(int argc, char **argv)
 {
@@ -64,6 +66,29 @@ int main(int argc, char **argv)
         else if (!std::strcmp(argv[i], "--area") && i + 1 < argc)
             area = std::atoi(argv[++i]);
     }
+
+    // `--export-music <folder>`: the ROM's songs as MIDI files (song_0.mid ...) and a list of where each plays, then quit
+    for (int i = 2; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--export-music"))
+        {
+            try
+            {
+                gp::Rom rom(romPath);
+                const std::string why = gp::exportMusic(rom, argv[i + 1]);
+                if (!why.empty())
+                {
+                    std::fprintf(stderr, "export failed: %s\n", why.c_str());
+                    return 1;
+                }
+                std::printf("exported the songs to %s (see songs.txt)\n", argv[i + 1]);
+                return 0;
+            }
+            catch (const std::exception &e)
+            {
+                std::fprintf(stderr, "export failed: %s\n", e.what());
+                return 1;
+            }
+        }
 
     // `--export-instruments <folder>`: the ROM's instruments and drums as audition WAV files and a list of their numbers, then quit
     for (int i = 2; i + 1 < argc; ++i)
