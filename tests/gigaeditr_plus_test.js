@@ -349,5 +349,83 @@ check('npc quest window and colour, area diggable, object scene', () => {
   W = world(recs); assert.strictEqual(W.areas['base:area/0'].objects[2].scene, 'm:scene/hello');
   G.edSetObjectScene(recs, o, ''); assert(!recs.some(r => r.type === 'object'));
 });
+check('shops and stock rules: the base export, add / patch / remove, and the load order', () => {
+  const world = recs => G.buildWorld(base, [{ id: 'm', files: [{ name: G.EDFILE, records: recs }] }]);
+  let W = world([]);
+  assert.strictEqual(W.tables.shop.length, 22); assert.strictEqual(W.tables.shop_stock.length, 18);
+  const s10 = W.tables.shop.find(x => x.id === 'base:shop/10');
+  assert(s10 && s10.area === 'base:area/10' && s10.rolls === 10 && s10.items.length === 10 && s10.items[0].weight === 60 && s10.items[0].cap === 15);
+  assert(W.tables.shop_stock.some(r => r.id === 'base:stock/193' && r.shop === 'base:shop/12' && r.unless_held === true));
+  assert(G.TABLE_TYPES.includes('shop') && G.TABLE_TYPES.includes('shop_stock'));
+  // a new shop in a free area, then a rule that stocks it
+  const recs = [];
+  const sid = G.edRowAdd(recs, W, 'm', 'shop', { area: 'base:area/0', rolls: 4, items: [{ item: 'base:item/30', weight: 7, cap: 2 }] });
+  assert.strictEqual(sid, 'm:shop/e1');
+  const rid = G.edRowAdd(recs, W, 'm', 'shop_stock', { shop: sid, on: 'illness', from: 'cure' });
+  assert.deepStrictEqual(recs[1], { type: 'shop_stock', mode: 'add', id: 'm:shop_stock/e1', shop: 'm:shop/e1', on: 'illness', from: 'cure' });
+  W = world(recs.slice().reverse()); // the rule comes first in the file; it still loads after the shop
+  const mine = W.tables.shop.find(x => x.id === sid);
+  assert(mine && mine.added && mine.area === 'base:area/0' && mine.rolls === 4 && mine.items[0].item === 'base:item/30');
+  assert(W.tables.shop_stock.some(r => r.id === rid && r.added));
+  // patching a base shop with a whole list, then with add_items / remove_items written by hand
+  const p = [];
+  G.edRowPatch(p, 'shop', s10, { rolls: 12, items: [{ item: 'base:item/41', weight: 1, cap: 1 }] });
+  assert.deepStrictEqual(p, [{ type: 'shop', mode: 'patch', id: 'base:shop/10', rolls: 12, items: [{ item: 'base:item/41', weight: 1, cap: 1 }] }]);
+  W = world(p); let s = W.tables.shop.find(x => x.id === 'base:shop/10');
+  assert.strictEqual(s.rolls, 12); assert.strictEqual(s.items.length, 1); assert(s.mods.some(x => x.kind === 'patch'));
+  W = world([{ type: 'shop', mode: 'patch', id: 'base:shop/10', remove_items: ['base:item/42'], add_items: [{ item: 'base:item/99', weight: 3 }, { item: 'base:item/41', weight: 2, cap: 9 }] }]);
+  s = W.tables.shop.find(x => x.id === 'base:shop/10');
+  assert.strictEqual(s.items.length, 10); assert(!s.items.some(i => i.item === 'base:item/42'));
+  assert.deepStrictEqual(s.items.find(i => i.item === 'base:item/99'), { item: 'base:item/99', weight: 3, cap: 5 }); // the loader's defaults
+  assert.deepStrictEqual(s.items[0], { item: 'base:item/41', weight: 2, cap: 9 }); // already listed: changed in place
+  // remove, restore
+  const r = []; G.edRowRemove(r, 'shop', s10);
+  W = world(r); assert.strictEqual(W.tables.shop.length, 21); assert.strictEqual(W.removedRows.shop.length, 1);
+  G.edRowRestore(r, 'shop', 'base:shop/10'); assert.strictEqual(r.length, 0);
+  // a base rule patched: only what changed
+  const rule = world([]).tables.shop_stock.find(x => x.id === 'base:stock/quest20');
+  const q = []; G.edRowPatch(q, 'shop_stock', rule, { quest: 21 });
+  assert.deepStrictEqual(q, [{ type: 'shop_stock', mode: 'patch', id: 'base:stock/quest20', quest: 21 }]);
+  W = world(q); assert.strictEqual(W.tables.shop_stock.find(x => x.id === 'base:stock/quest20').quest, 21);
+  // a mod's own rows go with their mod
+  const gone = world([...recs, { type: 'shop', mode: 'remove', id: sid }]); assert(!gone.tables.shop.some(x => x.id === sid));
+});
+check('sounds, songs, instruments and drums: the ROM entries, add / replace like the loader, and the editor ops', () => {
+  const world = recs => G.buildWorld(base, [{ id: 'm', files: [{ name: G.EDFILE, records: recs }] }]);
+  let W = world([]);
+  assert.strictEqual(W.audioInfo.sounds, 96);
+  assert.strictEqual(Object.keys(W.audio.instrument).length, 14); assert.strictEqual(Object.keys(W.audio.drum).length, 12); assert.strictEqual(Object.keys(W.audio.music).length, 9);
+  assert(W.audio.instrument['base:instrument/13'].name === 'Trumpet' && W.audio.drum['base:drum/1'].name === 'Bass Drum' && W.audio.music['base:music/4'].menu === true);
+  const recs = [];
+  const sid = G.edAudioAdd(recs, W, 'm', 'sound', 'Meow Meow!', { file: 'audio/meow.ogg', volume: 150, pitch: -3 });
+  assert.strictEqual(sid, 'm:sound/meow_meow');
+  assert.strictEqual(G.edAudioAdd(recs, W, 'm', 'sound', 'meow meow', { file: 'audio/b.ogg' }), 'm:sound/meow_meow_2'); // taken: numbered
+  const iid = G.edAudioAdd(recs, world(recs), 'm', 'instrument', 'harp', { file: 'audio/harp.wav', root: 62, loop_start: 0.4, loop_end: 1.1, attack: 0.01, ignored: 1 });
+  assert.deepStrictEqual(recs.find(r => r.id === iid), { type: 'instrument', mode: 'add', id: 'm:instrument/harp', file: 'audio/harp.wav', root: 62, loop_start: 0.4, loop_end: 1.1, attack: 0.01 });
+  W = world(recs);
+  assert.deepStrictEqual(W.audio.sound[sid].rec, { file: 'audio/meow.ogg', volume: 150, pitch: -3 }); assert(W.audio.sound[sid].added && W.audio.sound[sid].src === 'm');
+  // a ROM sound / song / instrument / drum replaced: a replace record; the ROM's entries gain a replacement
+  G.edAudioSet(recs, 'sound', G.romAudioId('sound', 84), { file: 'audio/pop.wav', volume: 50 });
+  G.edAudioSet(recs, 'drum', 'base:drum/5', { file: 'audio/clap.wav' });
+  G.edAudioSet(recs, 'music', 'base:music/4', { channels: { '1': 'm:instrument/harp' } }); // no file: only the instruments change
+  W = world(recs);
+  assert.deepStrictEqual(W.audio.sound['base:sound/84'].rec, { file: 'audio/pop.wav', volume: 50 }); assert(W.audio.sound['base:sound/84'].base && W.audio.sound['base:sound/84'].replaced);
+  assert.strictEqual(W.audio.drum['base:drum/5'].rec.file, 'audio/clap.wav'); assert.strictEqual(W.audio.drum['base:drum/5'].name, 'Side Stick'); // still the ROM's drum 5
+  assert(!W.audio.music['base:music/4'].rec.file && W.audio.music['base:music/4'].rec.channels['1'] === 'm:instrument/harp' && W.audio.music['base:music/4'].menu);
+  // another patch of the same song merges (no file); a file replaces the song as a whole
+  const more = [...recs, { type: 'music', mode: 'replace', id: 'base:music/4', programs: { '2': 'base:instrument/5' } }];
+  W = world(more); assert(W.audio.music['base:music/4'].rec.channels && W.audio.music['base:music/4'].rec.programs);
+  W = world([...more, { type: 'music', mode: 'replace', id: 'base:music/4', file: 'audio/s.mid' }]);
+  assert.deepStrictEqual(W.audio.music['base:music/4'].rec, { file: 'audio/s.mid' });
+  // editing an own record changes it in place; clearing a field takes it out; replace of a missing own id is skipped
+  G.edAudioSet(recs, 'sound', sid, { volume: undefined, pitch: 2 });
+  assert.deepStrictEqual(recs.find(r => r.id === sid), { type: 'sound', mode: 'add', id: sid, file: 'audio/meow.ogg', pitch: 2 });
+  assert.strictEqual(world([{ type: 'sound', mode: 'replace', id: 'm:sound/nope', file: 'x.ogg' }]).audio.sound['m:sound/nope'], undefined);
+  assert.strictEqual(world([...recs, { type: 'sound', mode: 'add', id: sid, file: 'x.ogg' }]).audio.sound[sid].rec.file, 'audio/meow.ogg'); // a duplicate add is skipped
+  // delete takes every record of the id
+  G.edAudioDelete(recs, 'sound', 'base:sound/84'); assert(!recs.some(r => r.id === 'base:sound/84'));
+  G.edAudioDelete(recs, 'instrument', iid); assert(!recs.some(r => r.id === iid));
+  W = world(recs); assert(!W.audio.instrument[iid] && !W.audio.sound['base:sound/84']);
+});
 if (fails) { console.error(fails + ' failed'); process.exit(1); }
 console.log('gigaeditr_plus_test: all passed');

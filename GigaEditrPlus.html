@@ -190,6 +190,16 @@
         <div id="tbRemoved"></div>
       </div>
     </details>
+    <details id="auPanel">
+      <summary>Sounds &amp; music <span id="auCount" class="hint"></span></summary>
+      <div class="body">
+        <div class="seg" id="auTabs"></div>
+        <div id="auHint" class="hint"></div>
+        <div id="auRows"></div>
+        <div id="auForm"></div>
+        <div class="row"><button id="auAdd" class="primary">Add…</button><button id="auRep">Replace one of the game's…</button></div>
+      </div>
+    </details>
     <details>
       <summary>Pet colours <span id="pcCount" class="hint"></span></summary>
       <div class="body">
@@ -221,7 +231,16 @@
   <script id="core">
     // ===== core: pure data logic (no DOM). Mirrors how the game's mod loader applies records, so the editor shows the same world. =====
     const EDFILE = 'zz_gigaeditr.json';
-    const PASS0 = ['text', 'anim', 'tileset', 'collision', 'objtype', 'palette'];
+    const PASS0 = ['text', 'anim', 'tileset', 'collision', 'objtype', 'palette', 'sound', 'music', 'instrument', 'drum'];
+    // sounds and music: a record per sound / song / instrument / drum (ids "mymod:sound/meow"; the ROM's are "base:sound/84", "base:music/4", "base:instrument/3",
+    // "base:drum/5" and a mod `replace`s them). The fields each takes besides type / mode / id (the loader checks the rest).
+    const AUDIO_KINDS = ['sound', 'music', 'instrument', 'drum'];
+    const AUDIO_FIELDS = {
+      sound: ['file', 'volume', 'pitch'],
+      music: ['file', 'volume', 'pitch', 'loop_start', 'loop_end', 'programs', 'drums', 'channels', 'slide_channels', 'numbers'],
+      instrument: ['file', 'volume', 'root', 'top', 'loop_start', 'loop_end', 'zones', 'attack', 'decay', 'sustain', 'release'],
+      drum: ['file', 'volume', 'pitch'],
+    };
     // The records that are rows of a list (like the game's tables). The loader reads them last (pass 3): they name areas and items.
     //   base = the key in base.json that holds the base game's rows; fields = what a record may carry besides type / mode / id;
     //   patch = whether the loader has a patch mode for them (a dig spot has not: remove it and add a new one).
@@ -230,9 +249,14 @@
       spot: { base: 'spots', fields: ['area', 'item', 'x', 'y', 'state', 'requires_item', 'not_while_held', 'not_offered'], patch: false },
       quest_spawn: { base: 'quest_spawns', fields: ['quest', 'area', 'item', 'x', 'y', 'state', 'random', 'times'], patch: true },
       gate: { base: 'gates', fields: ['barrier', 'kind', 'stats', 'need'], patch: true },
+      // a shop: what it can stock (items with a weight and a cap); a patch carries `rolls`, a whole `items` list, or `add_items` / `remove_items`
+      shop: { base: 'shops', fields: ['area', 'rolls', 'items', 'add_items', 'remove_items'], patch: true },
+      // what puts an item into a shop's stock when something happens (the loader reads these after the shops)
+      shop_stock: { base: 'stock_rules', fields: ['shop', 'on', 'area', 'quest', 'modes', 'from', 'item', 'only_item', 'except_item', 'unless_held', 'unless_offered'], patch: true },
     };
     const TABLE_TYPES = Object.keys(TABLES);
-    const passOf = t => PASS0.includes(t) ? 0 : (t === 'area' ? 1 : TABLE_TYPES.includes(t) ? 3 : 2);
+    const passOf = t => PASS0.includes(t) ? 0 : (t === 'area' ? 1 : t === 'shop_stock' ? 4 : TABLE_TYPES.includes(t) ? 3 : 2);
+    const SHOP_DEFAULTS = { weight: 10, cap: 5, rolls: 10 }; // what the loader fills in
 
     // dependency order like the loader: required / load_after mods first, ties alphabetical
     function orderMods(mods) {
@@ -260,11 +284,14 @@
       }
       for (const n of B.npcs) W.npcs.push({ ...n, areaId: legacy[n.area] || null, src: 'base', mods: [] });
       W.items = (B.items || []).map(i => ({ ...i, src: 'base' }));
+      W.audio = { sound: {}, music: {}, instrument: {}, drum: {} }; W.audioInfo = B.audio || { sounds: 96, songs: [], instruments: [], drums: [] };
+      for (const k of ['music', 'instrument', 'drum']) for (const e of W.audioInfo[k === 'music' ? 'songs' : k + 's'] || []) W.audio[k][e.id] = { ...e, kind: k, src: 'base', base: true, rec: null, mods: [] };
       W.tables = {}; W.removedRows = {};
       for (const k of TABLE_TYPES) { // the base game's rows; a spot or quest reward names its area by the ROM number in the export
         W.tables[k] = (B[TABLES[k].base] || []).map(r => ({ ...r, area: typeof r.area === 'number' ? legacy[r.area] || r.area : r.area, src: 'base', mods: [] }));
         W.removedRows[k] = [];
       }
+      for (const sh of W.tables.shop) sh.items = (sh.items || []).map(e => ({ item: e.item, weight: e.weight, cap: e.cap })); // (one key order, so edits compare)
 
       const note = (key, mod, file, kind, rec, diffs) => {
         const e = { mod, file, kind, rec, key, diffs: diffs || [] };
@@ -273,7 +300,7 @@
       const objKey = (aid, id) => 'o:' + aid + '|' + id;
       const fields = ['x', 'y', 'objtype', 'reach', 'sign', 'message', 'scene', 'quest_min', 'quest_max'];
 
-      for (const m of mods) for (let pass = 0; pass < 4; pass++) for (const f of m.files) for (const r of f.records) {
+      for (const m of mods) for (let pass = 0; pass < 5; pass++) for (const f of m.files) for (const r of f.records) {
         if (!r || passOf(r.type) !== pass) continue;
         const mode = r.mode;
         switch (r.type) {
@@ -363,7 +390,42 @@
           case 'item': // (only enough to offer the item in a picker)
             if (mode === 'add' && !W.items.some(i => i.id === r.id)) W.items.push({ id: r.id, name: r.name, src: m.id });
             note('x:' + r.id, m.id, f.name, mode, r); break;
-          case 'find': case 'spot': case 'quest_spawn': case 'gate': {
+          case 'shop': {
+            const T = W.tables.shop, i = T.findIndex(x => x.id === r.id), key = 'r:shop:' + r.id;
+            const items = list => (list || []).map(e => ({ item: e.item, weight: e.weight === undefined ? SHOP_DEFAULTS.weight : e.weight, cap: e.cap === undefined ? SHOP_DEFAULTS.cap : e.cap }));
+            if (mode === 'add') {
+              if (i >= 0) { note(key, m.id, f.name, 'skipped', r); break; }
+              T.push({ id: r.id, area: r.area, rolls: r.rolls === undefined ? SHOP_DEFAULTS.rolls : r.rolls, items: items(r.items), src: m.id, added: true, mods: [{ mod: m.id, kind: 'add' }] }); note(key, m.id, f.name, 'add', r);
+            } else if (i < 0) note(key, m.id, f.name, 'skipped', r);
+            else if (mode === 'remove') { W.removedRows.shop.push({ ...T[i], removedBy: m.id }); T.splice(i, 1); note(key, m.id, f.name, 'remove', r); }
+            else if (mode === 'patch' || mode === 'replace') { // like the loader: rolls, then the whole list, then what to take out, then what to put in (or change)
+              const sh = T[i], diffs = [];
+              if (r.rolls !== undefined) { diffs.push(['rolls', sh.rolls, r.rolls]); sh.rolls = r.rolls; }
+              if (r.items !== undefined) { diffs.push(['items', sh.items.length + ' items', r.items.length + ' items']); sh.items = items(r.items); }
+              for (const id of r.remove_items || []) { const k = sh.items.findIndex(e => e.item === id); if (k >= 0) { sh.items.splice(k, 1); diffs.push(['item', id, 'removed']); } }
+              for (const e of items(r.add_items)) { const k = sh.items.findIndex(x => x.item === e.item); if (k >= 0) sh.items[k] = e; else sh.items.push(e); diffs.push(['item', '', e.item]); }
+              sh.mods.push({ mod: m.id, kind: 'patch' }); note(key, m.id, f.name, 'patch', r, diffs);
+            } else note(key, m.id, f.name, 'skipped', r);
+            break;
+          }
+          case 'sound': case 'music': case 'instrument': case 'drum': {
+            const A = W.audio[r.type], body = {}, key = 'x:' + r.id;
+            for (const k of AUDIO_FIELDS[r.type]) if (r[k] !== undefined) body[k] = clone(r[k]);
+            let row = A[r.id];
+            if (mode === 'add') {
+              if (row) { note(key, m.id, f.name, 'skipped', r); break; }
+              A[r.id] = { id: r.id, kind: r.type, src: m.id, added: true, rec: body, mods: [{ mod: m.id, kind: 'add' }] }; note(key, m.id, f.name, 'add', r);
+            } else if (mode === 'replace') {
+              if (!row && r.id.startsWith('base:')) row = A[r.id] = { id: r.id, kind: r.type, src: 'base', base: true, rec: null, mods: [] }; // a ROM sound with no entry of its own yet
+              if (!row) { note(key, m.id, f.name, 'skipped', r); break; }
+              const diffs = []; for (const k in body) diffs.push([k, row.rec ? row.rec[k] : undefined, body[k]]);
+              // the ROM's are replaced as a whole (a song record with no file only changes instruments and merges with earlier ones); a mod's own keep the fields not listed
+              if (!row.rec || (row.base && !(r.type === 'music' && !body.file && row.rec && !row.rec.file))) row.rec = body; else Object.assign(row.rec, body);
+              row.replaced = true; row.mods.push({ mod: m.id, kind: 'replace' }); note(key, m.id, f.name, 'replace', r, diffs);
+            } else note(key, m.id, f.name, 'skipped', r);
+            break;
+          }
+          case 'find': case 'spot': case 'quest_spawn': case 'gate': case 'shop_stock': {
             const T = W.tables[r.type], i = T.findIndex(x => x.id === r.id), key = 'r:' + r.type + ':' + r.id;
             const body = {}; for (const k of TABLES[r.type].fields) if (r[k] !== undefined) body[k] = clone(r[k]);
             if (mode === 'add') {
@@ -590,6 +652,27 @@
       if (!had) recs.push({ type: kind, mode: 'remove', id: row.id });
     }
     function edRowRestore(recs, kind, id) { const i = recs.findIndex(r => r.type === kind && r.mode === 'remove' && r.id === id); if (i >= 0) recs.splice(i, 1); }
+    // ---- sounds, songs, instruments and drums (AUDIO_FIELDS) ----
+    const audioSlug = name => String(name || '').toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    // a new id of the mod's own: "mymod:sound/<name>", with a number added if that is taken
+    function edAudioId(recs, W, modId, kind, name) {
+      const base = audioSlug(name) || 'e'; const used = new Set(recs.map(r => r.id));
+      for (let n = 1; ; n++) { const id = `${modId}:${kind}/${base}${n > 1 ? '_' + n : ''}`; if (!used.has(id) && !W.audio[kind][id]) return id; }
+    }
+    function edAudioAdd(recs, W, modId, kind, name, fields) {
+      const id = edAudioId(recs, W, modId, kind, name), r = { type: kind, mode: 'add', id };
+      for (const k of AUDIO_FIELDS[kind]) if (fields[k] !== undefined) r[k] = fields[k];
+      recs.push(r); return id;
+    }
+    // changes one of the mod's own records in place, or (for a ROM sound or another mod's) writes a `replace` record that carries the fields
+    function edAudioSet(recs, kind, id, fields) {
+      let r = find(recs, kind, 'add', id) || find(recs, kind, 'replace', id);
+      if (!r) { r = { type: kind, mode: 'replace', id }; recs.push(r); }
+      for (const k of AUDIO_FIELDS[kind]) if (k in fields) { if (fields[k] === undefined) delete r[k]; else r[k] = fields[k]; }
+      return r;
+    }
+    const romAudioId = (kind, n) => `base:${kind}/${n}`;
+    function edAudioDelete(recs, kind, id) { for (let i = recs.length - 1; i >= 0; i--) if (recs[i].type === kind && recs[i].id === id) recs.splice(i, 1); }
     // a base or mod NPC's quest window and colour (a base npc: a `replace` record with just those fields)
     function edSetNpcFields(recs, n, fields) {
       let r = find(recs, 'npc', 'add', n.id);
@@ -705,7 +788,7 @@
       if (r.mode === 'patch' && !r.shadow && !r.shadow_png) recs.splice(recs.indexOf(r), 1); // (a patch must change something)
     }
     function nextSlot(recs, W, modId, kind) { return nextId(recs, W, modId, kind).split('/e').pop(); }
-    if (typeof module !== 'undefined') module.exports = { packRGBA, unpackRGBA, fillRegion, lineCells, brushCells, rectCells, flipArr, resizeArr, colorsOf, maskFromRGBA, collisionLayer, edSetAreaLook, edSetAreaField, edAddObjTypeFull, edSetShadow, nextSlot, EDFILE, wordToRgb, wordToRgbRound, rgbToWord, paletteSet, paletteWords, edSavePalette, edDeletePalette, offeredIds, SPECIES, orderMods, buildWorld, edMoveObject, edPatchObject, edDeleteObject, edAddObject, edPaint, edSetText, edAddObjType, edMoveNpc, edDeleteNpc, edAddNpc, edNewArea, edAddExit, edRemoveExit, find, TABLES, TABLE_TYPES, edRowAdd, edRowPatch, edRowRemove, edRowRestore, edSetNpcFields, edSetObjectScene };
+    if (typeof module !== 'undefined') module.exports = { AUDIO_KINDS, AUDIO_FIELDS, audioSlug, edAudioId, edAudioAdd, edAudioSet, edAudioDelete, romAudioId, packRGBA, unpackRGBA, fillRegion, lineCells, brushCells, rectCells, flipArr, resizeArr, colorsOf, maskFromRGBA, collisionLayer, edSetAreaLook, edSetAreaField, edAddObjTypeFull, edSetShadow, nextSlot, EDFILE, wordToRgb, wordToRgbRound, rgbToWord, paletteSet, paletteWords, edSavePalette, edDeletePalette, offeredIds, SPECIES, orderMods, buildWorld, edMoveObject, edPatchObject, edDeleteObject, edAddObject, edPaint, edSetText, edAddObjType, edMoveNpc, edDeleteNpc, edAddNpc, edNewArea, edAddExit, edRemoveExit, find, TABLES, TABLE_TYPES, edRowAdd, edRowPatch, edRowRemove, edRowRestore, edSetNpcFields, edSetObjectScene };
   </script>
 
   <script id="sprite">
@@ -1241,7 +1324,7 @@
         if (!S.base) return;
         S.W = buildWorld(S.base, modList());
         if (S.area && !S.W.areas[S.area]) S.area = null;
-        refreshAreaList(); renderChanges(); renderSelected(); renderPalette(); renderAreaProps(); renderColours(); renderTables(); S.needDraw = true;
+        refreshAreaList(); renderChanges(); renderSelected(); renderPalette(); renderAreaProps(); renderColours(); renderTables(); renderAudio(); S.needDraw = true;
       }
       function refreshAreaList() {
         const sel = $('area'), keep = S.area || sel.value;
@@ -1827,13 +1910,26 @@
         spot: { label: 'Dig spots', hint: 'Something placed in an area every time the pet enters it: buried (dig it up) or lying there. A spot cannot be edited, only removed; make a new one instead.' },
         quest_spawn: { label: 'Quest rewards', hint: 'Placed when a quest number is handed in, and kept until picked up. Fixed place, or a number of random free spots of the area. The game counts quests from 1.' },
         gate: { label: 'Barriers', hint: 'An object that goes for good once the pet meets a condition. The guard\'s words are an ordinary object message.' },
+        shop: { label: 'Shops', hint: 'What a shop can stock. When the game starts every shop rolls 10 picks from its list (the chance of an item is its weight out of all the weights), and about every 50 seconds it rolls one more. Cap: the most of an item the shop offers at once. A shop is an area: the stock stands on the area\'s spawn points. Changing a base game shop saves its whole list in your mod.' },
+        shop_stock: { label: 'Stock rules', hint: 'Something that puts an item into a shop when it happens: the pet walks into an area, a quest is handed in, or the pet falls ill. A full shop (nine different items) gives up its oldest item for the new one.' },
       };
+      const ON_LABELS = { area: 'the pet walks into an area', quest: 'a story quest is handed in', type: 'a quest of a type is handed in', illness: 'the pet falls ill' };
+      const FROM_LABELS = { item: 'a fixed item', first_objective: 'the first item the quest asked for', each_objective: 'every item the quest asked for', first_spawn: 'the first item the quest scattered', cure: 'the cure of the illness' };
       const STATS = ['halos', 'pitchforks', 'stars', 'lightbulbs'];
       S.tbl = 'find'; S.tbEdit = null;
       const itemLabel = id => { const it = S.W.items.find(i => i.id === id); return it ? (S.W.texts[it.name] || id) : id || '—'; };
       const areaLabel = id => { const a = S.W.areas[id]; return a ? (S.W.texts[a.name] || id) : id || '—'; };
       const gateText = r => ({ tricks: `${r.need} tricks known`, money: `${r.need} Bucks`, quests: `${r.need} quests done` }[r.kind] || `${(r.stats || []).join(' or ')} ≥ ${r.need}`);
+      const shopLabel = id => { const sh = S.W.tables.shop.find(x => x.id === id); return sh ? areaLabel(sh.area) : id || '—'; };
+      function stockText(r) {
+        const what = r.from === 'item' ? '<b>' + esc(itemLabel(r.item)) + '</b>' : esc(FROM_LABELS[r.from] || r.from || '?');
+        const when = r.on === 'area' ? 'the pet walks into ' + esc(areaLabel(r.area)) : r.on === 'quest' ? 'story quest ' + r.quest + ' is handed in' : r.on === 'type' ? 'a quest of mode ' + esc((r.modes || []).join('/')) + ' is handed in' : 'the pet falls ill';
+        const extra = [r.unless_held ? 'unless the pet holds it' : '', r.unless_offered ? 'unless it was given to the King' : '', r.only_item ? 'only ' + esc(itemLabel(r.only_item)) : '', r.except_item ? 'not ' + esc(itemLabel(r.except_item)) : ''].filter(Boolean);
+        return `When ${when}: ${what} goes to <b>${esc(shopLabel(r.shop))}</b>${extra.length ? ' <span class="hint">(' + extra.join(', ') + ')</span>' : ''}`;
+      }
       function rowText(kind, r) {
+        if (kind === 'shop') return `<b>${esc(areaLabel(r.area))}</b> · ${r.items.length} items · ${r.rolls} rolls <span class="hint">${esc(r.items.slice(0, 4).map(i => itemLabel(i.item)).join(', ') + (r.items.length > 4 ? ', …' : ''))}</span>`;
+        if (kind === 'shop_stock') return stockText(r);
         if (kind === 'find') { const tot = S.W.tables.find.reduce((a, x) => a + (x.weight || 0), 0); return `<b>${esc(itemLabel(r.item))}</b> · weight ${r.weight} <span class="hint">(${tot ? (100 * r.weight / tot).toFixed(1) : 0}% of finds)</span>`; }
         if (kind === 'spot') return `<b>${esc(itemLabel(r.item))}</b> in ${esc(areaLabel(r.area))} @${r.x},${r.y} · ${r.state === 'ground' ? 'lying there' : 'buried'}${r.requires_item ? ' · only while holding ' + esc(itemLabel(r.requires_item)) : ''}${r.not_while_held ? ' · once' : ''}${r.not_offered ? ' · until given to the King' : ''}`;
         if (kind === 'quest_spawn') return `quest ${r.quest}: <b>${esc(itemLabel(r.item))}</b> in ${esc(areaLabel(r.area))} ${r.random ? '× ' + (r.times || 1) + ' on random spots' : '@' + r.x + ',' + r.y} · ${r.state === 'ground' ? 'lying there' : 'buried'}`;
@@ -1860,6 +1956,27 @@
           <div class="row"><label><input type="checkbox" id="tf_random"${r.random ? ' checked' : ''}> on random free spots of the area</label></div>
           <div class="row" id="tf_fixed">${num('x', 'x', r.x)}${num('y', 'y', r.y)}</div>
           <div class="row" id="tf_rand">${num('times', 'How many', r.times === undefined ? 1 : r.times, 4)}</div>`;
+        if (kind === 'shop') {
+          S.tbItems = (r.items || []).map(i => ({ ...i }));
+          const free = Object.keys(S.W.areas).filter(id => r.area === id || !S.W.tables.shop.some(x => x.area === id));
+          return `<div class="row">${r.id ? `<b>${esc(areaLabel(r.area))}</b> <span class="hint">(a shop's area cannot be changed)</span>` : `<label>Shop in <select id="tf_area">${free.map(id => `<option value="${esc(id)}"${id === (r.area || S.area) ? ' selected' : ''}>${esc(S.W.areas[id].src === 'base' ? S.W.areas[id].legacyId + ': ' : '[' + S.W.areas[id].src + '] ')}${esc(areaLabel(id))}</option>`).join('')}</select></label>`}
+            ${num('rolls', 'Rolls at the start', r.rolls === undefined ? 10 : r.rolls, 4)}</div>
+            <div class="hint">Items it can stock</div><div id="tf_items"></div><div class="row"><button id="tf_addItem">Add an item</button></div>`;
+        }
+        if (kind === 'shop_stock') {
+          const on = r.on || 'area', from = r.from || 'item';
+          const sel = (k, opts, cur) => `<select id="tf_${k}">${Object.entries(opts).map(([v, t]) => `<option value="${v}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
+          const shops = Object.fromEntries(S.W.tables.shop.map(x => [x.id, areaLabel(x.area)]));
+          return `<div class="row"><label>Goes to <select id="tf_shop">${Object.entries(shops).map(([v, t]) => `<option value="${esc(v)}"${v === (r.shop || '') ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label></div>
+            <div class="row"><label>When ${sel('on', ON_LABELS, on)}</label></div>
+            <div class="row" id="tf_rowArea"><label>Area <select id="tf_area">${areaOpts(r.area || S.area)}</select></label></div>
+            <div class="row" id="tf_rowQuest">${num('quest', 'Story quest number', r.quest, 5)}</div>
+            <div class="row" id="tf_rowModes"><label>Quest types (modes, like 4,6) <input id="tf_modes" value="${esc((r.modes || []).join(','))}" style="width:8em"></label></div>
+            <div class="row"><label>What goes in ${sel('from', FROM_LABELS, from)}</label></div>
+            <div class="row" id="tf_rowItem"><label>Item <select id="tf_item">${itemOpts(r.item)}</select></label></div>
+            <div class="row" id="tf_rowOnly"><label>Only this item <select id="tf_only_item">${itemOpts(r.only_item, 'any')}</select></label><label>not this one <select id="tf_except_item">${itemOpts(r.except_item, 'none')}</select></label></div>
+            <div class="row" id="tf_rowUnless"><label><input type="checkbox" id="tf_unless_held"${r.unless_held ? ' checked' : ''}> not if the pet holds the item</label><label><input type="checkbox" id="tf_unless_offered"${r.unless_offered ? ' checked' : ''}> not if it was given to the King</label></div>`;
+        }
         const barArea = Object.keys(S.W.areas).find(id => S.W.areas[id].objects.some(o => o.id === r.barrier)) || S.area;
         return `<div class="row"><label>Barrier in <select id="tf_barea">${areaOpts(barArea)}</select></label><label>object <select id="tf_barrier">${objectOpts(barArea, r.barrier)}</select></label></div>
           <div class="row"><label>Goes when <select id="tf_kind">${[['tricks', 'tricks known ≥'], ['stat', 'a personality stat ≥'], ['money', 'Bucks ≥'], ['quests', 'quests done ≥']].map(([v, t]) => `<option value="${v}"${v === (r.kind || 'stat') ? ' selected' : ''}>${t}</option>`).join('')}</select></label>${num('need', '', r.need === undefined ? 1 : r.need, 6)}</div>
@@ -1867,6 +1984,33 @@
       }
       function tbValues(kind) {
         const v = k => $('tf_' + k).value, n = (k, lo, hi, label) => { const x = Number(v(k)); if (v(k) === '' || !Number.isInteger(x) || x < lo || x > hi) throw new Error(label + ' must be a whole number from ' + lo + ' to ' + hi + '.'); return x; };
+        if (kind === 'shop') {
+          readShopItems();
+          if (!S.tbItems.length) throw new Error('Add at least one item the shop can stock.');
+          const seen = new Set(); for (const i of S.tbItems) { if (!i.item) throw new Error('Choose an item for every line.'); if (seen.has(i.item)) throw new Error('An item is listed twice: ' + itemLabel(i.item)); seen.add(i.item); }
+          const o = { rolls: n('rolls', 0, 100, 'Rolls'), items: S.tbItems.map(i => ({ item: i.item, weight: i.weight, cap: i.cap })) };
+          if ($('tf_area')) o.area = v('area'); // (an existing shop's area is not a field)
+          return o;
+        }
+        if (kind === 'shop_stock') {
+          const on = v('on'), from = v('from'), o = { shop: v('shop'), on, from };
+          if (!o.shop) throw new Error('Choose the shop.');
+          o.area = on === 'area' ? v('area') : undefined;
+          o.quest = on === 'quest' ? n('quest', 1, 1000, 'The quest number') : undefined;
+          const modes = v('modes').split(',').map(x => x.trim()).filter(Boolean).map(Number);
+          if (on === 'type' && (!modes.length || modes.some(x => !Number.isInteger(x) || x < 0 || x > 100))) throw new Error('Give the quest type modes as numbers, like 4,6.');
+          o.modes = on === 'type' ? modes : (on === 'quest' ? [5] : undefined);
+          if (on === 'area' && from !== 'item') throw new Error('An area rule puts in a fixed item.');
+          if (on === 'illness' && from !== 'cure' && from !== 'item') throw new Error('An illness rule puts in the cure, or a fixed item.');
+          if (from === 'cure' && on !== 'illness') throw new Error('"The cure" only goes with "the pet falls ill".');
+          o.item = from === 'item' ? v('item') : undefined;
+          if (from === 'item' && !o.item) throw new Error('Choose the item.');
+          o.only_item = from === 'each_objective' ? v('only_item') || undefined : undefined;
+          o.except_item = from === 'each_objective' ? v('except_item') || undefined : undefined;
+          o.unless_held = on === 'area' && $('tf_unless_held').checked ? true : undefined;
+          o.unless_offered = on === 'area' && $('tf_unless_offered').checked ? true : undefined;
+          return o;
+        }
         if (kind === 'find') return { item: v('item'), weight: n('weight', 1, 100000, 'Weight') };
         if (kind === 'spot') return { area: v('area'), item: v('item'), x: n('x', -100000, 100000, 'x'), y: n('y', -100000, 100000, 'y'), state: v('state'), requires_item: v('requires_item') || undefined, not_while_held: $('tf_not_while_held').checked || undefined, not_offered: $('tf_not_offered').checked || undefined };
         if (kind === 'quest_spawn') {
@@ -1879,7 +2023,34 @@
         if (kindV === 'stat' && !stats.length) throw new Error('Tick at least one personality stat.');
         return { barrier: v('barrier'), kind: kindV, stats: kindV === 'stat' ? stats : undefined, need: n('need', 0, 1000000, 'The amount') };
       }
+      function readShopItems() { // what the item lines now say
+        document.querySelectorAll('#tf_items .row').forEach((el, i) => {
+          const it = S.tbItems[i]; if (!it) return;
+          it.item = el.querySelector('select').value;
+          const w = Number(el.querySelector('.si_w').value), c = Number(el.querySelector('.si_c').value);
+          if (!Number.isInteger(w) || w < 0 || w > 10000) throw new Error('A weight must be a whole number from 0 to 10000.');
+          if (!Number.isInteger(c) || c < 1 || c > 99) throw new Error('A cap must be a whole number from 1 to 99.');
+          it.weight = w; it.cap = c;
+        });
+      }
+      function renderShopItems() {
+        $('tf_items').innerHTML = S.tbItems.map((i, k) => `<div class="row" data-k="${k}"><select>${itemOpts(i.item, i.item ? '' : 'choose…')}</select> weight <input class="si_w" type="number" value="${i.weight}" style="width:5em"> cap <input class="si_c" type="number" value="${i.cap}" style="width:4em"><button class="si_x" title="Take this item out">×</button></div>`).join('') || '<div class="hint">No items yet.</div>';
+      }
       function tbWire(kind) {
+        if (kind === 'shop') {
+          renderShopItems();
+          $('tf_addItem').onclick = () => { try { readShopItems(); } catch (e) { return toast(e.message); } S.tbItems.push({ item: '', weight: 10, cap: 5 }); renderShopItems(); };
+          $('tf_items').onclick = ev => { if (!ev.target.classList.contains('si_x')) return; try { readShopItems(); } catch (e) { return toast(e.message); } S.tbItems.splice(+ev.target.closest('[data-k]').dataset.k, 1); renderShopItems(); };
+        }
+        if (kind === 'shop_stock') {
+          const show = () => {
+            const on = $('tf_on').value, from = $('tf_from').value, vis = (id, b) => { $(id).style.display = b ? '' : 'none'; };
+            vis('tf_rowArea', on === 'area'); vis('tf_rowQuest', on === 'quest'); vis('tf_rowModes', on === 'type');
+            vis('tf_rowItem', from === 'item'); vis('tf_rowOnly', from === 'each_objective'); vis('tf_rowUnless', on === 'area');
+          };
+          $('tf_on').onchange = () => { const on = $('tf_on').value; if (on === 'area') $('tf_from').value = 'item'; else if (on === 'illness') $('tf_from').value = 'cure'; else if ($('tf_from').value === 'cure') $('tf_from').value = on === 'quest' ? 'first_objective' : 'each_objective'; show(); };
+          $('tf_from').onchange = show; show();
+        }
         const showQ = () => { const r = $('tf_random'); if (r) { $('tf_fixed').style.display = r.checked ? 'none' : ''; $('tf_rand').style.display = r.checked ? '' : 'none'; } };
         if (kind === 'quest_spawn') { $('tf_random').onchange = showQ; showQ(); }
         if (kind === 'gate') {
@@ -1925,11 +2096,274 @@
       };
       $('tbRemoved').onclick = ev => { const el = ev.target.closest('[data-id]'); if (!el || !ev.target.classList.contains('tbR') || !canEdit()) return; snap(); edRowRestore(S.recs, S.tbl, el.dataset.id); changed(); };
 
+
+      // ---- sounds, songs, instruments and drums ----
+      const AU = {
+        sound: { label: 'Sounds', rom: 'sound effect', exts: '.ogg,.wav', hint: 'A sound effect: an Ogg or WAV file. Give it a name to add a new sound a script can play, or replace one of the game\'s 96 (a number, 0 to 95) so the game plays your file instead.' },
+        music: { label: 'Songs', rom: 'song', exts: '.ogg,.wav,.mid,.midi', hint: 'A song: an Ogg or WAV file, or a MIDI file played with the game\'s instruments (and yours). For an audio song, the loop points say what repeats. For a MIDI file, give each channel an instrument (the channel numbers are the ones your editor shows, 1 to 16). To keep one of the game\'s own songs and only change an instrument, replace it and tick "keep the notes".' },
+        instrument: { label: 'Instruments', rom: 'instrument', exts: '.ogg,.wav', hint: 'What a MIDI song is played with. A sample (Ogg or WAV) at a root note: a note speeds it up or slows it down from there. With a loop a held note repeats that stretch; without one the sample plays once. Several samples (zones) can each cover the notes up to their top note.' },
+        drum: { label: 'Drums', rom: 'drum', exts: '.ogg,.wav', hint: 'A drum: played from its start whichever note triggers it (the pitch only shifts the whole sample). Replace one of the game\'s 12 or add your own (numbers 12 and up, in the order they load).' },
+      };
+      S.au = 'sound'; S.auEdit = null; S.auZones = []; S.auZ = 0; S.auFile = null; S.auBufs = new Map();
+      let actx = null, asrc = null;
+      const audioCtx = () => actx || (actx = new (window.AudioContext || window.webkitAudioContext)());
+      const extOf = n => ((/\.[A-Za-z0-9]+$/.exec(n || '') || [''])[0] || '').toLowerCase();
+      const isMidi = n => ['.mid', '.midi'].includes(extOf(n));
+      async function auFileOf(src, path) { // a file of a mod (or one this session has not saved yet)
+        if (!path) return null; const k = src + '|' + path; if (S.pending[k]) return S.pending[k];
+        try { return await getFile(srcDir(src), path); } catch (e) { return null; }
+      }
+      async function auDecode(file) { const k = file.name + file.size + file.lastModified; if (S.auBufs.has(k)) return S.auBufs.get(k); const b = await audioCtx().decodeAudioData(await file.arrayBuffer()); S.auBufs.set(k, b); return b; }
+      function auStop() { if (asrc) { try { asrc.stop(); } catch (e) { /* already over */ } asrc = null; } }
+      function auPlay(buf, o) { // o: loop, ls, le (seconds), rate, gain, seconds
+        auStop(); const c = audioCtx(); if (c.state === 'suspended') c.resume();
+        const s = c.createBufferSource(), g = c.createGain(); s.buffer = buf; s.playbackRate.value = o.rate || 1; g.gain.value = o.gain === undefined ? 1 : o.gain;
+        if (o.loop && o.le > o.ls) { s.loop = true; s.loopStart = o.ls; s.loopEnd = o.le; }
+        s.connect(g); g.connect(c.destination); s.start(0, 0); if (o.seconds) s.stop(c.currentTime + o.seconds); asrc = s; s.onended = () => { if (asrc === s) asrc = null; };
+      }
+      const auNum = (v, lo, hi, label, int) => { const x = Number(v); if (v === '' || v === undefined || !Number.isFinite(x) || x < lo || x > hi || (int && !Number.isInteger(x))) throw new Error(label + ' must be ' + (int ? 'a whole number ' : 'a number ') + 'from ' + lo + ' to ' + hi + '.'); return x; };
+      const auNote = n => ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][n % 12] + (Math.floor(n / 12) - 1);
+      function auRomLabel(kind, row) {
+        const n = row.id.split('/').pop();
+        if (kind === 'sound') return `the game's sound ${n}`;
+        if (kind === 'music') return `the game's song ${n}${row.menu ? ' (menu, zone 0)' : row.zones && row.zones.length ? ' (zone ' + row.zones.join(', ') + ')' : ''}`;
+        return `the game's ${kind} ${n}${row.name ? ': ' + row.name : ''}`;
+      }
+      function auSummary(kind, r) {
+        if (!r) return '';
+        const bits = [];
+        if (r.file) bits.push(esc(r.file.split('/').pop())); else if (kind === 'music') bits.push('keeps the game\'s notes');
+        if (r.zones) bits.push(r.zones.length + ' samples');
+        if (r.volume !== undefined) bits.push(r.volume + '%');
+        if (r.pitch) bits.push('pitch ' + r.pitch);
+        if (r.root !== undefined) bits.push('root ' + r.root);
+        const lp = r.loop_start !== undefined || r.loop_end !== undefined || (r.zones || []).some(z => z.loop_start !== undefined || z.loop_end !== undefined);
+        if (lp) bits.push('loops' + (r.loop_start !== undefined || r.loop_end !== undefined ? ' ' + (r.loop_start || 0) + '–' + (r.loop_end || 'end') + ' s' : ''));
+        if (r.channels) bits.push(Object.keys(r.channels).length + ' channel(s) set');
+        return bits.join(' · ');
+      }
+      function renderAudio() {
+        const W = S.W; if (!W) { $('auRows').innerHTML = $('auForm').innerHTML = $('auTabs').innerHTML = ''; $('auCount').textContent = ''; return; }
+        const kind = S.au, rows = Object.values(W.audio[kind]).filter(r => r.added || r.replaced), ed = S.cur ? '' : 'disabled';
+        $('auCount').textContent = '(' + AUDIO_KINDS.map(k => Object.values(W.audio[k]).filter(r => r.added || r.replaced).length).join(' · ') + ')';
+        $('auTabs').innerHTML = AUDIO_KINDS.map(k => `<label class="chip"><input type="radio" name="auk" value="${k}"${k === kind ? ' checked' : ''}><span>${AU[k].label}</span></label>`).join('');
+        $('auHint').textContent = AU[kind].hint;
+        $('auRows').innerHTML = rows.map(r => {
+          const mine = r.src === S.cur, tags = (r.mods || []).map(m => `<span class="tag ${m.kind === 'add' ? 'add' : 'patch'}">${m.kind} · ${esc(m.mod)}</span>`).join('');
+          const label = r.base ? esc(auRomLabel(kind, r)) : `<b>${esc(r.id.split('/').pop())}</b>`;
+          return `<div class="row" data-id="${esc(r.id)}">${tags}<span>${label} <span class="hint">${auSummary(kind, r.rec)}</span></span>`
+            + `<button class="auP" title="Hear it">▶</button><button class="auE" ${ed}>Edit</button><button class="auD" ${ed}>${r.base ? 'Put back' : 'Delete'}</button></div>`;
+        }).join('') || '<div class="hint">None yet.</div>';
+        $('auAdd').disabled = $('auRep').disabled = !S.cur; $('auAdd').textContent = 'Add a ' + AU[kind].rom + '…'; $('auRep').textContent = 'Replace one of the game\'s…';
+        const f = S.auEdit; $('auForm').innerHTML = f && f.kind === kind ? `<div class="ch">${auFormHtml(kind, f)}<div class="row"><button id="auSave" class="primary">${f.id ? 'Save' : 'Add'}</button><button id="auCancel">Cancel</button><button id="auStopB">■ Stop</button></div></div>` : '';
+        if (f && f.kind === kind) auWire(kind, f);
+      }
+      // the form for one record. f = { kind, id (null = new), rom (the game's number, or null), rec (the fields so far) }
+      function auFormHtml(kind, f) {
+        const r = f.rec || {}, num = (id, label, v, w, step) => `<label>${label} <input id="au_${id}" type="number" step="${step || 1}" value="${v === undefined ? '' : v}" style="width:${w || 5}em"></label>`;
+        const isRom = f.rom !== null && f.rom !== undefined, info = S.W.audioInfo;
+        let h = '';
+        if (!f.id) {
+          if (isRom) { const list = kind === 'sound' ? [] : info[kind === 'music' ? 'songs' : kind + 's'] || [], rid = 'base:' + kind + '/' + f.rom; h += `<div class="row"><b>${esc(auRomLabel(kind, { id: rid, ...list.find(e => e.id === rid) }))}</b></div>`; }
+          else h += `<div class="row"><label>Name <input id="au_name" placeholder="meow" style="width:10em"></label><span class="hint">letters, digits and _ ; it becomes ${esc(S.cur)}:${kind}/name</span></div>`;
+        } else h += `<div class="row"><b>${esc(f.id)}</b></div>`;
+        const keep = kind === 'music' && isRom;
+        if (keep) h += `<div class="row"><label><input type="checkbox" id="au_keep"${f.keep ? ' checked' : ''}> keep the game's notes (only change instruments, no file)</label></div>`;
+        if (kind !== 'instrument') h += `<div class="row" id="au_filerow"><label>File <input type="file" id="au_file" accept="${AU[kind].exts}"></label> <span id="au_fname" class="hint">${esc(S.auFile ? S.auFile.name : r.file ? r.file.split('/').pop() : 'none chosen')}</span></div>`;
+        if (kind === 'sound' || kind === 'drum') h += `<div class="row">${num('volume', 'Volume %', r.volume === undefined ? 100 : r.volume, 5)}${num('pitch', 'Pitch (semitones)', r.pitch || 0, 5)}<button class="auP2">▶ Hear it</button></div>`;
+        if (kind === 'music') {
+          h += `<div id="au_audio"><div class="row">${num('volume', 'Volume %', r.volume === undefined ? 100 : r.volume, 5)}${num('pitch', 'Pitch (semitones)', r.pitch || 0, 5)}</div>
+            <div class="row">${num('ls', 'Loop from (s)', r.loop_start, 6, 0.01)}${num('le', 'to (s)', r.loop_end, 6, 0.01)}<span class="hint">empty = the whole song</span></div>
+            <canvas id="au_wave" width="360" height="80"></canvas><div class="hint">Click the picture to set where the loop starts, Shift+click where it ends.</div>
+            <div class="row"><button class="auP2">▶ Play</button><button id="au_pl">▶ Play the loop</button></div></div>
+            <div id="au_midi"><div class="hint">Instrument for each MIDI channel (as your editor numbers them). "From the file" follows the file's own program changes. A channel can also be chosen by its name in the file, like "Trumpet [i13]".</div>
+            <div id="au_ch">${[...Array(16).keys()].map(c => `<label style="display:inline-block;width:46%;margin:1px 2%">${c + 1}: <select data-c="${c + 1}">${auInstrOpts((r.channels || {})[c + 1])}</select></label>`).join('')}</div>
+            <div class="row" id="au_slides"><span class="hint">Slides (FL Studio):</span> ${[...Array(16).keys()].map(c => `<label><input type="checkbox" data-s="${c + 1}"${(r.slide_channels || []).includes(c + 1) ? ' checked' : ''}>${c + 1}</label>`).join(' ')}</div>
+            <div class="row" id="au_numrow"><label>Numbers in the file are <select id="au_numbers"><option value="gm"${r.numbers !== 'rom' ? ' selected' : ''}>General MIDI</option><option value="rom"${r.numbers === 'rom' ? ' selected' : ''}>the game&#39;s own</option></select></label></div>
+            <div class="row"><label>Programs {"40":"base:instrument/6"} <input id="au_programs" value="${esc(r.programs ? JSON.stringify(r.programs) : '')}" style="width:14em"></label></div>
+            <div class="row"><label>Drums {"36":"base:drum/1"} <input id="au_drums" value="${esc(r.drums ? JSON.stringify(r.drums) : '')}" style="width:14em"></label></div></div>`;
+        }
+        if (kind === 'instrument') {
+          h += `<div class="row"><label>Sample <select id="au_zsel">${S.auZones.map((z, i) => `<option value="${i}"${i === S.auZ ? ' selected' : ''}>${i + 1}: ${esc(z.name || 'no file')}${z.top < 127 ? ' up to ' + z.top : ''}</option>`).join('')}</select></label><button id="au_zadd">Add a sample</button><button id="au_zdel">Remove this one</button></div>
+            <div class="row"><label>File <input type="file" id="au_file" accept="${AU.instrument.exts}"></label></div>
+            <div class="row">${num('root', 'Root note', 60, 4)}<span id="au_rootn" class="hint"></span>${num('top', 'Up to note', 127, 4)}${num('volume', 'Volume %', 100, 5)}</div>
+            <div class="hint">The note the sample sounds at: 60 is middle C (C4 in most programs; FL Studio calls it C5, which is 72).</div>
+            <div class="row"><label><input type="checkbox" id="au_loop"> loop</label>${num('ls', 'from (s)', '', 6, 0.01)}${num('le', 'to (s)', '', 6, 0.01)}</div>
+            <canvas id="au_wave" width="360" height="80"></canvas><div class="hint">Click the picture to set where the loop starts, Shift+click where it ends.</div>
+            <div class="row"><button id="au_pn">▶ Play the note</button><button id="au_pl">▶ Play the loop</button></div>
+            <div class="row">${num('attack', 'Attack (s)', r.attack === undefined ? 0.005 : r.attack, 6, 0.001)}${num('decay', 'Decay (s)', r.decay || 0, 6, 0.01)}</div>
+            <div class="row">${num('sustain', 'Sustain (0 to 1)', r.sustain === undefined ? 1 : r.sustain, 5, 0.05)}${num('release', 'Release (s)', r.release === undefined ? 0.05 : r.release, 6, 0.01)}</div>`;
+        }
+        return h;
+      }
+      function auInstrOpts(sel) { // "from the file", the game's instruments, the mod instruments
+        const ins = S.W.audio.instrument, v = x => String(x);
+        const rom = Object.values(ins).filter(i => i.base).map(i => `<option value="${esc(i.id)}"${v(sel) === i.id || v(sel) === i.id.split('/').pop() ? ' selected' : ''}>${i.id.split('/').pop()}: ${esc(i.name || '')}</option>`).join('');
+        const own = Object.values(ins).filter(i => !i.base && i.added).map(i => `<option value="${esc(i.id)}"${v(sel) === i.id ? ' selected' : ''}>${esc(i.id)}</option>`).join('');
+        return `<option value="">from the file</option>${rom}${own}`;
+      }
+      // the sample the form is showing (instrument zone, or the one file of a sound / song / drum): its wave and loop numbers
+      const auCur = () => S.auFile;
+      function auDrawWave() {
+        const cv2 = $('au_wave'); if (!cv2) return; const g = cv2.getContext('2d'), w = cv2.width, h = cv2.height, c = auCur(); g.fillStyle = '#181727'; g.fillRect(0, 0, w, h);
+        if (!c || !c.buf) { g.fillStyle = '#8b90ad'; g.fillText(c && c.midi ? 'MIDI: no picture' : 'choose a file', 8, 14); return; }
+        const d = c.buf.getChannelData(0), n = d.length, dur = c.buf.duration; g.fillStyle = '#5fe08a';
+        for (let x = 0; x < w; x++) { let lo = 1, hi = -1; const a = Math.floor(x / w * n), b = Math.max(a + 1, Math.floor((x + 1) / w * n)); for (let i = a; i < b; i += Math.max(1, (b - a) >> 6)) { if (d[i] < lo) lo = d[i]; if (d[i] > hi) hi = d[i]; } g.fillRect(x, h / 2 - hi * h / 2, 1, Math.max(1, (hi - lo) * h / 2)); }
+        const ls = Number($('au_ls').value), le = Number($('au_le').value);
+        if ($('au_ls').value !== '' || $('au_le').value !== '') {
+          const x0 = ($('au_ls').value === '' ? 0 : ls) / dur * w, x1 = ($('au_le').value === '' ? dur : le) / dur * w;
+          g.fillStyle = 'rgba(255,204,77,.18)'; g.fillRect(x0, 0, Math.max(1, x1 - x0), h); g.fillStyle = '#ffcc4d'; g.fillRect(x0, 0, 1, h); g.fillRect(x1 - 1, 0, 1, h);
+        }
+      }
+      async function auSetFile(file) { // a newly chosen file for the form's current sample
+        const c = S.auFile = { file, name: file.name, midi: isMidi(file.name), buf: null, fresh: true };
+        if (!c.midi) { try { c.buf = await auDecode(file); } catch (e) { toast('That file could not be read as audio: ' + e.message); } }
+        if ($('au_fname')) $('au_fname').textContent = file.name + (c.buf ? ` (${c.buf.duration.toFixed(2)} s)` : '');
+        auShow(); auDrawWave();
+      }
+      function auShow() { // the music form shows what suits the file
+        if ($('au_audio')) { const mid = (S.auFile && S.auFile.midi) || ($('au_keep') && $('au_keep').checked); $('au_audio').style.display = mid ? 'none' : ''; $('au_midi').style.display = mid ? '' : 'none'; }
+        if ($('au_filerow') && $('au_keep')) $('au_filerow').style.display = $('au_keep').checked ? 'none' : '';
+        if ($('au_slides')) { const k = $('au_keep') && $('au_keep').checked; $('au_slides').style.display = $('au_numrow').style.display = k ? 'none' : ''; } // (a song kept as it is has no file to read slides or numbers from)
+        if ($('au_rootn')) $('au_rootn').textContent = Number.isInteger(Number($('au_root').value)) ? auNote(Number($('au_root').value)) : '';
+      }
+      function auZoneRead() { // the form's fields into the current zone
+        const z = S.auZones[S.auZ]; if (!z) return;
+        z.root = $('au_root').value; z.top = $('au_top').value; z.volume = $('au_volume').value; z.loop = $('au_loop').checked; z.ls = $('au_ls').value; z.le = $('au_le').value;
+      }
+      function auZoneShow() { const z = S.auZones[S.auZ]; if (!z) return; $('au_root').value = z.root; $('au_top').value = z.top; $('au_volume').value = z.volume; $('au_loop').checked = z.loop; $('au_ls').value = z.ls; $('au_le').value = z.le; S.auFile = z.cur || null; $('au_zsel').innerHTML = S.auZones.map((q, i) => `<option value="${i}"${i === S.auZ ? ' selected' : ''}>${i + 1}: ${esc(q.name || 'no file')}${Number(q.top) < 127 ? ' up to ' + q.top : ''}</option>`).join(''); auShow(); auDrawWave(); }
+      function auWire(kind, f) {
+        const wave = $('au_wave');
+        if (wave) {
+          const pick = ev => { const c = auCur(); if (!c || !c.buf) return; const t = (ev.offsetX / wave.clientWidth * c.buf.duration).toFixed(2); if (ev.shiftKey) { $('au_le').value = t; if (kind === 'instrument') $('au_loop').checked = true; } else { $('au_ls').value = t; if (kind === 'instrument') $('au_loop').checked = true; } auDrawWave(); };
+          wave.onmousedown = pick;
+        }
+        for (const id of ['au_ls', 'au_le']) if ($(id)) $(id).oninput = $(id).onchange = auDrawWave;
+        if ($('au_file')) $('au_file').onchange = ev => { const file = ev.target.files[0]; if (file) auSetFile(file).then(() => { if (kind === 'instrument') { const z = S.auZones[S.auZ]; z.cur = S.auFile; z.name = file.name; auZoneShow(); } }); };
+        if ($('au_keep')) $('au_keep').onchange = auShow;
+        if ($('au_root')) $('au_root').oninput = $('au_root').onchange = auShow;
+        for (const b of document.querySelectorAll('#auForm .auP2')) b.onclick = () => { const c = auCur(); if (!c || !c.buf) return toast(c && c.midi ? 'A MIDI file is played by the game, not here.' : 'Choose a file first.'); const v = id => Number(($(id) || {}).value); auPlay(c.buf, { gain: (v('au_volume') || 100) / 100, rate: Math.pow(2, (v('au_pitch') || 0) / 12) }); };
+        if ($('au_pl')) $('au_pl').onclick = () => { const c = auCur(); if (!c || !c.buf) return toast('Choose a file first.'); const ls = $('au_ls').value === '' ? 0 : Number($('au_ls').value), le = $('au_le').value === '' ? c.buf.duration : Number($('au_le').value); auPlay(c.buf, { loop: true, ls, le, seconds: Math.max(3, (le - ls) * 3), gain: (Number(($('au_volume') || {}).value) || 100) / 100 }); };
+        if ($('au_pn')) $('au_pn').onclick = () => { const c = auCur(); if (!c || !c.buf) return toast('Choose a file first.'); auPlay(c.buf, { gain: (Number($('au_volume').value) || 100) / 100, seconds: 6 }); };
+        $('auStopB').onclick = auStop;
+        if (kind === 'instrument') {
+          $('au_zsel').onchange = () => { auZoneRead(); S.auZ = Number($('au_zsel').value); auZoneShow(); };
+          $('au_zadd').onclick = () => { auZoneRead(); S.auZones.push({ name: '', cur: null, root: 60, top: 127, volume: 100, loop: false, ls: '', le: '', path: null }); S.auZ = S.auZones.length - 1; auZoneShow(); };
+          $('au_zdel').onclick = () => { if (S.auZones.length < 2) return toast('An instrument needs at least one sample.'); S.auZones.splice(S.auZ, 1); S.auZ = 0; auZoneShow(); };
+          auZoneShow();
+        } else { auShow(); auDrawWave(); }
+        $('auCancel').onclick = () => { auStop(); S.auEdit = null; renderAudio(); };
+        $('auSave').onclick = () => auSave(kind, f);
+      }
+      // open the form for a row (or a new one)
+      async function auOpen(kind, id, rom) {
+        const row = id && S.W.audio[kind][id], rec = row ? clone(row.rec || {}) : {}, foreign = !!(row && row.added && row.src !== S.cur); // another mod's: our copy gets the file too
+        S.auEdit = { kind, id: id || null, rom: rom === undefined ? null : rom, rec }; S.auFile = null; S.auZones = []; S.auZ = 0;
+        const src = row ? (row.base ? S.cur : row.src) : S.cur;
+        const load = async p => { const file = p ? await auFileOf(src, p) : null; return file ? { file, name: file.name, midi: isMidi(file.name), buf: isMidi(file.name) ? null : await auDecode(file).catch(() => null), fresh: foreign } : null; };
+        if (kind === 'instrument') {
+          const zs = rec.zones ? rec.zones : [{ file: rec.file, root: rec.root, top: rec.top, volume: rec.volume, loop_start: rec.loop_start, loop_end: rec.loop_end }];
+          for (const z of zs) {
+            const cur = await load(z.file), lp = z.loop_start !== undefined || z.loop_end !== undefined;
+            S.auZones.push({ name: z.file ? z.file.split('/').pop() : '', cur, path: z.file || null, root: z.root === undefined ? 60 : z.root, top: z.top === undefined ? 127 : z.top, volume: z.volume === undefined ? 100 : z.volume, loop: lp, ls: z.loop_start === undefined ? '' : z.loop_start, le: z.loop_end === undefined ? '' : z.loop_end });
+          }
+          if (!S.auZones.length) S.auZones.push({ name: '', cur: null, path: null, root: 60, top: 127, volume: 100, loop: false, ls: '', le: '' });
+        } else S.auFile = await load(rec.file);
+        S.auEdit.keep = !!(row && row.base && kind === 'music' && row.rec && !row.rec.file);
+        renderAudio();
+        const d = $('auPanel'); if (d) d.open = true;
+      }
+      // read the form and write the record and the files
+      function auSave(kind, f) {
+        if (!canEdit()) return;
+        const files = [], fields = {};
+        try {
+          const v = id => $(id) ? $(id).value : undefined, isRom = f.rom !== null && f.rom !== undefined, name = v('au_name');
+          if (!f.id && !isRom && !audioSlug(name)) throw new Error('Give it a name (letters and digits).');
+          const slugBase = f.id ? audioSlug(f.id.split('/').pop()) : isRom ? `${kind}${f.rom}` : audioSlug(name);
+          const place = (cur, suffix, existing) => { // a file chosen now goes into the mod; otherwise the path it has
+            if (cur && cur.fresh) { const path = `audio/${slugBase}${suffix}${extOf(cur.name)}`; files.push({ path, file: cur.file }); return path; }
+            return existing;
+          };
+          if (kind === 'instrument') {
+            auZoneRead(); const zs = [];
+            S.auZones.forEach((z, i) => {
+              const path = place(z.cur, S.auZones.length > 1 ? '_' + (i + 1) : '', z.path);
+              if (!path) throw new Error('Choose a file for sample ' + (i + 1) + '.');
+              const o = { file: path, root: auNum(z.root, 0, 127, 'The root note', true), top: auNum(z.top, 0, 127, 'The top note', true), volume: auNum(z.volume, 0, 400, 'The volume', true) };
+              if (z.loop) {
+                const s0 = z.ls === '' ? undefined : auNum(z.ls, 0, 3600, 'Loop start'), e0 = z.le === '' ? undefined : auNum(z.le, 0, 3600, 'Loop end');
+                if (s0 === undefined && e0 === undefined) o.loop_start = 0;
+                if (s0 !== undefined) o.loop_start = s0;
+                if (e0 !== undefined) { o.loop_end = e0; if ((o.loop_start || 0) >= e0) throw new Error('The loop must start before it ends.'); }
+              }
+              zs.push(o);
+            });
+            if (zs.length > 1 && new Set(zs.map(z => z.top)).size !== zs.length) throw new Error('Each sample needs its own top note.');
+            if (zs.length === 1) { const z = zs[0]; Object.assign(fields, { file: z.file, root: z.root === 60 ? undefined : z.root, top: z.top === 127 ? undefined : z.top, volume: z.volume === 100 ? undefined : z.volume, loop_start: z.loop_start, loop_end: z.loop_end, zones: undefined }); }
+            else Object.assign(fields, { zones: zs, file: undefined, root: undefined, top: undefined, volume: undefined, loop_start: undefined, loop_end: undefined });
+            const att = auNum(v('au_attack'), 0, 30, 'Attack'), dec = auNum(v('au_decay'), 0, 30, 'Decay'), sus = auNum(v('au_sustain'), 0, 1, 'Sustain'), rel = auNum(v('au_release'), 0, 30, 'Release');
+            fields.attack = att === 0.005 ? undefined : att; fields.decay = dec === 0 ? undefined : dec; fields.sustain = sus === 1 ? undefined : sus; fields.release = rel === 0.05 ? undefined : rel;
+          } else {
+            const keep = kind === 'music' && $('au_keep') && $('au_keep').checked, midiNow = kind === 'music' && (keep || (S.auFile && S.auFile.midi));
+            if (!keep) { const path = place(S.auFile, '', f.rec && f.rec.file); if (!path) throw new Error('Choose a file.'); fields.file = path; } else fields.file = undefined;
+            if (!midiNow) {
+              fields.volume = auNum(v('au_volume'), 0, 400, 'The volume', true); fields.pitch = auNum(v('au_pitch'), -48, 48, 'The pitch');
+              if (fields.volume === 100) fields.volume = undefined; if (fields.pitch === 0) fields.pitch = undefined;
+              if (kind === 'music') {
+                fields.loop_start = v('au_ls') === '' ? undefined : auNum(v('au_ls'), 0, 36000, 'Loop start'); fields.loop_end = v('au_le') === '' ? undefined : auNum(v('au_le'), 0, 36000, 'Loop end');
+                if (fields.loop_end !== undefined && (fields.loop_start || 0) >= fields.loop_end) throw new Error('The loop must start before it ends.');
+              }
+            } else {
+              fields.volume = fields.pitch = fields.loop_start = fields.loop_end = undefined;
+              const ch = {}; document.querySelectorAll('#au_ch select').forEach(s2 => { if (s2.value) ch[s2.dataset.c] = /^base:instrument\//.test(s2.value) ? Number(s2.value.split('/').pop()) : s2.value; });
+              fields.channels = Object.keys(ch).length ? ch : undefined;
+              const sl = [...document.querySelectorAll('#auForm input[data-s]:checked')].map(c => Number(c.dataset.s)); fields.slide_channels = sl.length && !keep ? sl : undefined;
+              fields.numbers = v('au_numbers') === 'rom' && !keep ? 'rom' : undefined;
+              for (const k of ['programs', 'drums']) {
+                const t = (v('au_' + k) || '').trim();
+                if (!t) fields[k] = undefined;
+                else { let o; try { o = JSON.parse(t); } catch (e) { o = null; } if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error(k + ' must look like {"40": "base:instrument/6"}.'); fields[k] = o; }
+              }
+              if (keep && !fields.channels && !fields.programs && !fields.drums) throw new Error('Set at least one channel, program or drum to change.');
+            }
+            if (kind === 'music' && !midiNow) fields.channels = fields.slide_channels = fields.numbers = fields.programs = fields.drums = undefined;
+          }
+          snap();
+          for (const x of files) writeAsset(x.path, x.file);
+          if (f.id) edAudioSet(S.recs, kind, f.id, fields);
+          else if (f.rom !== null && f.rom !== undefined) edAudioSet(S.recs, kind, romAudioId(kind, f.rom), fields);
+          else edAudioAdd(S.recs, S.W, S.cur, kind, name, fields);
+        } catch (e) { return toast(e.message); }
+        auStop(); S.auEdit = null; changed(); save(); toast('Saved.');
+      }
+      $('auTabs').onchange = ev => { S.au = ev.target.value; S.auEdit = null; auStop(); renderAudio(); };
+      $('auAdd').onclick = () => { if (!canEdit()) return; auOpen(S.au, null, null); };
+      $('auRep').onclick = () => {
+        if (!canEdit()) return; const kind = S.au, info = S.W.audioInfo, max = kind === 'sound' ? info.sounds : (info[kind === 'music' ? 'songs' : kind + 's'] || []).length;
+        const t = prompt(`Which of the game's ${kind === 'music' ? 'songs' : kind + 's'} (a number, 0 to ${max - 1})?`, '0'); if (t === null) return;
+        const n = Number(t); if (!Number.isInteger(n) || n < 0 || n >= max) return toast(`That is not one of the game's ${kind === 'music' ? 'songs' : kind + 's'}.`);
+        const id = romAudioId(kind, n), row = S.W.audio[kind][id]; if (row && row.replaced) auOpen(kind, id); else auOpen(kind, null, n);
+      };
+      $('auRows').onclick = async ev => {
+        const el = ev.target.closest('[data-id]'); if (!el) return; const id = el.dataset.id, kind = S.au, row = S.W.audio[kind][id];
+        if (ev.target.classList.contains('auE')) { if (canEdit()) auOpen(kind, id); }
+        else if (ev.target.classList.contains('auD')) { if (!canEdit()) return; snap(); edAudioDelete(S.recs, kind, id); S.auEdit = null; changed(); }
+        else if (ev.target.classList.contains('auP')) {
+          const r = row.rec || {}, path = r.file || (r.zones && r.zones[0] && r.zones[0].file); if (!path) return toast('This one has no file to play.');
+          if (isMidi(path)) return toast('A MIDI file is played by the game, not here.');
+          const file = await auFileOf(row.base ? S.cur : row.src, path); if (!file) return toast('The file is missing from the mod.');
+          try { auPlay(await auDecode(file), { gain: (r.volume === undefined ? 100 : r.volume) / 100, rate: Math.pow(2, (r.pitch || 0) / 12), seconds: 8 }); } catch (e) { toast('Could not play it: ' + e.message); }
+        }
+      };
+
       // this area: resume + music
       function renderAreaProps() {
         const a = curArea(); if (!a) return;
         $('arDig').checked = !!a.diggable; $('arDig').disabled = !S.cur;
-        $('arResume').checked = !!a.resume; $('arMusic').value = a.music === undefined || a.music === null ? '' : String(a.music);
+        $('arResume').checked = !!a.resume;
+        $('arMusic').innerHTML = `<option value="">keep current / the zone&#39;s own</option>` + [0, 1, 2, 3, 4, 5, 6, 7, 8].map(n => `<option>${n}</option>`).join('') + Object.values(S.W.audio.music).filter(r => r.added).map(r => `<option value="${esc(r.id)}">${esc(r.id)} (a mod song)</option>`).join('');
+        $('arMusic').value = a.music === undefined || a.music === null ? '' : String(a.music);
         $('arResume').disabled = $('arMusic').disabled = !S.cur;
       }
       $('arResume').onchange = () => { if (!canEdit()) return renderAreaProps(); const a = curArea(); snap(); edSetAreaField(S.recs, a.id, 'resume', $('arResume').checked); changed(); };
@@ -1938,7 +2372,7 @@
         const was = a.src === 'base' ? !!(S.base.areas[a.id] || {}).diggable : false, now = $('arDig').checked;
         edSetAreaField(S.recs, a.id, 'diggable', find(S.recs, 'area', 'add', a.id) ? now : now === was ? undefined : now); changed();
       };
-      $('arMusic').onchange = () => { if (!canEdit()) return renderAreaProps(); const a = curArea(); snap(); edSetAreaField(S.recs, a.id, 'music', $('arMusic').value === '' ? undefined : +$('arMusic').value); changed(); };
+      $('arMusic').onchange = () => { if (!canEdit()) return renderAreaProps(); const a = curArea(); snap(); const mv = $('arMusic').value; edSetAreaField(S.recs, a.id, 'music', mv === '' ? undefined : /^\d+$/.test(mv) ? +mv : mv); changed(); };
       // new area
       function fillLook() {
         const sel = $('naLook'), keep = sel.value; if (!S.W) return;

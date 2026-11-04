@@ -9,6 +9,8 @@
 #pragma once
 #include "../content/db.hpp"
 #include "../game/color_machine.hpp"
+#include "../engine/gm_map.hpp"
+#include "../engine/rom_audio.hpp"
 #include "../game/npc_anim_ids.hpp"
 #include "../loaders/png.hpp"
 #include "../loaders/sprite.hpp"
@@ -238,6 +240,67 @@ namespace gp
                 qsp.push_back(std::move(qj));
             }
         out["quest_spawns"] = qsp;
+
+        // the shops (what each can stock) and the rules that put more into them
+        json shops = json::array();
+        for (const ShopDef &sd : db.shops())
+            if (sd.id.rfind("base:", 0) == 0)
+            {
+                json its = json::array();
+                for (const ShopItem &i : sd.items)
+                    its.push_back({{"item", i.item}, {"weight", i.weight}, {"cap", i.cap}});
+                shops.push_back({{"id", sd.id}, {"area", sd.area}, {"rolls", sd.rolls}, {"items", its}});
+            }
+        out["shops"] = shops;
+        json rules = json::array();
+        for (const StockRuleDef &r : db.stockRules())
+            if (r.id.rfind("base:", 0) == 0)
+            {
+                json rj = {{"id", r.id}, {"shop", r.shop}, {"on", r.on}, {"from", r.from}};
+                if (!r.area.empty())
+                    rj["area"] = r.area;
+                if (r.quest)
+                    rj["quest"] = r.quest;
+                if (!r.modes.empty())
+                    rj["modes"] = r.modes;
+                if (!r.item.empty())
+                    rj["item"] = r.item;
+                if (!r.onlyItem.empty())
+                    rj["only_item"] = r.onlyItem;
+                if (!r.exceptItem.empty())
+                    rj["except_item"] = r.exceptItem;
+                if (r.unlessHeld)
+                    rj["unless_held"] = true;
+                if (r.unlessOffered)
+                    rj["unless_offered"] = true;
+                rules.push_back(std::move(rj));
+            }
+        out["stock_rules"] = rules;
+
+        // the ROM's sounds, for the audio panel: 96 sound effects (by number), the songs and where they play, and the instruments and drums songs are made of
+        {
+            json audio;
+            audio["sounds"] = kRomSounds;
+            json songs = json::array();
+            for (int n = 0; n < 9; ++n)
+            {
+                json zones = json::array();
+                for (int z = 0; z < 10; ++z)
+                    if (rau::zoneSong(z) == n)
+                        zones.push_back(z);
+                songs.push_back({{"id", "base:music/" + std::to_string(n)}, {"zones", zones}, {"menu", n == rau::kMenuSong}});
+            }
+            audio["songs"] = songs;
+            json ins = json::array();
+            for (int n = 0; n < gm::kRomInstruments; ++n)
+                ins.push_back({{"id", "base:instrument/" + std::to_string(n)}, {"name", gm::romInstrument(n).name}, {"gm", gm::romInstrument(n).program}});
+            audio["instruments"] = ins;
+            json drums = json::array();
+            for (int n = 0; n < gm::kRomDrums; ++n)
+                drums.push_back({{"id", "base:drum/" + std::to_string(n)}, {"name", gm::romDrum(n).name}, {"note", gm::romDrum(n).note}});
+            audio["drums"] = drums;
+            out["audio"] = audio;
+        }
 
         json texts = json::object();
         for (const auto &[id, t] : db.allTexts())

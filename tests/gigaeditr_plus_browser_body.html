@@ -27,6 +27,9 @@
     b.texts['base:text/2'] = 'Gem'; b.texts['base:text/3'] = 'Cookie';
     b.finds = [{ id: 'base:find/1', item: 'base:item/1', weight: 30 }];
     b.quest_spawns = [{ id: 'base:quest_spawn/15', quest: 15, area: 0, item: 'base:item/2', x: 10, y: 20, state: 'buried' }];
+    b.shops = [{ id: 'base:shop/10', area: 'base:area/0', rolls: 10, items: [{ cap: 5, item: 'base:item/1', weight: 60 }, { cap: 3, item: 'base:item/2', weight: 10 }] }];
+    b.stock_rules = [{ from: 'first_objective', id: 'base:stock/quest20', modes: [5], on: 'quest', quest: 20, shop: 'base:shop/10' }];
+    b.audio = { sounds: 96, songs: [0, 1, 2, 3, 4].map(n => ({ id: 'base:music/' + n, zones: n === 4 ? [0] : [], menu: n === 4 })), instruments: [{ id: 'base:instrument/6', name: 'Pizzicato Strings (second)', gm: 46 }], drums: [{ id: 'base:drum/5', name: 'Side Stick', note: 37 }] };
     b.spots = [{ id: 'base:spot/2', area: 0, item: 'base:item/2', x: 5, y: 6, state: 'ground' }];
     b.npcs = [{ id: 'base:npc/9', name: 'base:text/1', area: 0, x: 30, y: 40, stationary: false, quest_min: 17 }];
     // a tiny pets.json: one species, one palette of 4 colours, one animation of 2 frames (8x8, the colour indices 1..3)
@@ -143,6 +146,98 @@
     out.spotRec = JSON.stringify((await rd()).filter(x => x.type === 'spot'));
     out.removedShown = document.querySelectorAll('#tbRemoved .tbR').length;
     document.querySelector('#tbRemoved .tbR').click(); await until(() => S.W.tables.spot.length === 1);
+
+    // ---- Shops: change a base shop's weights and add an item, remove it; stock rules: add one, change a base one ----
+    mark('shops');
+    const tab = k => { const e = document.querySelector('#tbTabs input[value=' + k + ']'); e.click(); e.dispatchEvent(new Event('change', { bubbles: true })); };
+    tab('shop'); await until(() => S.tbl === 'shop');
+    out.shopRows = document.querySelectorAll('#tbRows [data-i]').length;
+    out.shopText = document.querySelector('#tbRows [data-i="0"]').textContent.includes('Gem');
+    document.querySelector('#tbRows [data-i="0"] .tbE').click(); await until(() => $('tf_items') && $('tf_items').querySelector('.si_w'));
+    out.shopItemLines = document.querySelectorAll('#tf_items .row').length;
+    out.shopNoAreaSelect = !$('tf_area');
+    $('tf_items').querySelector('.si_w').value = '30'; $('tf_items').querySelectorAll('.si_c')[1].value = '4';
+    $('tf_addItem').click(); await until(() => document.querySelectorAll('#tf_items .row').length === 3);
+    $('tbSave').click(); await wait(100); out.shopDup = (S.recs.find(x => x.type === 'shop') || null) === null; // the new line has no item yet: refused
+    const sels = document.querySelectorAll('#tf_items select'); sels[2].value = 'base:item/1'; // an item that is already there
+    $('tbSave').click(); await wait(100); out.shopDup2 = (S.recs.find(x => x.type === 'shop') || null) === null;
+    document.querySelector('#tf_items .row:last-child .si_x').click(); await until(() => document.querySelectorAll('#tf_items .row').length === 2);
+    $('tbSave').click(); await until(() => S.recs.some(x => x.type === 'shop'));
+    out.shopRec = JSON.stringify(S.recs.find(x => x.type === 'shop'));
+    out.shopNow = JSON.stringify(S.W.tables.shop[0].items);
+    document.querySelector('#tbRows [data-i="0"] .tbD').click(); await until(() => S.W.tables.shop.length === 0);
+    out.shopRemoved = JSON.stringify(S.recs.filter(x => x.type === 'shop'));
+    document.querySelector('#tbRemoved .tbR').click(); await until(() => S.W.tables.shop.length === 1);
+    tab('shop_stock'); await until(() => S.tbl === 'shop_stock');
+    out.stockText = document.querySelector('#tbRows [data-i="0"]').textContent;
+    $('tbAdd').click(); await until(() => $('tf_on'));
+    setv('tf_on', 'illness'); out.stockFrom = $('tf_from').value; // the form moves to the cure by itself
+    out.stockHidden = $('tf_rowArea').style.display === 'none' && $('tf_rowItem').style.display === 'none';
+    $('tbSave').click(); await until(() => S.W.tables.shop_stock.length === 2);
+    out.stockAdd = JSON.stringify(S.recs.find(x => x.type === 'shop_stock'));
+    document.querySelector('#tbRows [data-i="0"] .tbE').click(); await until(() => $('tf_quest'));
+    setv('tf_quest', '21'); $('tbSave').click(); await until(() => S.recs.some(x => x.type === 'shop_stock' && x.mode === 'patch'));
+    out.stockPatch = JSON.stringify(S.recs.find(x => x.type === 'shop_stock' && x.mode === 'patch'));
+    $('tbAdd').click(); await until(() => $('tf_on')); setv('tf_on', 'type'); setv('tf_modes', ''); $('tbSave').click(); await wait(100);
+    out.stockBadModes = S.W.tables.shop_stock.length === 2; // type rules need modes
+    $('tbCancel').click();
+    tab('find'); await until(() => S.tbl === 'find');
+
+    // ---- Sounds & music: add a sound, an instrument with a loop, replace a ROM sound, change one channel of a ROM song ----
+    mark('audio');
+    const wavFile = (secs, name) => { const rate = 22050, n = Math.floor(secs * rate), buf = new ArrayBuffer(44 + n * 2), dv = new DataView(buf), w = (o, t) => { for (let i = 0; i < t.length; i++) dv.setUint8(o + i, t.charCodeAt(i)); };
+      w(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true); dv.setUint32(24, rate, true); dv.setUint32(28, rate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); w(36, 'data'); dv.setUint32(40, n * 2, true);
+      for (let i = 0; i < n; i++) dv.setInt16(44 + i * 2, Math.round(Math.sin(i / 20) * 8000), true); return new File([buf], name || 'tone.wav', { type: 'audio/wav' }); };
+    const choose = async file => { S.auFile = null; const dt = new DataTransfer(); dt.items.add(file); $('au_file').files = dt.files; $('au_file').dispatchEvent(new Event('change', { bubbles: true })); await until(() => S.auFile && (S.auFile.buf || S.auFile.midi)); };
+    const atab = k => { const e = document.querySelector('#auTabs input[value=' + k + ']'); e.click(); e.dispatchEvent(new Event('change', { bubbles: true })); };
+    const recOf = (t, id) => JSON.stringify(S.recs.find(x => x.type === t && x.id === id));
+    const realPrompt = window.prompt;
+    out.auEmpty = S.W.audio.sound && Object.keys(S.W.audio.sound).length === 0;
+    atab('sound'); await until(() => S.au === 'sound');
+    $('auAdd').click(); await until(() => $('au_name'));
+    $('au_name').value = 'Meow!'; await choose(wavFile(0.5)); out.auDur = S.auFile.buf.duration > 0.45;
+    setv('au_volume', '150'); $('auSave').click(); await until(() => S.recs.some(x => x.type === 'sound'));
+    out.soundRec = recOf('sound', 'm:sound/meow');
+    out.audioFile = !!(await (await m.getDirectoryHandle('audio')).getFileHandle('meow.wav').catch(() => null));
+    out.soundRowText = document.querySelector('#auRows [data-id="m:sound/meow"]').textContent.includes('meow.wav');
+    // a bad number is refused and nothing is written
+    document.querySelector('#auRows [data-id="m:sound/meow"] .auE').click(); await until(() => $('au_volume'));
+    $('au_volume').value = '999'; $('auSave').click(); await wait(100); out.soundBadVol = JSON.parse(recOf('sound', 'm:sound/meow')).volume === 150;
+    $('auCancel').click();
+    // the instrument: a loop picked on the wave, a root note, an envelope
+    atab('instrument'); await until(() => S.au === 'instrument');
+    $('auAdd').click(); await until(() => $('au_name')); $('au_name').value = 'harp'; await choose(wavFile(1, 'harp.wav'));
+    const wv = $('au_wave'), rc = wv.getBoundingClientRect(), click = (f, shift) => wv.dispatchEvent(new MouseEvent('mousedown', { clientX: rc.left + rc.width * f, clientY: rc.top + 5, shiftKey: !!shift, bubbles: true }));
+    click(0.25); click(0.75, true);
+    out.loopBoxes = [$('au_ls').value, $('au_le').value, $('au_loop').checked];
+    setv('au_root', '62'); setv('au_attack', '0.01'); out.rootName = $('au_rootn').textContent;
+    $('auSave').click(); await until(() => S.recs.some(x => x.type === 'instrument'));
+    out.instRec = recOf('instrument', 'm:instrument/harp');
+    out.instRow = document.querySelector('#auRows [data-id="m:instrument/harp"]').textContent.includes('loops');
+    // a second sample makes zones; the same top note twice is refused
+    document.querySelector('#auRows [data-id="m:instrument/harp"] .auE').click(); await until(() => $('au_zadd'));
+    $('au_zadd').click(); await until(() => S.auZones.length === 2); await choose(wavFile(0.5, 'hi.wav')); S.auZones[1].cur = S.auFile; S.auZones[1].name = 'hi.wav';
+    $('auSave').click(); await wait(150); out.zonesDup = JSON.parse(recOf('instrument', 'm:instrument/harp')).zones === undefined;
+    setv('au_top', '60'); $('auSave').click(); await until(() => (S.recs.find(x => x.type === 'instrument') || {}).zones);
+    out.zonesRec = recOf('instrument', 'm:instrument/harp');
+    // replace one of the game's sounds, then put it back
+    atab('sound'); await until(() => S.au === 'sound'); window.prompt = () => '84'; $('auRep').click(); await until(() => $('au_file')); await choose(wavFile(0.3, 'pop.wav')); $('auSave').click();
+    await until(() => S.recs.some(x => x.id === 'base:sound/84')); out.replRec = recOf('sound', 'base:sound/84');
+    out.replText = document.querySelector('#auRows [data-id="base:sound/84"]').textContent.includes('game');
+    window.prompt = () => '999'; $('auRep').click(); await wait(80); out.replBad = !S.recs.some(x => x.id === 'base:sound/999');
+    document.querySelector('#auRows [data-id="base:sound/84"] .auD').click(); await until(() => !S.recs.some(x => x.id === 'base:sound/84'));
+    // a ROM song kept as it is, one channel on the new instrument
+    atab('music'); await until(() => S.au === 'music'); window.prompt = () => '4'; $('auRep').click(); await until(() => $('au_keep'));
+    out.keepTitle = document.querySelector('#auForm').textContent.includes('song 4');
+    $('au_keep').checked = true; $('au_keep').dispatchEvent(new Event('change')); $('auSave').click(); await wait(100); out.keepEmpty = !S.recs.some(x => x.type === 'music'); // nothing to change: refused
+    document.querySelector('#au_ch select[data-c="1"]').value = 'm:instrument/harp'; document.querySelector('#auForm input[data-s="3"]').checked = true; $('auSave').click();
+    await until(() => S.recs.some(x => x.type === 'music')); out.songRec = recOf('music', 'base:music/4');
+    out.songText = document.querySelector('#auRows [data-id="base:music/4"]').textContent.includes('keeps the game');
+    window.prompt = realPrompt;
+    // drums
+    atab('drum'); await until(() => S.au === 'drum'); $('auAdd').click(); await until(() => $('au_name')); $('au_name').value = 'clap'; await choose(wavFile(0.2, 'clap.wav')); setv('au_pitch', '-2'); $('auSave').click();
+    await until(() => S.recs.some(x => x.type === 'drum')); out.drumRec = recOf('drum', 'm:drum/clap');
+    window.prompt = () => '24x24';
 
     // ---- an NPC's quest window, the area's diggable box, an object's scene ----
     mark('npc');
