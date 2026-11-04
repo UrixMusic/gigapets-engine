@@ -709,9 +709,9 @@ namespace gp
         {
             if (rec.contains("music") && rec["music"].is_string())
             {
-                const int n = modSongNumber(rec["music"].get<std::string>());
-                if (n < 0)
-                    return why = "'music' names no music record: '" + rec["music"].get<std::string>() + "'", false;
+                const int n = songNumberOf(rec["music"].get<std::string>()); // "base:music/ufo", a number's id, or a mod's music record
+                if (n < 0 || (n < kModMusicBase && n > 8))
+                    return why = "'music' names no song or music record: '" + rec["music"].get<std::string>() + "'", false;
                 out = n;
                 return true;
             }
@@ -2510,10 +2510,9 @@ namespace gp
             size_t existing = mine.size();
             if (id.rfind(prefix, 0) == 0)
             {
-                char *end = nullptr;
-                const long n = std::strtol(id.c_str() + prefix.size(), &end, 10);
-                if (mode != "replace" || id.size() == prefix.size() || *end || n < 0 || n >= (music ? kRomSongs : kRomSounds))
-                    return err(rep, file, m.id, "'" + id + "': the ROM's " + kind + "s are replaced with mode 'replace' and an id like '" + prefix + "84' (0 to " +
+                const long n = music ? romSongNumber(id) : romSoundNumber(id); // a number or a name: "base:sound/84", "base:sound/kaboing"
+                if (mode != "replace" || n < 0)
+                    return err(rep, file, m.id, "'" + id + "': the ROM's " + kind + "s are replaced with mode 'replace' and an id like '" + prefix + (music ? "ufo" : "kaboing") + "' or '" + prefix + "84' (0 to " +
                                                     std::to_string((music ? kRomSongs : kRomSounds) - 1) + ")");
                 romNumber = int(n);
             }
@@ -2759,7 +2758,7 @@ namespace gp
             if (kind == 2 && v.is_string())
             {
                 const std::string s = v.get<std::string>();
-                const int n = modSoundNumber(s);
+                const int n = soundNumberOf(s); // "base:sound/kaboing" or a mod's sound
                 if (n < 0)
                     return why = "no sound '" + s + "'", false;
                 out = n;

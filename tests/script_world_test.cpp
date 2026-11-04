@@ -18,6 +18,8 @@ struct Fake
 {
     int x = 100, y = 200, lock = 0, shakes = 0, lastReact = -1, trips = 0;
     bool inRoom = false, busy = false;
+    int w = 448, h = 288;
+    std::string lastObj, lastType;
     std::string area = "base:area/0", tripArea;
     int tripX = 0, tripY = 0;
     void wire(gp::ScriptApi &a)
@@ -30,6 +32,9 @@ struct Fake
         a.travel = [this](const std::string &id, int px, int py) { if (id.rfind("nope", 0) == 0) return false; ++trips; tripArea = id; tripX = px; tripY = py; return true; };
         a.currentArea = [this] { return area; };
         a.cameraShake = [this] { ++shakes; };
+        a.walkable = [this](int px, int py) { return !inRoom && px >= 32 && py >= 32 && px < w - 32 && py < h - 32; }; // a floor with a wall of one tile round it
+        a.setObjectType = [this](const std::string &id, const std::string &type) { if (id != "m:obj/s1" || type.rfind("nope", 0) == 0) return false; lastObj = id; lastType = type; return true; };
+        a.areaSize = [this](int &aw, int &ah) { if (inRoom) return false; aw = w; ah = h; return true; };
     }
 };
 
@@ -82,10 +87,40 @@ int main()
     CHECK(h.runString("m", "assert(seen.z == true and seen.left == true and seen.hz == false and seen.hleft == true and seen.hup == false and seen.tick == 7)"));
     CHECK(h.fireAreaTick("m:area/t", 8)); // with no keys given they are all false
     CHECK(h.runString("m", "assert(seen.z == false and seen.hleft == false)"));
+    // area.walkable / area.size
+    CHECK(h.runString("m", "assert(area.walkable(100, 100) == true and area.walkable(10, 100) == false and area.walkable(100, 280) == false); local w, hh = area.size(); assert(w == 448 and hh == 288)"));
+    CHECK(h.runString("m", "assert(area.walkable(5000000, 0) == false)")); // far outside: no, and no error
+    CHECK(!h.runString("m", "area.walkable(1.5, 2)"));
+    f.inRoom = true;
+    CHECK(h.runString("m", "assert(area.walkable(100, 100) == false and area.size() == nil)"));
+    f.inRoom = false;
+    CHECK(h.runString("m", "assert(object.setType('m:obj/s1', 'm:objtype/hit') == true and object.setType('m:obj/zz', 'm:objtype/hit') == false and object.setType('m:obj/s1', 'nope:objtype/x') == false and object.setType('bad id,', 'm:objtype/hit') == false)") && f.lastObj == "m:obj/s1" && f.lastType == "m:objtype/hit");
+    { // the HUD: Game.hooks().onHud(g) and Area.hooks(id).onHud(g) draw over the world, the game's first; g.clear is for scenes only
+        gp::ScriptHost hh;
+        CHECK(hh.runString("m", R"(
+            local G = Game.hooks()
+            function G:onHud(g) g.rect(1, 2, 30, 4, {255, 0, 0}) end
+            local A = Area.hooks('m:area/t')
+            function A:onHud(g) g.num(7, 10, 20); g.text('m:str/x', 5, 6); g.sprite('m:anim/heart', 8, 9) end
+            local B = Area.hooks('m:area/clear')
+            function B:onHud(g) g.clear({0, 0, 0}) end
+            )"));
+        const std::vector<gp::DrawCmd> &cmds = hh.drawHud("m:area/t");
+        CHECK(cmds.size() == 4 && cmds[0].kind == gp::DrawCmd::Kind::Rect && cmds[0].w == 30 && cmds[1].kind == gp::DrawCmd::Kind::Num && cmds[1].num == 7 &&
+              cmds[2].kind == gp::DrawCmd::Kind::Text && cmds[3].kind == gp::DrawCmd::Kind::Sprite && cmds[3].str == "m:anim/heart");
+        CHECK(hh.drawHud("m:area/other").size() == 1);       // only the game's
+        CHECK(hh.drawHud("m:area/clear").size() == 1);       // g.clear failed (it would wipe the game): the hook is switched off, the game's rect is still drawn
+        CHECK(!hh.errors().empty());
+        CHECK(hh.runString("m", "local ok = pcall(function() local x = rect end)")); // (the sandbox is unchanged)
+        gp::ScriptHost none;
+        CHECK(none.drawHud("m:area/t").empty()); // nothing hooked: nothing drawn
+        CHECK(!none.runString("m", "g.rect(1, 1, 1, 1, {0,0,0})")); // draw calls only exist inside onHud / onDraw
+    }
     { // with nothing wired the calls are harmless
         gp::ScriptHost h2;
         CHECK(h2.runString("m", "assert(player.pos() == nil and player.setPos(1, 2) == false and player.react('happy') == false and area.go('a:b', 1, 2) == false and area.current() == '')"));
         CHECK(h2.runString("m", "player.lock(); player.unlock(); camera.shake()"));
+        CHECK(h2.runString("m", "assert(area.walkable(1, 1) == false and area.size() == nil and object.setType('a', 'b') == false)"));
     }
     std::printf(fails ? "script_world_test: %d failure(s)\n" : "script_world_test: all passed\n", fails);
     return fails ? 1 : 0;

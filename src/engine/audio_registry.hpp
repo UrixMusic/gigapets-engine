@@ -7,6 +7,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include "audio_names.hpp" // "base:sound/kaboing" for 91, "base:music/ufo" for 8
 
 namespace gp
 {
@@ -174,6 +175,18 @@ namespace gp
         for (const ModInstrument &i : audioRegistry().instruments)
             t[i.id] = i.program;
         return t;
+    }
+
+    // The number an id names, whoever made it: the ROM's ("base:sound/91" or "base:sound/kaboing"; "base:music/8" or "base:music/ufo") or a mod's. -1 if none.
+    inline int soundNumberOf(const std::string &id)
+    {
+        const int r = romSoundNumber(id);
+        return r >= 0 ? r : modSoundNumber(id);
+    }
+    inline int songNumberOf(const std::string &id)
+    {
+        const int r = romSongNumber(id);
+        return r >= 0 ? r : modSongNumber(id);
     }
 
     // The file a sound number plays instead of the ROM's, or null (the ROM's own sound).

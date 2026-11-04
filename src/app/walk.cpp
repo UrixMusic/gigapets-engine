@@ -4755,6 +4755,13 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     cur->runtime->updateVisible(camNowX(), camNowY(), W, H);
                 return ok;
             };
+            sapi.setObjectType = [&](const std::string &id, const std::string &type)
+            {
+                const bool ok = cur->runtime->setObjectType(id, type);
+                if (ok)
+                    cur->runtime->updateVisible(camNowX(), camNowY(), W, H);
+                return ok;
+            };
             sapi.removeObject = [&](const std::string &id)
             {
                 const bool ok = cur->runtime->removeObject(id);
@@ -5125,6 +5132,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 return pendingExit.has_value();
             };
             wapi.currentArea = [&] { return cur->def->id; };
+            wapi.walkable = [&](int x, int y) { return !room && x >= 0 && y >= 0 && x < cur->def->widthPx() && y < cur->def->heightPx() && world->tileWalkable(x, y) && world->inRoom(x, y) && !world->objectBlocks(x, y); };
+            wapi.areaSize = [&](int &w, int &h) { if (room) return false; w = cur->def->widthPx(); h = cur->def->heightPx(); return true; };
             wapi.cameraShake = [&] { cameraShake.start(); };
         }
         { // shop.*: the stock lives here, so the callbacks do too
@@ -5281,6 +5290,85 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         // What pressing Z on an object does (well, tent, signs, minigames, the onInteract script seam): walk_interactions.hpp.
         // Needs `minigames`, so it is built here rather than next to `svc`.
         walk::Interactions interactions(svc, minigames);
+
+        // The drawing calls a script made (scene or HUD): rects, pictures, texts and numbers on the 320 x 240 screen.
+        auto drawScriptCmds = [&](const std::vector<gp::DrawCmd> &cmds)
+        {
+            for (const gp::DrawCmd &c : cmds)
+            {
+                SDL_SetRenderDrawBlendMode(ren, c.a < 255 ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE);
+                SDL_SetRenderDrawColor(ren, Uint8(c.r), Uint8(c.g), Uint8(c.b), Uint8(c.a));
+                switch (c.kind)
+                {
+                case gp::DrawCmd::Kind::Clear:
+                {
+                    const SDL_Rect all{0, 0, gp::kLogicalW, gp::kLogicalH};
+                    SDL_RenderFillRect(ren, &all);
+                    break;
+                }
+                case gp::DrawCmd::Kind::Rect:
+                {
+                    const SDL_Rect r{c.x, c.y, c.w, c.h};
+                    c.fill ? SDL_RenderFillRect(ren, &r) : SDL_RenderDrawRect(ren, &r);
+                    break;
+                }
+                case gp::DrawCmd::Kind::Sprite:
+                {
+                    AnimRef A = animRefById(c.str);
+                    int sprite = 0, pal = 0;
+                    if (!A.size() && std::sscanf(c.str.c_str(), "base:sprite/%x@%x", &sprite, &pal) == 2) // a game picture: brought in on first use
+                    {
+                        try
+                        {
+                            gp::importUiSprite(db, rom, sprite, pal);
+                        }
+                        catch (const std::exception &)
+                        {
+                        }
+                        A = animRefById(c.str);
+                    }
+                    if (!A.size())
+                    {
+                        static std::set<gp::Id> warnedScene;
+                        if (warnedScene.insert(c.str).second)
+                            std::fprintf(stderr, "scene: no picture '%s'\n", c.str.c_str());
+                        break;
+                    }
+                    const size_t fi = size_t(c.frame) % A.size();
+                    const gp::SpriteFrame &f = A.anim->frames[fi];
+                    const SDL_FRect r{float(c.x - f.anchorX + f.dx), float(c.y - f.anchorY + f.dy), float(f.w), float(f.h)};
+                    SDL_RenderCopyExF(ren, (*A.tex)[fi], nullptr, &r, 0.0, nullptr, c.flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+                    break;
+                }
+                case gp::DrawCmd::Kind::Text:
+                case gp::DrawCmd::Kind::Num:
+                {
+                    std::string str;
+                    if (c.kind == gp::DrawCmd::Kind::Num)
+                    {
+                        char b[40];
+                        if (c.num == std::floor(c.num) && std::fabs(c.num) < 1e15)
+                            std::snprintf(b, sizeof b, "%lld", static_cast<long long>(c.num));
+                        else
+                            std::snprintf(b, sizeof b, "%g", c.num);
+                        str = b;
+                    }
+                    else
+                        str = gp::fillTemplateVars(gp::fmtAll(db.textOr(c.str, "?"), player.name), c.vars);
+                    const gp::Align al = c.align == 1 ? gp::Align::Center : c.align == 2 ? gp::Align::Right : gp::Align::Left;
+                    int bx = c.x, bw = c.width;
+                    if (bw == 0) // no box given: the text is placed around x
+                    {
+                        bw = gp::kLogicalW;
+                        bx = c.align == 1 ? c.x - bw / 2 : c.align == 2 ? c.x - bw : c.x;
+                    }
+                    (c.font == 3 ? swiftTitle : text).draw(str, bx, c.y, bw, al);
+                    break;
+                }
+                }
+            }
+            SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+        };
 
         while (running)
         {
@@ -6638,6 +6726,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                           gp::Align::Right);
                 text.setYShift(0.f);
             }
+            if (!sceneActive && !room)
+                drawScriptCmds(scripts.drawHud(cur->def->id)); // a mod's HUD (Game / Area onHud)
             if (dialogue.open())
                 drawDialogue(*dialogue.box);
             minigames.draw(renderAlpha);
@@ -6645,79 +6735,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             {
                 // a mod's scene: the whole 320 x 240 screen is its own (drawing calls are the script's list; see DrawCmd)
                 gp::clearFrame(ren);
-                for (const gp::DrawCmd &c : scripts.drawScene())
-                {
-                    SDL_SetRenderDrawBlendMode(ren, c.a < 255 ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE);
-                    SDL_SetRenderDrawColor(ren, Uint8(c.r), Uint8(c.g), Uint8(c.b), Uint8(c.a));
-                    switch (c.kind)
-                    {
-                    case gp::DrawCmd::Kind::Clear:
-                    {
-                        const SDL_Rect all{0, 0, gp::kLogicalW, gp::kLogicalH};
-                        SDL_RenderFillRect(ren, &all);
-                        break;
-                    }
-                    case gp::DrawCmd::Kind::Rect:
-                    {
-                        const SDL_Rect r{c.x, c.y, c.w, c.h};
-                        c.fill ? SDL_RenderFillRect(ren, &r) : SDL_RenderDrawRect(ren, &r);
-                        break;
-                    }
-                    case gp::DrawCmd::Kind::Sprite:
-                    {
-                        AnimRef A = animRefById(c.str);
-                        int sprite = 0, pal = 0;
-                        if (!A.size() && std::sscanf(c.str.c_str(), "base:sprite/%x@%x", &sprite, &pal) == 2) // a game picture: brought in on first use
-                        {
-                            try
-                            {
-                                gp::importUiSprite(db, rom, sprite, pal);
-                            }
-                            catch (const std::exception &)
-                            {
-                            }
-                            A = animRefById(c.str);
-                        }
-                        if (!A.size())
-                        {
-                            static std::set<gp::Id> warnedScene;
-                            if (warnedScene.insert(c.str).second)
-                                std::fprintf(stderr, "scene: no picture '%s'\n", c.str.c_str());
-                            break;
-                        }
-                        const size_t fi = size_t(c.frame) % A.size();
-                        const gp::SpriteFrame &f = A.anim->frames[fi];
-                        const SDL_FRect r{float(c.x - f.anchorX + f.dx), float(c.y - f.anchorY + f.dy), float(f.w), float(f.h)};
-                        SDL_RenderCopyExF(ren, (*A.tex)[fi], nullptr, &r, 0.0, nullptr, c.flip ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
-                        break;
-                    }
-                    case gp::DrawCmd::Kind::Text:
-                    case gp::DrawCmd::Kind::Num:
-                    {
-                        std::string str;
-                        if (c.kind == gp::DrawCmd::Kind::Num)
-                        {
-                            char b[40];
-                            if (c.num == std::floor(c.num) && std::fabs(c.num) < 1e15)
-                                std::snprintf(b, sizeof b, "%lld", static_cast<long long>(c.num));
-                            else
-                                std::snprintf(b, sizeof b, "%g", c.num);
-                            str = b;
-                        }
-                        else
-                            str = gp::fillTemplateVars(gp::fmtAll(db.textOr(c.str, "?"), player.name), c.vars);
-                        const gp::Align al = c.align == 1 ? gp::Align::Center : c.align == 2 ? gp::Align::Right : gp::Align::Left;
-                        int bx = c.x, bw = c.width;
-                        if (bw == 0) // no box given: the text is placed around x
-                        {
-                            bw = gp::kLogicalW;
-                            bx = c.align == 1 ? c.x - bw / 2 : c.align == 2 ? c.x - bw : c.x;
-                        }
-                        (c.font == 3 ? swiftTitle : text).draw(str, bx, c.y, bw, al);
-                        break;
-                    }
-                    }
-                }
+                drawScriptCmds(scripts.drawScene());
                 SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
                 if (const char *shot = std::getenv("GP_SCENE_SHOT")) // debug: save the 20th frame of a scene as a BMP (for tests and screenshots)
                 {

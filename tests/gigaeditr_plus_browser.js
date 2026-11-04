@@ -56,6 +56,7 @@ assert.strictEqual(out.instRec, '{"type":"instrument","mode":"add","id":"m:instr
 assert(out.instRow && out.zonesDup, 'a second sample with the same top note is refused');
 assert.strictEqual(out.zonesRec, '{"type":"instrument","mode":"add","id":"m:instrument/harp","attack":0.01,"zones":[{"file":"audio/harp.wav","root":62,"top":127,"volume":100,"loop_start":0.25,"loop_end":0.75},{"file":"audio/harp_2.wav","root":60,"top":60,"volume":100}]}');
 assert.strictEqual(out.replRec, '{"type":"sound","mode":"replace","id":"base:sound/84","file":"audio/sound84.wav"}'); assert(out.replText && out.replBad);
+assert(out.replLabel && out.byName, 'a sound shows its name, and the replace dialog takes it');
 assert(out.keepTitle && out.keepEmpty, 'keeping a song\'s notes needs something to change');
 assert.strictEqual(out.songRec, '{"type":"music","mode":"replace","id":"base:music/4","channels":{"1":"m:instrument/harp"}}'); assert(out.songText);
 assert.strictEqual(out.drumRec, '{"type":"drum","mode":"add","id":"m:drum/clap","file":"audio/clap.wav","pitch":-2}');

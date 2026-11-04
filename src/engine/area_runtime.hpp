@@ -103,6 +103,21 @@ public:
         resort();
         return true;
     }
+    // Gives an object another picture: the object type it is drawn (and blocks) as. Its place, reach and id stay. False if there is no such object or type.
+    bool setObjectType(const Id& obj, const Id& type) {
+        const ObjectType* ot = db_.objectType(type);
+        if (!ot) return false;
+        ObjectDef* o = ownedCopy(obj);
+        if (!o) return false;
+        o->type = type;
+        if (ot->hasArt) { // the box the art covers, for the cull
+            o->boxLeft = o->x - ot->art.anchorX + ot->art.dx;
+            o->boxTop = o->y - ot->art.anchorY + ot->art.dy;
+            o->boxRight = o->boxLeft + ot->art.w;
+            o->boxBottom = o->boxTop + ot->art.h;
+        }
+        return true;
+    }
     // Takes an object out of the area (it is not drawn, blocks nothing, cannot be used). False if there is no such object.
     bool removeObject(const Id& obj) {
         const int i = find(obj);

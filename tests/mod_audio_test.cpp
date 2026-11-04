@@ -70,6 +70,8 @@ int main()
  {"type":"sound","mode":"replace","id":"base:sound/84","file":"audio/a.wav","volume":50},
  {"type":"music","mode":"add","id":"snd:music/theme","file":"audio/a.wav","loop_start":0.25,"loop_end":1.5},
  {"type":"music","mode":"replace","id":"base:music/4","file":"audio/a.wav","pitch":12},
+ {"type":"sound","mode":"replace","id":"base:sound/kaboing","file":"audio/a.wav","volume":60},
+ {"type":"music","mode":"replace","id":"base:music/ufo","file":"audio/a.wav"},
  {"type":"sound","mode":"replace","id":"snd:sound/bark","volume":80},
  {"type":"music","mode":"add","id":"snd:music/midi","file":"audio/m.mid","programs":{"40":9},"drums":{"36":5},"numbers":"rom","slide_channels":[1,3],"channels":{"1":4,"16":13},"loop_end":0.5},
  {"type":"anim","mode":"add","id":"snd:anim/a","frames":[]},
@@ -85,7 +87,8 @@ int main()
     CHECK(mentions(rep.errors, "snd:anim/a"));
 
     const AudioRegistry &reg = audioRegistry();
-    CHECK(reg.sounds.size() == 2 && reg.songs.size() == 2 && reg.soundOver.size() == 1 && reg.songOver.size() == 1);
+    CHECK(reg.sounds.size() == 2 && reg.songs.size() == 2 && reg.soundOver.size() == 2 && reg.songOver.size() == 2);
+    CHECK(reg.soundOver.count(91) && reg.soundOver.at(91).gain == 0.6f && reg.songOver.count(8)); // replaced by name: "base:sound/kaboing" is 91, "base:music/ufo" is 8
     const int meow = modSoundNumber("snd:sound/meow"), bark = modSoundNumber("snd:sound/bark");
     CHECK(meow == kModSoundBase && bark == kModSoundBase + 1 && modSongNumber("snd:music/theme") == kModMusicBase);
     CHECK(reg.sounds[0].gain == 1.5f && reg.sounds[0].semitones == -3.5 && reg.sounds[0].path.find("a.wav") != std::string::npos);

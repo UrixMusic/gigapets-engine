@@ -9,6 +9,7 @@
 #pragma once
 #include "../content/db.hpp"
 #include "../game/color_machine.hpp"
+#include "../engine/audio_names.hpp"
 #include "../engine/gm_map.hpp"
 #include "../engine/rom_audio.hpp"
 #include "../game/npc_anim_ids.hpp"
@@ -281,6 +282,13 @@ namespace gp
         {
             json audio;
             audio["sounds"] = kRomSounds;
+            json sn = json::object();
+            {
+                int c = 0;
+                for (const AudioName *e = soundNames(c); c-- > 0; ++e)
+                    sn[std::to_string(e->number)] = e->name;
+            }
+            audio["sound_names"] = sn; // number -> name, for the ones that have one
             json songs = json::array();
             for (int n = 0; n < 9; ++n)
             {
@@ -288,7 +296,7 @@ namespace gp
                 for (int z = 0; z < 10; ++z)
                     if (rau::zoneSong(z) == n)
                         zones.push_back(z);
-                songs.push_back({{"id", "base:music/" + std::to_string(n)}, {"zones", zones}, {"menu", n == rau::kMenuSong}});
+                songs.push_back({{"id", "base:music/" + std::to_string(n)}, {"name", songNameOf(n)}, {"zones", zones}, {"menu", n == rau::kMenuSong}});
             }
             audio["songs"] = songs;
             json ins = json::array();

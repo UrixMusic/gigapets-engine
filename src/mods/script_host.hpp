@@ -71,6 +71,9 @@ namespace gp
         std::function<bool(int kind)> petReact;
         std::function<bool(const std::string &area, int x, int y)> travel;
         std::function<std::string()> currentArea;
+        // area.walkable(x, y): could the pet stand there (the ground, objects and the area's edge)? area.size(): the area's width and height in pixels.
+        std::function<bool(int x, int y)> walkable;
+        std::function<bool(int &w, int &h)> areaSize;
         std::function<void()> cameraShake;
         // Shop stock (shop.stock / add / remove / restock). A shop is named by its shop id ("base:shop/10") or by its area's id ("base:area/10"). The
         // host has already checked the characters of the ids. shopStock fills `out` with the shop's entries (false = no such shop); shopAdd puts the item
@@ -99,6 +102,7 @@ namespace gp
         std::function<bool(const std::string &id, const std::string &objtype, int x, int y, int reachX, int reachY)> spawnObject;
         std::function<bool(const std::string &id, int x, int y)> moveObject;
         std::function<bool(const std::string &id)> removeObject;
+        std::function<bool(const std::string &id, const std::string &objtype)> setObjectType; // object.setType: the object is drawn as another type; false for an unknown object or type
         std::function<bool(const std::string &npc, int x, int y)> spawnNpc;
         std::function<bool(const std::string &npc, int x, int y)> moveNpc;
         std::function<bool(const std::string &npc)> removeNpc;
@@ -235,6 +239,7 @@ namespace gp
             bind("object", "spawn", l_oSpawn);
             bind("object", "move", l_oMove);
             bind("object", "remove", l_oRemove);
+            bind("object", "setType", l_oSetType);
             bind("npc", "spawn", l_nSpawn);
             bind("npc", "move", l_nMove);
             bind("npc", "remove", l_nRemove);
@@ -265,6 +270,8 @@ namespace gp
             bind("player", "react", l_petReact);
             bind("area", "go", l_areaGo);
             bind("area", "current", l_areaCurrent);
+            bind("area", "walkable", l_areaWalkable);
+            bind("area", "size", l_areaSize);
             bind("camera", "shake", l_camShake);
             bind("shop", "stock", l_shopStock);
             bind("shop", "add", l_shopAdd);
@@ -452,9 +459,9 @@ namespace gp
                 return {"onOpen", "onTick", "onDraw"};
             case 'G':
                 return {"onQuestComplete", "onEnterArea", "onLoad", "onSave", "onBeforeDig", "onAfterDig", "onBeforePickup", "onAfterPickup",
-                        "onBeforeBuy", "onAfterBuy", "onBeforeExit", "onStatChange", "onBefriend", "onQuestAccept", "onQuestDecline", "onBeforeItemUse", "onSceneClose"};
+                        "onBeforeBuy", "onAfterBuy", "onBeforeExit", "onStatChange", "onBefriend", "onQuestAccept", "onQuestDecline", "onBeforeItemUse", "onSceneClose", "onHud"};
             default:
-                return {"onInteract", "onEnter", "onLeave", "onTick"};
+                return {"onInteract", "onEnter", "onLeave", "onTick", "onHud"};
             }
         }
 
@@ -735,6 +742,29 @@ namespace gp
             checkSceneFailed("onDraw");
             return sceneCmds_;
         }
+        // The HUD a mod draws over the walking world: Game.hooks().onHud(g) and Area.hooks(areaId).onHud(g), every frame, with the same drawing calls as a scene
+        // (g.rect / sprite / text / num; not g.clear). The list is what they drew, in order (the area's after the game's).
+        const std::vector<DrawCmd> &drawHud(const std::string &areaId)
+        {
+            sceneCmds_.clear();
+            if (!L_ || (gameHooks_.find("") == gameHooks_.end() && areaHooks_.find(areaId) == areaHooks_.end()))
+                return sceneCmds_;
+            auto fns = [&]
+            {
+                const std::pair<const char *, lua_CFunction> list[] = {{"clear", l_gClear}, {"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}};
+                for (const auto &[name, f] : list)
+                {
+                    lua_pushlightuserdata(L_, this);
+                    lua_pushcclosure(L_, f, 1);
+                    lua_setfield(L_, -2, name);
+                }
+            };
+            drawing_ = hud_ = true;
+            runHook(gameHooks_, 'G', "", "onHud", fns, nullptr);
+            runHook(areaHooks_, 'A', areaId, "onHud", fns, nullptr);
+            drawing_ = hud_ = false;
+            return sceneCmds_;
+        }
         // Closes the scene and fires Game.hooks().onSceneClose (ctx.scene = { id }, ctx.result = what scene.close was given).
         void endScene()
         {
@@ -971,7 +1001,7 @@ namespace gp
         bool haveNumber_ = false; // the last hook that was asked for its result returned a number
         double number_ = 0;
         // scene state
-        bool sceneOpen_ = false, closeRequested_ = false, drawing_ = false;
+        bool sceneOpen_ = false, closeRequested_ = false, drawing_ = false, hud_ = false;
         std::string sceneId_, pendingOpen_;
         long sceneTicks_ = 0;
         std::vector<DrawCmd> sceneCmds_;
@@ -1631,13 +1661,13 @@ namespace gp
             int id = 0;
             if (lua_type(L, 1) == LUA_TSTRING) // a mod's sound by its id ("mymod:sound/meow")
             {
-                id = modSoundNumber(lua_tostring(L, 1));
-                luaL_argcheck(L, id >= 0, 1, "no sound with that id (add one with a sound record)");
+                id = soundNumberOf(lua_tostring(L, 1));
+                luaL_argcheck(L, id >= 0, 1, "no sound with that id (the game's are like \"base:sound/kaboing\" or \"base:sound/91\"; add your own with a sound record)");
             }
             else
             {
                 id = int(luaL_checkinteger(L, 1));
-                luaL_argcheck(L, id >= 0 && id <= 511, 1, "a sound number from 0 to 511, or the id of a mod's sound");
+                luaL_argcheck(L, id >= 0 && id <= 511, 1, "a sound number from 0 to 511, or an id like \"base:sound/kaboing\" or a mod's sound");
             }
             const int vol = int(luaL_optinteger(L, 2, 255));
             luaL_argcheck(L, vol >= 0 && vol <= 255, 2, "a volume from 0 to 255");
@@ -1652,8 +1682,8 @@ namespace gp
             int song = -1;
             if (lua_type(L, 1) == LUA_TSTRING)
             {
-                song = modSongNumber(lua_tostring(L, 1));
-                luaL_argcheck(L, song >= 0, 1, "no music with that id (add one with a music record)");
+                song = songNumberOf(lua_tostring(L, 1));
+                luaL_argcheck(L, song >= 0, 1, "no music with that id (the game's are like \"base:music/ufo\" or \"base:music/8\"; add your own with a music record)");
             }
             else if (lua_isnumber(L, 1))
             {
@@ -1805,6 +1835,8 @@ namespace gp
         static int l_gClear(lua_State *L)
         {
             drawGuard(L);
+            if (self(L).hud_)
+                return luaL_error(L, "g.clear is for scenes: a HUD draws over the game, it cannot wipe it");
             int c[4];
             colourArg(L, 1, c);
             DrawCmd d;
@@ -2006,6 +2038,17 @@ namespace gp
             lua_pushboolean(L, h.api_.moveObject && idCharsOk(id) && h.api_.moveObject(id, x, y));
             return 1;
         }
+        // object.setType(id, objtypeId) -> true if it was done: the object is drawn as another object type from now on (a flash, a pose, a door that opens), keeping its
+        // place, reach and id. Works on the area's own objects too; the change lasts until the pet leaves the area. False for an object that is not here or a type nobody
+        // made.
+        static int l_oSetType(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            const char *type = luaL_checkstring(L, 2);
+            lua_pushboolean(L, h.api_.setObjectType && idCharsOk(id) && idCharsOk(type) && h.api_.setObjectType(id, type));
+            return 1;
+        }
         // object.remove(id) -> true if it was there. Gone until the pet leaves the area (the area's own objects come back then).
         static int l_oRemove(lua_State *L)
         {
@@ -2170,6 +2213,29 @@ namespace gp
             ScriptHost &h = self(L);
             lua_pushstring(L, h.api_.currentArea ? h.api_.currentArea().c_str() : "");
             return 1;
+        }
+        // area.walkable(x, y) -> true if the pet could stand at that spot (pixels, the feet): ground the game lets it walk on, no object in the way, inside the
+        // area. For a script that moves things itself (a boss, a bullet) and wants them to respect the walls.
+        static int l_areaWalkable(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const lua_Integer x = luaL_checkinteger(L, 1), y = luaL_checkinteger(L, 2);
+            lua_pushboolean(L, x >= -100000 && x <= 100000 && y >= -100000 && y <= 100000 && h.api_.walkable && h.api_.walkable(int(x), int(y)));
+            return 1;
+        }
+        // area.size() -> width, height of the area the pet is in, in pixels (nil when there is none).
+        static int l_areaSize(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            int w = 0, ht = 0;
+            if (!h.api_.areaSize || !h.api_.areaSize(w, ht))
+            {
+                lua_pushnil(L);
+                return 1;
+            }
+            lua_pushinteger(L, w);
+            lua_pushinteger(L, ht);
+            return 2;
         }
         // camera.shake(): the camera shake of a belly flop.
         static int l_camShake(lua_State *L)

@@ -285,6 +285,9 @@
       for (const n of B.npcs) W.npcs.push({ ...n, areaId: legacy[n.area] || null, src: 'base', mods: [] });
       W.items = (B.items || []).map(i => ({ ...i, src: 'base' }));
       W.audio = { sound: {}, music: {}, instrument: {}, drum: {} }; W.audioInfo = B.audio || { sounds: 96, songs: [], instruments: [], drums: [] };
+      AUDIO_NAMES = { sound: {}, music: {} };
+      for (const [n, name] of Object.entries(W.audioInfo.sound_names || {})) AUDIO_NAMES.sound[name] = Number(n);
+      for (const e of W.audioInfo.songs || []) if (e.name) AUDIO_NAMES.music[e.name] = Number(e.id.split('/').pop());
       for (const k of ['music', 'instrument', 'drum']) for (const e of W.audioInfo[k === 'music' ? 'songs' : k + 's'] || []) W.audio[k][e.id] = { ...e, kind: k, src: 'base', base: true, rec: null, mods: [] };
       W.tables = {}; W.removedRows = {};
       for (const k of TABLE_TYPES) { // the base game's rows; a spot or quest reward names its area by the ROM number in the export
@@ -409,14 +412,14 @@
             break;
           }
           case 'sound': case 'music': case 'instrument': case 'drum': {
-            const A = W.audio[r.type], body = {}, key = 'x:' + r.id;
+            const A = W.audio[r.type], body = {}, rid = canonAudioId(r.type, r.id), key = 'x:' + rid;
             for (const k of AUDIO_FIELDS[r.type]) if (r[k] !== undefined) body[k] = clone(r[k]);
-            let row = A[r.id];
+            let row = A[rid];
             if (mode === 'add') {
               if (row) { note(key, m.id, f.name, 'skipped', r); break; }
-              A[r.id] = { id: r.id, kind: r.type, src: m.id, added: true, rec: body, mods: [{ mod: m.id, kind: 'add' }] }; note(key, m.id, f.name, 'add', r);
+              A[rid] = { id: rid, kind: r.type, src: m.id, added: true, rec: body, mods: [{ mod: m.id, kind: 'add' }] }; note(key, m.id, f.name, 'add', r);
             } else if (mode === 'replace') {
-              if (!row && r.id.startsWith('base:')) row = A[r.id] = { id: r.id, kind: r.type, src: 'base', base: true, rec: null, mods: [] }; // a ROM sound with no entry of its own yet
+              if (!row && rid.startsWith('base:')) row = A[rid] = { id: rid, kind: r.type, src: 'base', base: true, rec: null, mods: [] }; // a ROM sound with no entry of its own yet
               if (!row) { note(key, m.id, f.name, 'skipped', r); break; }
               const diffs = []; for (const k in body) diffs.push([k, row.rec ? row.rec[k] : undefined, body[k]]);
               // the ROM's are replaced as a whole (a song record with no file only changes instruments and merges with earlier ones); a mod's own keep the fields not listed
@@ -666,13 +669,20 @@
     }
     // changes one of the mod's own records in place, or (for a ROM sound or another mod's) writes a `replace` record that carries the fields
     function edAudioSet(recs, kind, id, fields) {
-      let r = find(recs, kind, 'add', id) || find(recs, kind, 'replace', id);
-      if (!r) { r = { type: kind, mode: 'replace', id }; recs.push(r); }
+      const cid = canonAudioId(kind, id), same = (mode) => recs.find(x => x.type === kind && x.mode === mode && canonAudioId(kind, x.id) === cid);
+      let r = same('add') || same('replace');
+      if (!r) { r = { type: kind, mode: 'replace', id: cid }; recs.push(r); }
       for (const k of AUDIO_FIELDS[kind]) if (k in fields) { if (fields[k] === undefined) delete r[k]; else r[k] = fields[k]; }
       return r;
     }
     const romAudioId = (kind, n) => `base:${kind}/${n}`;
-    function edAudioDelete(recs, kind, id) { for (let i = recs.length - 1; i >= 0; i--) if (recs[i].type === kind && recs[i].id === id) recs.splice(i, 1); }
+    // "base:sound/kaboing" is "base:sound/91", "base:music/ufo" is "base:music/8" (the game accepts both; the editor's rows are keyed by the number)
+    let AUDIO_NAMES = { sound: {}, music: {} };
+    function canonAudioId(kind, id) {
+      const m = /^base:(sound|music)\/(.+)$/.exec(String(id)); if (!m || m[1] !== kind || /^[0-9]+$/.test(m[2])) return id;
+      const n = AUDIO_NAMES[kind][m[2]]; return n === undefined ? id : romAudioId(kind, n);
+    }
+    function edAudioDelete(recs, kind, id) { const cid = canonAudioId(kind, id); for (let i = recs.length - 1; i >= 0; i--) if (recs[i].type === kind && canonAudioId(kind, recs[i].id) === cid) recs.splice(i, 1); }
     // a base or mod NPC's quest window and colour (a base npc: a `replace` record with just those fields)
     function edSetNpcFields(recs, n, fields) {
       let r = find(recs, 'npc', 'add', n.id);
@@ -788,7 +798,7 @@
       if (r.mode === 'patch' && !r.shadow && !r.shadow_png) recs.splice(recs.indexOf(r), 1); // (a patch must change something)
     }
     function nextSlot(recs, W, modId, kind) { return nextId(recs, W, modId, kind).split('/e').pop(); }
-    if (typeof module !== 'undefined') module.exports = { AUDIO_KINDS, AUDIO_FIELDS, audioSlug, edAudioId, edAudioAdd, edAudioSet, edAudioDelete, romAudioId, packRGBA, unpackRGBA, fillRegion, lineCells, brushCells, rectCells, flipArr, resizeArr, colorsOf, maskFromRGBA, collisionLayer, edSetAreaLook, edSetAreaField, edAddObjTypeFull, edSetShadow, nextSlot, EDFILE, wordToRgb, wordToRgbRound, rgbToWord, paletteSet, paletteWords, edSavePalette, edDeletePalette, offeredIds, SPECIES, orderMods, buildWorld, edMoveObject, edPatchObject, edDeleteObject, edAddObject, edPaint, edSetText, edAddObjType, edMoveNpc, edDeleteNpc, edAddNpc, edNewArea, edAddExit, edRemoveExit, find, TABLES, TABLE_TYPES, edRowAdd, edRowPatch, edRowRemove, edRowRestore, edSetNpcFields, edSetObjectScene };
+    if (typeof module !== 'undefined') module.exports = { canonAudioId, AUDIO_KINDS, AUDIO_FIELDS, audioSlug, edAudioId, edAudioAdd, edAudioSet, edAudioDelete, romAudioId, packRGBA, unpackRGBA, fillRegion, lineCells, brushCells, rectCells, flipArr, resizeArr, colorsOf, maskFromRGBA, collisionLayer, edSetAreaLook, edSetAreaField, edAddObjTypeFull, edSetShadow, nextSlot, EDFILE, wordToRgb, wordToRgbRound, rgbToWord, paletteSet, paletteWords, edSavePalette, edDeletePalette, offeredIds, SPECIES, orderMods, buildWorld, edMoveObject, edPatchObject, edDeleteObject, edAddObject, edPaint, edSetText, edAddObjType, edMoveNpc, edDeleteNpc, edAddNpc, edNewArea, edAddExit, edRemoveExit, find, TABLES, TABLE_TYPES, edRowAdd, edRowPatch, edRowRemove, edRowRestore, edSetNpcFields, edSetObjectScene };
   </script>
 
   <script id="sprite">
@@ -2124,9 +2134,9 @@
       const auNum = (v, lo, hi, label, int) => { const x = Number(v); if (v === '' || v === undefined || !Number.isFinite(x) || x < lo || x > hi || (int && !Number.isInteger(x))) throw new Error(label + ' must be ' + (int ? 'a whole number ' : 'a number ') + 'from ' + lo + ' to ' + hi + '.'); return x; };
       const auNote = n => ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][n % 12] + (Math.floor(n / 12) - 1);
       function auRomLabel(kind, row) {
-        const n = row.id.split('/').pop();
-        if (kind === 'sound') return `the game's sound ${n}`;
-        if (kind === 'music') return `the game's song ${n}${row.menu ? ' (menu, zone 0)' : row.zones && row.zones.length ? ' (zone ' + row.zones.join(', ') + ')' : ''}`;
+        const n = row.id.split('/').pop(), info = S.W.audioInfo || {};
+        if (kind === 'sound') return `the game's sound ${n}${(info.sound_names || {})[n] ? ' (' + info.sound_names[n] + ')' : ''}`;
+        if (kind === 'music') return `the game's song ${n}${row.name ? ' (' + row.name + ')' : ''}${row.menu ? ' (menu, zone 0)' : row.zones && row.zones.length ? ' (zone ' + row.zones.join(', ') + ')' : ''}`;
         return `the game's ${kind} ${n}${row.name ? ': ' + row.name : ''}`;
       }
       function auSummary(kind, r) {
@@ -2341,8 +2351,9 @@
       $('auAdd').onclick = () => { if (!canEdit()) return; auOpen(S.au, null, null); };
       $('auRep').onclick = () => {
         if (!canEdit()) return; const kind = S.au, info = S.W.audioInfo, max = kind === 'sound' ? info.sounds : (info[kind === 'music' ? 'songs' : kind + 's'] || []).length;
-        const t = prompt(`Which of the game's ${kind === 'music' ? 'songs' : kind + 's'} (a number, 0 to ${max - 1})?`, '0'); if (t === null) return;
-        const n = Number(t); if (!Number.isInteger(n) || n < 0 || n >= max) return toast(`That is not one of the game's ${kind === 'music' ? 'songs' : kind + 's'}.`);
+        const t = prompt(`Which of the game's ${kind === 'music' ? 'songs' : kind + 's'} (a number, 0 to ${max - 1}${kind === 'sound' || kind === 'music' ? ', or a name like ' + (kind === 'sound' ? 'kaboing' : 'ufo') : ''})?`, '0'); if (t === null) return;
+        const named = kind === 'sound' || kind === 'music' ? canonAudioId(kind, `base:${kind}/${String(t).trim()}`) : null;
+        const n = named && named !== `base:${kind}/${String(t).trim()}` ? Number(named.split('/').pop()) : Number(t); if (!Number.isInteger(n) || n < 0 || n >= max) return toast(`That is not one of the game's ${kind === 'music' ? 'songs' : kind + 's'}.`);
         const id = romAudioId(kind, n), row = S.W.audio[kind][id]; if (row && row.replaced) auOpen(kind, id); else auOpen(kind, null, n);
       };
       $('auRows').onclick = async ev => {

@@ -81,6 +81,31 @@ int main()
                 CHECK(o->x == 6 && o->y == 7 && !o->interactive());
         CHECK(a.objects.size() == 3 && a.objects[2].x == 300 && a.objects[2].interactive()); // still as the db has it
     }
+    { // another picture for an object: its type (and the art box the cull uses) change; place, reach and id stay; the db is untouched
+        gp::ContentDB db2;
+        gp::ObjectType big;
+        big.id = "big";
+        big.hasArt = true;
+        big.art.anchorX = 20;
+        big.art.anchorY = 40;
+        big.art.dx = 2;
+        big.art.dy = -1;
+        big.art.w = 40;
+        big.art.h = 48;
+        db2.put(big);
+        gp::AreaRuntime r(db2, a);
+        CHECK(r.setObjectType("c", "big")); // an object of the area (with a reach)
+        const gp::ObjectDef *c = nullptr;
+        for (const gp::ObjectDef *o : r.objects())
+            if (o->id == "c")
+                c = o;
+        CHECK(c && c->type == "big" && c->x == 300 && c->y == 150 && c->reachX == 30 && c->interactive());
+        CHECK(c && c->boxLeft == 300 - 20 + 2 && c->boxTop == 150 - 40 - 1 && c->boxRight == c->boxLeft + 40 && c->boxBottom == c->boxTop + 48);
+        CHECK(a.objects[2].type == "t" && a.objects[2].boxLeft == 292); // the db's record is untouched
+        CHECK(!r.setObjectType("c", "nobody") && !r.setObjectType("nope", "big")); // an unknown type or object
+        const gp::ObjectDef *s2 = r.addObject(obj("s2", 50, 60));
+        CHECK(s2 && r.setObjectType("s2", "big") && r.moveObject("s2", 70, 80)); // a spawned one; the box moves with it afterwards
+    }
     { // a runtime built again starts from the db: nothing a script did is kept
         gp::AreaRuntime r(db, a);
         CHECK((order(r) == std::vector<std::string>{"b", "a", "c"}) && !r.has("s1") && r.objects()[1]->y == 100);

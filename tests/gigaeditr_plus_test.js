@@ -427,5 +427,19 @@ check('sounds, songs, instruments and drums: the ROM entries, add / replace like
   G.edAudioDelete(recs, 'instrument', iid); assert(!recs.some(r => r.id === iid));
   W = world(recs); assert(!W.audio.instrument[iid] && !W.audio.sound['base:sound/84']);
 });
+check('named ids: "base:sound/kaboing" is the game\'s sound 91 and "base:music/ufo" song 8', () => {
+  const world = recs => G.buildWorld(base, [{ id: 'm', files: [{ name: G.EDFILE, records: recs }] }]);
+  let W = world([]);
+  assert.strictEqual(W.audioInfo.sound_names['91'], 'kaboing'); assert.strictEqual(W.audio.music['base:music/8'].name, 'ufo');
+  assert.strictEqual(G.canonAudioId('sound', 'base:sound/kaboing'), 'base:sound/91'); assert.strictEqual(G.canonAudioId('sound', 'base:sound/91'), 'base:sound/91');
+  assert.strictEqual(G.canonAudioId('sound', 'base:sound/nope'), 'base:sound/nope'); assert.strictEqual(G.canonAudioId('music', 'base:music/ufo'), 'base:music/8'); assert.strictEqual(G.canonAudioId('music', 'base:sound/ufo'), 'base:sound/ufo');
+  // a hand-written named record shows up on the same row as the number
+  W = world([{ type: 'sound', mode: 'replace', id: 'base:sound/kaboing', file: 'audio/k.wav' }, { type: 'music', mode: 'replace', id: 'base:music/ufo', channels: { '1': 3 } }]);
+  assert.strictEqual(W.audio.sound['base:sound/91'].rec.file, 'audio/k.wav'); assert(W.audio.music['base:music/8'].replaced && W.audio.music['base:music/8'].rec.channels['1'] === 3);
+  // editing it changes that record, it does not write a second one; delete finds it too
+  const recs = [{ type: 'sound', mode: 'replace', id: 'base:sound/kaboing', file: 'audio/k.wav' }];
+  G.edAudioSet(recs, 'sound', 'base:sound/91', { volume: 50 }); assert.strictEqual(recs.length, 1); assert.strictEqual(recs[0].volume, 50);
+  G.edAudioDelete(recs, 'sound', 'base:sound/91'); assert.strictEqual(recs.length, 0);
+});
 if (fails) { console.error(fails + ' failed'); process.exit(1); }
 console.log('gigaeditr_plus_test: all passed');
