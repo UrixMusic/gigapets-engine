@@ -59,6 +59,19 @@ namespace gp
         // (nothing is shown). `answer(true)` for Yes, `answer(false)` for No is called when the player chooses; the host then
         // carries the waiting script on.
         std::function<bool(const std::string &textId, const SayVars &vars, std::function<void(bool)> answer)> ask;
+        // The pet in the walking world (player.pos / setPos / lock / unlock / react, area.go / current, camera.shake). getPetPos fills x, y (world pixels,
+        // the pet's feet; false when there is no pet in the world, like inside a house room). setPetPos puts it there at once (the host keeps it in the area).
+        // lockPet(what): 1 = movement, 2 = the action buttons (Z and X: no talking, digging, menus), 3 = both; unlockPet frees it (it also frees itself when
+        // the pet changes area). react plays one of the pet's reaction animations: false if it is busy or has none. travel sends the pet to an area (a base
+        // or mod area id) landing at x, y with a fade, like a door: false for an unknown area. shake is the camera shake of a belly flop.
+        std::function<bool(int &x, int &y)> getPetPos;
+        std::function<bool(int x, int y)> setPetPos;
+        std::function<void(int what)> lockPet;
+        std::function<void()> unlockPet;
+        std::function<bool(int kind)> petReact;
+        std::function<bool(const std::string &area, int x, int y)> travel;
+        std::function<std::string()> currentArea;
+        std::function<void()> cameraShake;
         // Shop stock (shop.stock / add / remove / restock). A shop is named by its shop id ("base:shop/10") or by its area's id ("base:area/10"). The
         // host has already checked the characters of the ids. shopStock fills `out` with the shop's entries (false = no such shop); shopAdd puts the item
         // in n times, as the game's own injections do (a full shop gives up its oldest entry) and returns how many went in (0 for an unknown shop or item);
@@ -245,6 +258,14 @@ namespace gp
             bind("objective", "set", l_objSet);
             bind("objective", "clear", l_objClear);
             bind("objective", "has", l_objHas);
+            bind("player", "pos", l_petPos);
+            bind("player", "setPos", l_petSetPos);
+            bind("player", "lock", l_petLock);
+            bind("player", "unlock", l_petUnlock);
+            bind("player", "react", l_petReact);
+            bind("area", "go", l_areaGo);
+            bind("area", "current", l_areaCurrent);
+            bind("camera", "shake", l_camShake);
             bind("shop", "stock", l_shopStock);
             bind("shop", "add", l_shopAdd);
             bind("shop", "remove", l_shopRemove);
@@ -776,7 +797,7 @@ namespace gp
         // ctx.area = { id }, ctx.dt = seconds per tick (1/30), ctx.tick = ticks since the game started (30 a second, counting
         // the ones skipped while a menu or dialogue was open). If the previous onTick is still
         // waiting (it called wait or ask) no new one starts, so a slow script cannot pile up. Returns true if a script ran.
-        bool fireAreaTick(const std::string &areaId, long tick)
+        bool fireAreaTick(const std::string &areaId, long tick, const SceneInput &in = SceneInput())
         {
             if (areaHooks_.find(areaId) == areaHooks_.end() || routineActive(hookKey('A', areaId, "onTick")))
                 return false;
@@ -786,8 +807,29 @@ namespace gp
                                lua_pushnumber(L_, 1.0 / 30.0);
                                lua_setfield(L_, -2, "dt");
                                lua_pushinteger(L_, tick);
-                               lua_setfield(L_, -2, "tick"); },
+                               lua_setfield(L_, -2, "tick");
+                               pushKeys(in); },
                            nullptr);
+        }
+        // ctx.input (pressed this tick) and ctx.held (down now), the same keys a scene gets
+        void pushKeys(const SceneInput &in)
+        {
+            lua_newtable(L_);
+            const std::pair<const char *, bool> keys[] = {{"z", in.z}, {"x", in.x}, {"left", in.left}, {"right", in.right}, {"up", in.up}, {"down", in.down}};
+            for (const auto &[k, v] : keys)
+            {
+                lua_pushboolean(L_, v);
+                lua_setfield(L_, -2, k);
+            }
+            lua_setfield(L_, -2, "input");
+            lua_newtable(L_);
+            const std::pair<const char *, bool> held[] = {{"z", in.heldZ}, {"x", in.heldX}, {"left", in.heldLeft}, {"right", in.heldRight}, {"up", in.heldUp}, {"down", in.heldDown}};
+            for (const auto &[k, v] : held)
+            {
+                lua_pushboolean(L_, v);
+                lua_setfield(L_, -2, k);
+            }
+            lua_setfield(L_, -2, "held");
         }
 
         // Fires Item.hooks(itemId).onItemUse: the player chose "use" on the item in the menu, before the game's own
@@ -2048,6 +2090,94 @@ namespace gp
             const char *id = luaL_checkstring(L, 1);
             lua_pushboolean(L, h.api_.hasObjective && idCharsOk(id) && h.api_.hasObjective(id));
             return 1;
+        }
+
+        // ---- the pet in the walking world ----
+        // player.pos() -> x, y (the pet's feet in the area, pixels), or nil when there is no pet in the world (a house room, a scene).
+        static int l_petPos(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            int x = 0, y = 0;
+            if (!h.api_.getPetPos || !h.api_.getPetPos(x, y))
+            {
+                lua_pushnil(L);
+                return 1;
+            }
+            lua_pushinteger(L, x);
+            lua_pushinteger(L, y);
+            return 2;
+        }
+        // player.setPos(x, y) -> true if it was done. The pet is put there at once (no walk, no fade); the game keeps it inside the area.
+        static int l_petSetPos(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const lua_Integer x = luaL_checkinteger(L, 1), y = luaL_checkinteger(L, 2);
+            if (x < -100000 || x > 100000 || y < -100000 || y > 100000)
+                return luaL_error(L, "player.setPos: the position is out of range");
+            lua_pushboolean(L, h.api_.setPetPos && h.api_.setPetPos(int(x), int(y)));
+            return 1;
+        }
+        // player.lock([what]): "move" (the pet stands still), "actions" (Z and X do nothing in the world: it cannot talk, dig or open the menu; a
+        // script reads the keys from onTick's ctx.input), or "all" (the default). player.unlock() frees it. Changing area frees it too.
+        static int l_petLock(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const std::string w = luaL_optstring(L, 1, "all");
+            if (w != "move" && w != "actions" && w != "all")
+                return luaL_argerror(L, 1, "lock what? \"move\", \"actions\" or \"all\"");
+            if (h.api_.lockPet)
+                h.api_.lockPet(w == "move" ? 1 : w == "actions" ? 2 : 3);
+            return 0;
+        }
+        static int l_petUnlock(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            if (h.api_.unlockPet)
+                h.api_.unlockPet();
+            return 0;
+        }
+        // player.react(kind) -> true if the animation started. kind: "happy", "excited", "shocked", "sad" (the pet's own reaction animations; it must not
+        // be busy with another one).
+        static int l_petReact(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            static const std::vector<std::string> names = {"happy", "excited", "shocked", "sad"};
+            const std::string k = luaL_checkstring(L, 1);
+            int kind = -1;
+            for (size_t i = 0; i < names.size(); ++i)
+                if (names[i] == k)
+                    kind = int(i);
+            if (kind < 0)
+                return luaL_argerror(L, 1, "react how? \"happy\", \"excited\", \"shocked\" or \"sad\"");
+            lua_pushboolean(L, h.api_.petReact && h.api_.petReact(kind));
+            return 1;
+        }
+        // area.go(areaId, x, y) -> true if the trip started: the screen fades out, the pet lands at x, y of that area (any area of the game or a
+        // mod's), and Area.hooks onLeave / onEnter fire as for a door. False for an unknown area or while another trip is on.
+        static int l_areaGo(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            const lua_Integer x = luaL_checkinteger(L, 2), y = luaL_checkinteger(L, 3);
+            if (x < 0 || x > 100000 || y < 0 || y > 100000)
+                return luaL_error(L, "area.go: the position is out of range");
+            lua_pushboolean(L, idCharsOk(id) && h.api_.travel && h.api_.travel(id, int(x), int(y)));
+            return 1;
+        }
+        // area.current() -> the id of the area the pet is in.
+        static int l_areaCurrent(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            lua_pushstring(L, h.api_.currentArea ? h.api_.currentArea().c_str() : "");
+            return 1;
+        }
+        // camera.shake(): the camera shake of a belly flop.
+        static int l_camShake(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            if (h.api_.cameraShake)
+                h.api_.cameraShake();
+            return 0;
         }
 
         // ---- shops ----

@@ -1708,6 +1708,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         int trickStep = 0, trickLevel = 0, questionStep = 0, questionTicks = 0, questionBubble = 0;
         gp::TrickShowcase petTrick;
         gp::CameraShake cameraShake; // the panda's belly flop
+        int scriptLock = 0;          // what a script holds the pet back from (player.lock): 1 = walking, 2 = the action buttons
         int shakeDy = 0;
         BarAnim panelAnim;
         bool panelClosing = false;
@@ -4441,7 +4442,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             enc.reset();
             encNpc = nullptr;
             const gp::TransitionDef *tr = db.transition(cur->def->id, e.toArea);
-            if (!tr)
+            if (!tr && !e.hasSpawnOverride)
             {
                 std::printf("no room-table row for %s -> %s\n", cur->def->id.c_str(), e.toArea.c_str());
                 return false;
@@ -4453,17 +4454,19 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 return false;
             }
             const gp::IPoint s = e.hasSpawnOverride ? e.spawnOverride : tr->spawn;
+            const int trFlags = tr ? tr->flags : 0; // (a trip a script asked for, area.go, has no door row)
+            scriptLock = 0;                          // a script's hold on the pet ends with the area
             std::printf("area %d -> %d, spawn (%d,%d)\n", cur->def->legacyId, next->def->legacyId, s.x, s.y);
             const int fromLegacy = cur->def->legacyId;
             const gp::Id fromId = cur->def->id;
             scripts.fireAreaLeave(fromId, next->def->id); // (the area has not changed yet)
             cur = std::move(next);
             pos = {s.x, s.y}; // before the save below, which remembers where the pet is inside a mod area
-            if ((tr->flags & 2) || db.shopForArea(cur->def->id))
+            if ((trFlags & 2) || db.shopForArea(cur->def->id))
                 enterShopStock(*cur->def); // destination is a shop
             else
             {
-                if ((tr->flags & 1) || db.shopForArea(fromId))
+                if ((trFlags & 1) || db.shopForArea(fromId))
                     pending.consumeUnflaggedForArea(fromLegacy); // leaving a shop
                 enterAreaEvents(*cur->def, e.consumeAndSpawn);
                 refreshBits();
@@ -5080,6 +5083,50 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
         walk::bindScripts(svc); // world.drop, rand.* (and later player.* / flags): walk_script_bindings.hpp
         svc.petFellIll = petFellIll;
+        { // player.pos / lock / react, area.go, camera.shake: the walking world lives here, so the callbacks do too
+            gp::ScriptApi &wapi = scripts.api();
+            wapi.getPetPos = [&](int &x, int &y)
+            {
+                if (room)
+                    return false;
+                x = int(pos.x);
+                y = int(pos.y);
+                return true;
+            };
+            wapi.setPetPos = [&](int x, int y)
+            {
+                if (room || pendingExit)
+                    return false;
+                pos = {std::clamp(x, 0, cur->def->widthPx()), std::clamp(y, 0, cur->def->heightPx())};
+                prevPos = pos; // no gliding across the map
+                return true;
+            };
+            wapi.lockPet = [&](int what) { scriptLock |= what; };
+            wapi.unlockPet = [&] { scriptLock = 0; };
+            wapi.petReact = [&](int kind)
+            {
+                if (room || pendingExit || host.pet.busy())
+                    return false;
+                static const gp::ReactAnim as[4] = {gp::ReactAnim::Positive, gp::ReactAnim::Emote, gp::ReactAnim::Shocked, gp::ReactAnim::Negative};
+                return host.pet.play(as[std::clamp(kind, 0, 3)], 1);
+            };
+            wapi.travel = [&](const std::string &area, int x, int y)
+            {
+                if (!db.area(area) || pendingExit || fade.a > 0.0 || room)
+                    return false;
+                gp::ExitDef e;
+                e.id = "script:go";
+                e.fromArea = cur->def->id;
+                e.toArea = area;
+                e.consumeAndSpawn = true;
+                e.hasSpawnOverride = true;
+                e.spawnOverride = {x, y};
+                requestGoTo(e);
+                return pendingExit.has_value();
+            };
+            wapi.currentArea = [&] { return cur->def->id; };
+            wapi.cameraShake = [&] { cameraShake.start(); };
+        }
         { // shop.*: the stock lives here, so the callbacks do too
             auto shopOf = [&](const std::string &name) -> const gp::ShopDef *
             { const gp::ShopDef *s = db.shop(name); return s ? s : db.shopForArea(name); };
@@ -5730,8 +5777,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 if (!petBusyElsewhere && gp::startsGetUp(sitNow(), rawDirs != 0, zPressed))
                     playAnim(gp::artOf(sp).sitAlt, false, 14, Pose::Special); // PlayActorReactionAnimation: one-shot at 14
                 const bool petLocked = petBusyElsewhere || gp::blocksInput(sitNow());
-                const uint8_t dirs = petLocked ? 0 : rawDirs;
-                if (xPressed && !petLocked && !bar.isOpen() && !dialogue.open() && !enc && !im.open && !pendingExit && !pendingScreen)
+                const uint8_t dirs = petLocked || (scriptLock & 1) ? 0 : rawDirs;
+                if (xPressed && !petLocked && !(scriptLock & 2) && !bar.isOpen() && !dialogue.open() && !enc && !im.open && !pendingExit && !pendingScreen)
                     pressCancelInWorld();
                 if (showNpc)
                 {
@@ -6084,7 +6131,22 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 static long scriptTicks = 0; // 30 a second, like dt and wait(); counts every tick, also the ones a menu skips
                 ++scriptTicks;
                 if (!dialogue.open() && !im.open && !statsOpen && !room && !pendingScreen)
-                    scripts.fireAreaTick(cur->def->id, scriptTicks);
+                {
+                    gp::SceneInput ain; // the keys, for a script that holds the action buttons (player.lock) and reads them itself
+                    ain.z = zPressed;
+                    ain.x = xPressed;
+                    ain.left = newlyPressed & gp::DirLeft;
+                    ain.right = newlyPressed & gp::DirRight;
+                    ain.up = newlyPressed & gp::DirUp;
+                    ain.down = newlyPressed & gp::DirDown;
+                    ain.heldZ = zDown;
+                    ain.heldX = xDown;
+                    ain.heldLeft = rawDirs & gp::DirLeft;
+                    ain.heldRight = rawDirs & gp::DirRight;
+                    ain.heldUp = rawDirs & gp::DirUp;
+                    ain.heldDown = rawDirs & gp::DirDown;
+                    scripts.fireAreaTick(cur->def->id, scriptTicks, ain);
+                }
                 // scene.open(id) from a script: open it as soon as the world is free (not in a dialogue, a menu, a house room or a talk)
                 if (!sceneActive && !dialogue.open() && !im.open && !statsOpen && !room && !pendingScreen && !pendingExit && !enc && !showNpc && barBusy == 0)
                     if (std::string sceneId; scripts.takeSceneOpen(sceneId))
@@ -6130,7 +6192,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
                 // ---- exit trigger / talk to NPC ----
                 const gp::ObjectDef *nearObj = cur->runtime->nearestInteractable(pos.x, pos.y);
-                const bool zWorld = zPressed && !petLocked && tutStep == 0;
+                const bool zWorld = zPressed && !petLocked && !(scriptLock & 2) && tutStep == 0;
                 const int curArea = cur->def->legacyId;
                 const gp::ShopEvent *shopItem = zWorld ? nearestShopItem() : nullptr;
                 const int pickIdx = (zWorld && !shopItem) ? events.nearestPrompt(curArea, pos.x, pos.y) : -1;
@@ -6837,6 +6899,22 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
                     SDL_SetRenderDrawColor(ren, 0, 0, 0, Uint8(255.0 * std::min(fade.a, 1.0)));
                     SDL_RenderFillRect(ren, nullptr);
+                }
+            }
+            if (const char *shot = std::getenv("GP_WALK_SHOT")) // debug: save frame GP_WALK_SHOT_FRAME (default the 200th) of the walking world as a BMP
+            {
+                static int walkFrames = 0;
+                const char *at = std::getenv("GP_WALK_SHOT_FRAME");
+                if (++walkFrames == (at ? std::atoi(at) : 200))
+                {
+                    int w = 0, h = 0;
+                    SDL_GetRendererOutputSize(ren, &w, &h);
+                    if (SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888))
+                    {
+                        if (SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ARGB8888, surf->pixels, surf->pitch) == 0)
+                            SDL_SaveBMP(surf, shot);
+                        SDL_FreeSurface(surf);
+                    }
                 }
             }
             SDL_RenderPresent(ren);
