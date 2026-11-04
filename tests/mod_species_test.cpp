@@ -74,7 +74,7 @@ int main()
  {"type":"species","mode":"add","id":"fox:species/fox","default_palette":99,"own_illness":4,
   "start":{"health":70,"hunger":50},"money":[10,20],"starter_items":[{"item":"base:item/173","count":2}],
   "art":{"walkUp":"fox:anim/up","walkDown":"fox:anim/down","walkSide":"fox:anim/side","idleBase":"fox:anim/idle","dig":120,
-         "bowlX":300,"facesRight":true,"voice":[1,2,3,4,5,6,7,8,9,10,11,12,13],"raisedAnims":["fox:anim/up"],
+         "bowlX":300,"facesRight":true,"loadPicture":"fox:anim/idle","loadX":10,"loadY":20,"voice":[1,2,3,4,5,6,7,8,9,10,11,12,13],"raisedAnims":["fox:anim/up"],
          "trickRules":[{"startSound":7,"startSoundDelay":1.5},{"chainReactions":[{"roll":2,"anim":"fox:anim/idle","sound":9}]}]}},
  {"type":"species","mode":"add","id":"fox:species/bigdog","based_on":"base:species/0","own_illness":8,"art":{"walkSide":"fox:anim/side","wideShadow":true}}
 ])");
@@ -103,6 +103,7 @@ int main()
         CHECK(isModAnim(a.walkUp) && modAnimName(a.walkUp) == "fox:anim/up" && isModAnim(a.idleBase) && modAnimName(a.walkSide) == "fox:anim/side");
         CHECK(a.dig == 120 && a.bowlX == 300 && a.facesRight && a.voice[0] == 1 && a.voice[12] == 13);
         CHECK(a.raisedAnims.size() == 1 && a.raisedAnims[0] == a.walkUp && a.sitDown == -1 && a.walkSideStyle == -1);
+        CHECK(a.loadPicture == a.idleBase && isModAnim(a.loadPicture) && a.loadX == 10 && a.loadY == 20 && a.loadTile == -1);
         CHECK(a.trickRules[0].startSound == 7 && a.trickRules[0].startSoundDelay == 1.5 && a.trickRules[1].chainReactions.size() == 1);
         CHECK(a.trickRules[1].chainReactions[0].sound == 9 && a.trickRules[1].chainReactions[0].anim == a.idleBase);
         CHECK(knownSpecies(fox->legacyIndex) && !knownSpecies(int(baseCount) + 2));
@@ -115,6 +116,7 @@ int main()
         const SpeciesArt &a = artOf(big->legacyIndex), &d = artOf(0);
         CHECK(a.wideShadow && !d.wideShadow && isModAnim(a.walkSide) && a.walkUp == d.walkUp && a.trickMain[0] == d.trickMain[0]);
         CHECK(a.trickRules[2].chainAnim == d.trickRules[2].chainAnim && a.bowlX == d.bowlX);
+        CHECK(a.loadTile == 0x9f0 && a.loadX == 0 && a.loadY == 0x7c && a.loadPicture == -1); // a clone keeps the base species' big picture
     }
     CHECK(artOf(0).walkSide == artOf(0).walkSide && !isModAnim(artOf(0).walkSide)); // the base species are untouched
 

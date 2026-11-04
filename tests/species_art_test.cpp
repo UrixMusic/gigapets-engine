@@ -104,6 +104,7 @@ int main()
         CHECK(d.trickIcons[0] == 0x58 && m.trickIcons[1] == 0x5a && p.trickIcons[2] == 0x57);
         CHECK(d.colorBase == 0x1df && m.colorBase == 0x29e && p.colorBase == 0x31e);
         CHECK(m.potions[2] == 0x2ab && p.potions[4] == 0x33d && d.potions[0] == 0x1df);
+        CHECK(d.loadTile == 0x9f0 && m.loadTile == 0x9f2 && p.loadTile == 0x9f3 && m.loadX == 0xcf && m.loadY == 0x45 && p.loadX == 0x1b && p.loadY == 0x29 && d.loadPicture == -1);
         CHECK(d.menuPortrait == 0x982 && p.menuPortrait == 0x984 && m.namePortrait[0] == 0x65c && p.namePortrait[2] == 0x05);
         CHECK(m.npcPortraitTile == 0x8ba && p.npcPortraitPal[2] == 0x33d && m.npcPortraitPal[0] == 0x2a2);
         CHECK(d.trickNames[0] == "base:str/trick_1_0" && p.trickNames[2] == "base:str/trick_3_2");

@@ -130,6 +130,13 @@ namespace gp
         std::string trickNames[3];        // text keys of the three tricks' names (the teacher says them)
         int kit = 0;                      // whose home furnishings it starts with (frontend.hpp starterKit): a base species, 0..2
         int menuPortrait = 0x982;         // the menu's portrait tile
+        // The big picture of the pet on the load screen. The screen's background already has the three base pets drawn on it (grey); the picture is
+        // drawn over one of them. loadPicture: an anim (its first frame is the picture, any size). loadTile: one of the ROM's own pictures (a clone of a
+        // base species keeps it). With neither, the idle art's first frame. loadSpot: which pet's place it covers (0 the dog's, bottom left, 96 x 120;
+        // 1 the monkey's, right, 113 x 171; 2 the panda's, top left, 72 x 88): the picture is scaled to fit that place (whole-number enlarging, or
+        // shrinking) and stands in its bottom middle. loadX / loadY (-1 = not set): put its top-left exactly there on the 320 x 240 screen instead,
+        // at its own size (shrunk to 120 x 176 if larger).
+        int loadPicture = -1, loadTile = -1, loadSpot = 0, loadX = -1, loadY = -1;
         int trickRepeatLo[3] = {1, 1, 1}, trickRepeatHi[3] = {1, 1, 1}; // how many times an NPC of this species repeats a trick, by level: lo..hi-1 (hi <= lo: always lo)
 
         // The animations its tricks use: per level the main, intro and closing ones and the chain's reactions, and the three single ones.
@@ -527,6 +534,10 @@ namespace gp
             }
             a.npcPortraitTile = nt[i];
             a.menuPortrait = 0x982 + i;
+            static const int lt[3] = {0x9f0, 0x9f2, 0x9f3}, lx[3] = {0, 0xcf, 0x1b}, ly[3] = {0x7c, 0x45, 0x29};
+            a.loadTile = lt[i];
+            a.loadX = lx[i];
+            a.loadY = ly[i];
         }
         a.trickRepeatLo[2] = i == 2 ? 1 : 2; a.trickRepeatHi[2] = i == 2 ? 4 : 6;
         // the tricks' extras (see TrickRules): the sounds and the follow-ups the ROM has for each species / level pair

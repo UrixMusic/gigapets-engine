@@ -180,14 +180,11 @@ inline void drawLoad(Gfx &g, int cur, bool picked, const std::string (&names)[3]
 {
     constexpr int L = 0x3000;
     static const int ys[4] = {0x80, 0x99, 0xb2, 0xcb};
-    if (cur < 3 && full[cur])
+    if (cur < 3 && full[cur] && sp[cur] >= 0 && gp::knownSpecies(sp[cur]))
     {
-        if (sp[cur] == 0)
-            g.drawTile(0x9f0, col[cur], 0, 0x7c, L, 999);
-        if (sp[cur] == 1)
-            g.drawTile(0x9f2, col[cur], 0xcf, 0x45, L, 999); // x assumed from the main menu
-        if (sp[cur] == 2)
-            g.drawTile(0x9f3, col[cur], 0x1b, 0x29, L, 999); // x assumed from the main menu
+        const gp::SpeciesArt &art = gp::artOf(sp[cur]); // the ROM's big picture (the base species, and their clones); the others are drawn by App::drawLoadPicture
+        if (art.loadPicture < 0 && art.loadTile >= 0)
+            g.drawTile(art.loadTile, col[cur], art.loadX, art.loadY, L, 999);
     }
     g.drawTile(0x9e6, 0x4c7, 0x5f, 8, L, 999);
     for (int i = 0; i < 4; ++i)
@@ -451,6 +448,36 @@ struct App
             }
         }
         return anims.emplace(key, std::move(a)).first->second;
+    }
+
+    // The load screen's big picture of a species that has no ROM tile (or a mod's own picture): the first frame of its loadPicture, else its idle art.
+    // By default it is scaled to fit the place of one of the three pets drawn on the background (loadSpot) and stands in its bottom middle; with
+    // loadX / loadY it goes at its own size with its top-left there. (gp::SpeciesArt says more.)
+    void drawLoadPicture(const gp::SpeciesArt &art, int palId)
+    {
+        if (art.loadPicture < 0 && art.loadTile >= 0)
+            return; // the ROM's picture: drawn with the rest of the screen
+        AnimTex &a = anim(art.loadPicture >= 0 ? art.loadPicture : art.idleBase, palId);
+        if (a.frames.empty() || !a.frames[0].t)
+            return;
+        const Tex &t = a.frames[0];
+        struct Spot { float x, y, w, h; };
+        static const Spot spots[3] = {{0, 124, 96, 116}, {207, 69, 113, 171}, {27, 41, 72, 88}};
+        const Spot &sp = spots[std::clamp(art.loadSpot, 0, 2)];
+        SDL_FRect r;
+        if (art.loadX >= 0 || art.loadY >= 0)
+        {
+            const float s = std::min(1.f, std::min(120.f / float(t.w), 176.f / float(t.h)));
+            r = {art.loadX >= 0 ? float(art.loadX) : 0.f, art.loadY >= 0 ? float(art.loadY) : 240.f - float(t.h) * s, float(t.w) * s, float(t.h) * s};
+        }
+        else
+        {
+            float s = std::min(sp.w / float(t.w), sp.h / float(t.h));
+            if (s >= 1.f)
+                s = std::floor(s);
+            r = {sp.x + (sp.w - float(t.w) * s) / 2, sp.y + sp.h - float(t.h) * s, float(t.w) * s, float(t.h) * s};
+        }
+        SDL_RenderCopyF(ren, t.t, nullptr, &r);
     }
 
     void drawAnim(int id, int palId, float x, float y, Uint32 ms, int fps = 18)
@@ -1816,6 +1843,13 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
 
         if (skipBoot)
             screen = Screen::Menu; // menu fields default to the final slide position
+        const char *loadShot = std::getenv("GP_FE_LOAD_SHOT"); // debug: open on the load screen (slot GP_FE_LOAD_SLOT), save the 20th frame as a BMP, quit
+        if (loadShot)
+        {
+            screen = Screen::Load;
+            if (const char *sl = std::getenv("GP_FE_LOAD_SLOT"))
+                loadCur = std::clamp(std::atoi(sl), 0, 3);
+        }
         bootT0 = lastMs = SDL_GetTicks();
         bool run = true;
         for (int frame = 0; run && (maxFrames < 0 || frame < maxFrames); ++frame)
@@ -2481,6 +2515,8 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             }
             case Screen::Load:
                 app.drawBackground(3, 0x5c6);
+                if (loadCur < 3 && slotFull[loadCur] && slotSpecies[loadCur] >= 0 && gp::knownSpecies(slotSpecies[loadCur]))
+                    app.drawLoadPicture(gp::artOf(slotSpecies[loadCur]), slotColour[loadCur]);
                 drawLoad(gfx, loadCur, loadPicked, slotName, slotFull, slotSpecies, slotColour);
                 if (loadPicked && !leaving && !hasPending && now - loadPickedAt >= 200) // WaitForElapsedTime; the real length is unread
                 {
@@ -2619,6 +2655,18 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                 SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
                 SDL_SetRenderDrawColor(ren, 0, 0, 0, uint8_t(alpha));
                 SDL_RenderFillRect(ren, nullptr);
+            }
+            if (loadShot && frame == 20)
+            {
+                int w = 0, h = 0;
+                SDL_GetRendererOutputSize(ren, &w, &h);
+                if (SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888))
+                {
+                    SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ARGB8888, surf->pixels, surf->pitch);
+                    SDL_SaveBMP(surf, loadShot);
+                    SDL_FreeSurface(surf);
+                }
+                run = false;
             }
             SDL_RenderPresent(ren);
 

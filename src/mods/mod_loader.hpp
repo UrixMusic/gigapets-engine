@@ -2484,12 +2484,12 @@ namespace gp
             GP_ROLE(settled); GP_ROLE(idleFlagA); GP_ROLE(idleFlagB); GP_ROLE(callFront); GP_ROLE(callSide);
             GP_ROLE(posSide); GP_ROLE(posDown); GP_ROLE(emoSide); GP_ROLE(emoDown); GP_ROLE(shkSide); GP_ROLE(shkDown); GP_ROLE(neg1); GP_ROLE(neg2);
             GP_ROLE(negIO); GP_ROLE(sad); GP_ROLE(bored); GP_ROLE(reactIdleSide); GP_ROLE(reactIdleDown); GP_ROLE(introSide); GP_ROLE(introDown);
-            GP_ROLE(trickTurnAround); GP_ROLE(trickDirectional); GP_ROLE(trickActorReaction); GP_ROLE(dig); GP_ROLE(hopIntro);
+            GP_ROLE(loadPicture); GP_ROLE(trickTurnAround); GP_ROLE(trickDirectional); GP_ROLE(trickActorReaction); GP_ROLE(dig); GP_ROLE(hopIntro);
             GP_STYLE(walkSideStyle); GP_STYLE(eatStyle); GP_STYLE(actionStyle); GP_STYLE(boredStyle); GP_STYLE(positiveStyle); GP_STYLE(idleStyle);
             GP_STYLE(turn90Style); GP_STYLE(turn180Style); GP_STYLE(settledStyle); GP_STYLE(idleFlagAStyle); GP_STYLE(idleFlagBStyle); GP_STYLE(callStyle);
             GP_STYLE(bowlX); GP_STYLE(bowlY); GP_STYLE(bowlSlope); GP_STYLE(digDirt); GP_STYLE(idleFlagBRate); GP_STYLE(settledRate); GP_STYLE(sleepFps);
             GP_STYLE(tiredDecay); GP_STYLE(hungerDecay); GP_STYLE(thoughtDY); GP_STYLE(overheadDY); GP_STYLE(bubbleLower); GP_STYLE(bubbleRaise);
-            GP_STYLE(colorBase); GP_STYLE(menuPortrait); GP_STYLE(npcPortraitTile);
+            GP_STYLE(colorBase); GP_STYLE(menuPortrait); GP_STYLE(npcPortraitTile); GP_STYLE(loadTile); GP_STYLE(loadSpot); GP_STYLE(loadX); GP_STYLE(loadY);
             GP_ARR(trickMain, true, 3); GP_ARR(trickIntro, true, 3); GP_ARR(trickClosing, true, 3);
             GP_ARR(voice, 2, kPetVoiceCategories); GP_ARR(thoughtDX, false, 3); GP_ARR(trickRepeatLo, false, 3); GP_ARR(trickRepeatHi, false, 3);
             GP_ARR(trickIcons, false, 3); GP_ARR(potions, false, 5); GP_ARR(namePortrait, false, 3); GP_ARR(npcPortraitPal, false, 3);
