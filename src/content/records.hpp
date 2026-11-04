@@ -78,6 +78,11 @@ namespace gp
         int startHealth = 0, startHunger = 0, startHappiness = 0, startCleanliness = 0, startTiredness = 0;
         int startMoneyMin = 0, startMoneyMax = 0;
         std::vector<StarterItem> starterItems;
+        // the starter room (the 12 pets of a new game): a species is offered only when the record says so
+        bool starterRoom = false;
+        std::vector<int> starterColors, starterRareColors; // palette numbers it may have there; none = the ROM's tables (base species) or its default palette
+        std::vector<std::string> starterRequires;          // profile keys that must be set before it is offered ("key" of its own mod or "mod:key")
+        int kitSpecies = 0;                                // whose home furnishings (SetInventorySlot kit) it starts with: a base species, 0..2
     };
 
     // A colour set a mod adds for sprites that come from the ROM (the roaming pets). Either `colors` (a full list, 5-5-5 words, 0x8000
@@ -116,6 +121,7 @@ namespace gp
         Id sickIdleAnim, sadIdleAnim; // the idles for behaviorFlags bit 1 (sick: PlayIdleAnim_FlagB) and bit 2 (sad: _FlagA)
         std::vector<Id> lines; // rotating dialogue for stationary NPCs: 3 text ids
         int portraitPalette = 0x28c;
+        Id speciesId; // a roaming pet of this species (a mod's or the base game's): its art is the species' record (speciesOrAnim is its number once the mods are loaded)
         Id palette; // a mod's PaletteDef: recolours the roaming pet's animations (applyNpcPalettes); empty = the ROM's own colours
         int questMin = 0, questMax = 0x7fffffff; // in the world while questMin <= quests completed < questMax (the base game's area 3 pets: 17..)
         bool availableAt(int quests) const { return quests >= questMin && quests < questMax; }

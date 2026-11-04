@@ -63,6 +63,11 @@ namespace gp
             auto i = species_.find(id);
             return i == species_.end() ? nullptr : &i->second;
         }
+        SpeciesDef *speciesMutable(const Id &id)
+        {
+            auto i = species_.find(id);
+            return i == species_.end() ? nullptr : &i->second;
+        }
         const SpeciesDef *speciesByLegacy(int n) const
         {
             auto i = legacySpecies_.find(n);

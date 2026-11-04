@@ -128,6 +128,7 @@ namespace gp
         int npcPortraitTile = 0x8ae;      // the portrait of the NPCs that stand in for the pet's own species (dialogue)
         int npcPortraitPal[3] = {0x1e3, 0x1e4, 0x1fe}; // ... and its palettes for the three of them
         std::string trickNames[3];        // text keys of the three tricks' names (the teacher says them)
+        int kit = 0;                      // whose home furnishings it starts with (frontend.hpp starterKit): a base species, 0..2
         int menuPortrait = 0x982;         // the menu's portrait tile
         int trickRepeatLo[3] = {1, 1, 1}, trickRepeatHi[3] = {1, 1, 1}; // how many times an NPC of this species repeats a trick, by level: lo..hi-1 (hi <= lo: always lo)
 
@@ -167,6 +168,8 @@ namespace gp
     };
     const SpeciesArt &artOf(int species); // out of range = the first species
     std::vector<SpeciesArt> &speciesArts(); // index = species number; filled with the base game's three, defined at the end
+    constexpr int kBaseSpecies = 3; // the base game's species; a mod's come after them
+    inline void forgetModSpecies() { speciesArts().resize(kBaseSpecies); } // before the mods are loaded (again): each load adds them anew
     inline bool knownSpecies(int species) { return species >= 0 && size_t(species) < speciesArts().size(); }
 
     // A mod's animations (PNG frames, already coloured) get a number from here up so that a species' art, which holds numbers,
@@ -508,6 +511,7 @@ namespace gp
             for (int k = 0; k < 3; ++k)
                 a.trickIcons[k] = icons[i][k];
             a.colorBase = bases[i];
+            a.kit = i;
             for (int k = 0; k < 3; ++k)
                 a.trickNames[k] = "base:str/trick_" + std::to_string(k + 1) + "_" + std::to_string(i);
             static const int pot[3][5] = {{0x1df, 0x1e4, 0x1ec, 0x1f9, 0x1fe}, {0x29e, 0x2a3, 0x2ab, 0x2b8, 0x2bd}, {0x31e, 0x323, 0x32b, 0x338, 0x33d}};

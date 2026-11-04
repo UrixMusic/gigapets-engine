@@ -45,12 +45,19 @@
 
 static void feSound(int id, int volume) { gp::audio().playSfx(id, volume); } // PlaySoundEffect(id, volume, 0)
 // PlaySoundFromCategory(species, category, volume)
-static void feVoice(int species, int category, int volume = 0xbe) { gp::audio().playSfx(gp::petVoiceId(species, category), volume); }
+static void feVoice(int species, int category, int volume = 0xbe)
+{
+    if (const int id = gp::petVoiceId(species, category); id >= 0)
+        gp::audio().playSfx(id, volume);
+}
 #include "../game/dialogue.hpp"
 #include "app_context.hpp"
 #include "../loaders/import.hpp" // ContentDB + importRom: that is where the fonts live
 #include "../mods/mod_loader.hpp" // the mods' palettes: the slot pets wear their saved colours
 #include "../game/text_draw.hpp"
+#include "../game/starter_pool.hpp" // who the starter room holds, and the colour rolls
+#include "../game/pet_colour_save.hpp" // a mod colour is saved by its id
+#include "../game/profile.hpp" // what a new game offers (a species can need a profile key)
 #include <memory>
 
 using namespace gp;
@@ -71,18 +78,6 @@ inline float feSmooth(int prev, int now, float alpha, int maxStep)
 }
 
 // ---- ROM helpers ------------------------------------------------------------------------------
-
-// RollStarterColorFromTable: common table (mode 0) = 18 entries, rare (mode != 0) = 14 entries,
-// 0x20 words apart per species. Move this into frontend.hpp once it works.
-inline int rollStarterColor(const Rom &rom, int species, int mode, const std::function<int(int)> &randBelow)
-{
-    if (species > 2)
-        return mode;
-    const bool rare = mode != 0;
-    const int n = rare ? 14 : 18;
-    const uint32_t base = (rare ? 0xd180u : 0xd18eu) + 0x20u * uint32_t(species);
-    return rom.u16(base + uint32_t(randBelow(n)));
-}
 
 // ---- draw queue -------------------------------------------------------------------------------
 
@@ -333,6 +328,7 @@ struct App
         std::vector<int> dx, dy;
     };
     std::map<std::pair<int, int>, AnimTex> anims;
+    const gp::ContentDB *modDb = nullptr; // where a mod's animations (numbers from gp::kModAnimBase) are
     std::map<std::tuple<int, int, int>, Tex> layers; // tile-map layers (starter screen)
     int transMode = 0;                               // F9: 0 palette bit15, 1 index 0, 2 both
 
@@ -400,6 +396,25 @@ struct App
         if (it != anims.end())
             return it->second;
         AnimTex a;
+        if (gp::isModAnim(id)) // a mod's own frames: already coloured
+        {
+            if (const gp::Anim *ma = modDb ? modDb->anim(gp::modAnimName(id)) : nullptr)
+                for (const gp::SpriteFrame &f : ma->frames)
+                {
+                    Tex t;
+                    t.t = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, f.w, f.h);
+                    SDL_UpdateTexture(t.t, nullptr, f.rgba.data(), f.w * 4);
+                    SDL_SetTextureBlendMode(t.t, SDL_BLENDMODE_BLEND);
+                    t.w = f.w;
+                    t.h = f.h;
+                    t.ax = f.anchorX;
+                    t.ay = f.anchorY;
+                    a.frames.push_back(t);
+                    a.dx.push_back(f.dx);
+                    a.dy.push_back(f.dy);
+                }
+            return anims.emplace(key, std::move(a)).first->second;
+        }
         const uint32_t rec = 0x8ad1u + uint32_t(id) * 5;
         if (rec + 5 <= rom.sizeWords())
         {
@@ -639,6 +654,14 @@ struct App
     }
 };
 
+// The room's animation for one role, per species: the ROM's table for the three base species, the record's art for the others.
+struct RoomTbl
+{
+    const int (&base)[3];
+    int gp::SpeciesArt::*role;
+    int operator()(int sp) const { return sp >= 0 && sp < 3 ? base[sp] : gp::knownSpecies(sp) ? gp::artOf(sp).*role : -1; }
+};
+
 // ---- starter select scene (ported from ShowStarterPetSelectScreen & friends) -----------------
 struct StarterScene
 {
@@ -683,23 +706,40 @@ struct StarterScene
     };
 
     // anim id tables per species (from the PlayXxxAnim functions)
-    static constexpr int kIdle[3] = {0x3d, 0xa5, 0x10c};
-    static constexpr int kWalk[3] = {0x4e, 0xb5, 0x114};
-    static constexpr int kDir[3] = {0x4c, 0xb3, 0x11c}; // turn to camera (PlayDirectionalIdleAnim)
-    static constexpr int kSettled[3] = {0x45, 0xad, 0x115};
-    static constexpr int kPos[3] = {0x44, 0xac, 0x113};
-    static constexpr int kSpawn[3] = {0x47, 0xae, 0x116};
-    static constexpr int kRep[3] = {0x3f, 0xa7, 0x10f};
-    static constexpr int kPre[3] = {0x4b, -1, -1};
-    static constexpr int kVoc[3] = {0x49, 0xaf, 0x117};
+    static constexpr int bIdle[3] = {0x3d, 0xa5, 0x10c};
+    static constexpr int bWalk[3] = {0x4e, 0xb5, 0x114};
+    static constexpr int bDir[3] = {0x4c, 0xb3, 0x11c}; // turn to camera (PlayDirectionalIdleAnim)
+    static constexpr int bSettled[3] = {0x45, 0xad, 0x115};
+    static constexpr int bPos[3] = {0x44, 0xac, 0x113};
+    static constexpr int bSpawn[3] = {0x47, 0xae, 0x116};
+    static constexpr int bRep[3] = {0x3f, 0xa7, 0x10f};
+    static constexpr int bPre[3] = {0x4b, -1, -1};
+    static constexpr int bVoc[3] = {0x49, 0xaf, 0x117};
     // confirm reactions. Starter pets have actor word +3 = 1, which picks the second table in each function.
-    static constexpr int kHappy[3] = {0x3c, 0xa4, 0x10d};   // PlayPositiveReactionAnimVariant
-    static constexpr int kSad[3] = {0x40, 0xa9, 0x110};     // PlaySadReactionAnim
-    static constexpr int kSadIdle[3] = {0x41, 0xa8, 0x111}; // PlayIdleAnim_FlagA, second table (action 0x1d, TickActor_NegativeReaction)
+    static constexpr int bHappy[3] = {0x3c, 0xa4, 0x10d};   // PlayPositiveReactionAnimVariant
+    static constexpr int bSad[3] = {0x40, 0xa9, 0x110};     // PlaySadReactionAnim
+    static constexpr int bSadIdle[3] = {0x41, 0xa8, 0x111}; // PlayIdleAnim_FlagA, second table (action 0x1d, TickActor_NegativeReaction)
     // PlayEmoteReactionAnim -> SelectAndPlayEmoteAnim / PlayShockedReactionAnim, second table (starter pets are style 1)
-    static constexpr int kEmote[3] = {0x43, 0xaa, 0x112};
-    static constexpr int kShock[3] = {0x42, 0xab, -1};
-    static constexpr int kCelPre[3] = {-1, -1, 0x118};      // SelectAndPlayReactionAnim: intro/outro, third species only
+    static constexpr int bEmote[3] = {0x43, 0xaa, 0x112};
+    static constexpr int bShock[3] = {0x42, 0xab, -1};
+    static constexpr int bCelPre[3] = {-1, -1, 0x118};      // SelectAndPlayReactionAnim: intro/outro, third species only
+
+    // the species a mod adds use their record's art for each role (idle, walk, ...)
+    static inline const RoomTbl kIdle{bIdle, &gp::SpeciesArt::idleBase};
+    static inline const RoomTbl kWalk{bWalk, &gp::SpeciesArt::walkSide};
+    static inline const RoomTbl kDir{bDir, &gp::SpeciesArt::callFront};
+    static inline const RoomTbl kSettled{bSettled, &gp::SpeciesArt::settled};
+    static inline const RoomTbl kPos{bPos, &gp::SpeciesArt::posDown};
+    static inline const RoomTbl kSpawn{bSpawn, &gp::SpeciesArt::idleBase};
+    static inline const RoomTbl kRep{bRep, &gp::SpeciesArt::callFront};
+    static inline const RoomTbl kPre{bPre, &gp::SpeciesArt::introDown};
+    static inline const RoomTbl kVoc{bVoc, &gp::SpeciesArt::callFront};
+    static inline const RoomTbl kHappy{bHappy, &gp::SpeciesArt::posDown};
+    static inline const RoomTbl kSad{bSad, &gp::SpeciesArt::sad};
+    static inline const RoomTbl kSadIdle{bSadIdle, &gp::SpeciesArt::idleFlagA};
+    static inline const RoomTbl kEmote{bEmote, &gp::SpeciesArt::emoDown};
+    static inline const RoomTbl kShock{bShock, &gp::SpeciesArt::shkDown};
+    static inline const RoomTbl kCelPre{bCelPre, &gp::SpeciesArt::introDown};
 
     std::vector<P> pets;
     std::vector<Decor> decor;
@@ -713,7 +753,7 @@ struct StarterScene
     int frameA = 0, frameB = 0, palA = 0, palB = 0;
 
     // ---- setup -----------------------------------------------------------------------------
-    void start(const Rom &rom, const RB &rb)
+    void start(const Rom &rom, const RB &rb, const StarterPool &pool)
     {
         // background table 0xc43d, stride 9, entry 3
         const uint32_t e = 0xc43du + 3 * 9;
@@ -732,29 +772,18 @@ struct StarterScene
             decor.push_back({int(rom.u16(ent + 5)), int(rom.u16(ent + 7)), int(int16_t(rom.u16(rec + 1))), int(rom.u16(rec + 2))});
         }
 
-        // species: each group of 3 is a permutation of {0,1,2}
         int sp[12];
-        for (int i = 0; i < 12; ++i)
+        const bool rom3 = pool.romRoom();
+        rollRoomSpecies(pool, rb, sp); // see starter_pool.hpp
+        auto entryOf = [&](int species) -> const StarterPool::Entry &
         {
-            if (i % 3 == 0)
-                sp[i] = rb(3);
-            else if (i % 3 == 1)
-            {
-                int v = rb(3);
-                if (v == sp[i - 1])
-                {
-                    if (rb(2) == 0)
-                        v = v + 1 > 2 ? 0 : v + 1;
-                    else
-                        v = v - 1 < 0 ? 2 : v - 1;
-                }
-                sp[i] = v;
-            }
-            else
-                sp[i] = 3 - sp[i - 1] - sp[i - 2];
-        }
+            for (const StarterPool::Entry &e : pool.entries)
+                if (e.species == species)
+                    return e;
+            return pool.entries[0];
+        };
         pets.assign(12, P());
-        int rareDone[3] = {0, 0, 0}, commonDone[3] = {0, 0, 0};
+        std::map<int, int> rareDone, commonDone;
         bool special = false;
         for (int i = 0; i < 12; ++i)
         {
@@ -776,7 +805,7 @@ struct StarterScene
             {
                 for (int tries = 0; tries < 499; ++tries) // RollUniqueStarterColor
                 {
-                    colour = rollStarterColor(rom, s, rare ? 1 : 0, rb);
+                    colour = rom3 ? rollStarterColor(rom, s, rare ? 1 : 0, rb) : poolColour(entryOf(s), rare, rb, [&](int sp2, int mode) { return rollStarterColor(rom, sp2, mode, rb); });
                     bool dup = false;
                     for (int j = 0; j < i; ++j)
                         dup = dup || (pets[j].species == s && pets[j].colour == colour);
@@ -817,11 +846,11 @@ struct StarterScene
         p.act = a;
         p.sub = 0;
     }
-    static void play(P &p, const int *tbl, int fps, bool loop = false, bool flip = false, bool rev = false)
+    static void play(P &p, const RoomTbl &tbl, int fps, bool loop = false, bool flip = false, bool rev = false)
     {
-        if (tbl[p.species] < 0)
+        if (tbl(p.species) < 0)
             return;
-        p.a = PetAnim{tbl[p.species], 0.0, fps, loop, flip, rev};
+        p.a = PetAnim{tbl(p.species), 0.0, fps, loop, flip, rev};
     }
     static int walkTarget(const P &p, bool fin, const RB &rb)
     {
@@ -877,7 +906,7 @@ struct StarterScene
             return false;
         return p.a.loop || p.a.t * p.a.fps < double(A.frames.size());
     }
-    bool once(App &app, P &p, const int *tbl, int fps)
+    bool once(App &app, P &p, const RoomTbl &tbl, int fps)
     {
         if (p.sub == 0)
         {
@@ -944,7 +973,7 @@ struct StarterScene
             return false;
         case A_REP:
         {
-            const bool pre = kPre[p.species] >= 0;
+            const bool pre = kPre(p.species) >= 0;
             if (p.sub == 0)
             {
                 if (pre)
@@ -1012,7 +1041,7 @@ struct StarterScene
             return false;
         case A_CELEB: // PlayPositiveReactionAnim(actor, 3, 2): [intro], happy anim x3, [outro]
         {
-            const bool pre = kCelPre[p.species] >= 0;
+            const bool pre = kCelPre(p.species) >= 0;
             if (p.sub == 0)
             {
                 p.reps = 3;
@@ -1079,7 +1108,7 @@ struct StarterScene
                 p.wait -= 1.0 / 30;
                 if (p.wait <= 0)
                 {
-                    if (kShock[p.species] < 0)
+                    if (kShock(p.species) < 0)
                         return true;
                     play(p, kShock, 14);
                     p.sub = 3;
@@ -1298,7 +1327,7 @@ struct StarterScene
         const float vx = sm(p.px, p.x) - fScroll;
         int idx = (h - 16 >= 0) ? (h - 16) >> 3 : (h - 9) >> 3; // DrawShadow
         idx = std::clamp(idx, 0, 11);
-        const bool s2 = p.species == 2;
+        const bool s2 = gp::artOf(p.species).wideShadow;
         app.blit((s2 ? 0x9a0 : 0x994) + idx, 0x28c, vx - (idx * 8 + 8) / 2, p.y - (s2 ? 0x10 : 6));
         app.drawFrame(A, f, vx, p.y, p.a.flip);
         if (p.ex >= 0) // the exclamation over the head (SpawnMessageBubble 0xb, then 0xc)
@@ -1506,6 +1535,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         bool showOutlines = false; // F8: the old white debug boxes
 
         App app(rom, ren);
+        app.modDb = uiDb.get();
         FrontGfx gfx;
         std::mt19937 rng(std::random_device{}());
         auto randBelow = [&](int n)
@@ -1532,8 +1562,12 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                 const SlotInfo si = peekSlot(i);
                 slotFull[i] = si.full;
                 slotName[i] = si.name;
-                slotSpecies[i] = si.full ? si.species : -1;
-                const int sp = std::clamp(si.species, 0, 2);
+                int spn = si.species; // a mod's species is found by its id (the front end has loaded the mods)
+                if (!si.speciesId.empty())
+                    if (const int n = gp::speciesNumber(si.speciesId); n >= 0)
+                        spn = n;
+                slotSpecies[i] = si.full ? spn : -1;
+                const int sp = std::clamp(spn, 0, 2);
                 slotColour[i] = si.appearance >= 0 ? si.appearance : menu.colour[sp]; // old saves: random menu colour
                 if (!si.appearanceId.empty()) // a mod's colour: its number is only known once the mods are loaded
                     if (const gp::PaletteDef *pd = uiDb->palette(si.appearanceId); pd && gp::modPalettes().count(pd->number))
@@ -1718,6 +1752,16 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                     for (int j = 0; j < 4; ++j)
                         sd.setInt("startStat" + std::to_string(j), chosen.stat[j]);
                     sd.setInt("startStat4", chosen.sick ? 1 : 0); // walk rolls the actual illness (RollRandomIllnessId)
+                    { // a mod's colour (a species of a mod can come in them) is kept by its id: its number depends on the mods loaded
+                        const gp::SpeciesDef *spd = uiDb->speciesByLegacy(chosen.species);
+                        gp::saveColourIds(sd, chosen.colour, chosen.colour, spd ? spd->defaultPalette : 0x1df, [&](int n) -> gp::Id
+                                          {
+                                              for (const gp::PaletteDef *pd : uiDb->allPalettes())
+                                                  if (pd->number == n)
+                                                      return pd->id;
+                                              return gp::Id();
+                                          });
+                    }
                     gp::saveToFile(path, sd);
                 }
                 else
@@ -1959,7 +2003,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                         goMenu(); // event 5 -> state 4
                     else
                     {
-                        starter.start(rom, randBelow);
+                        starter.start(rom, randBelow, makeStarterPool(*uiDb, gp::loadProfileFile()));
                         setScreen(Screen::Starter);
                     }
                 }

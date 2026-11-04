@@ -130,6 +130,8 @@ namespace gp
             s.startTiredness = 0x4b;
             s.startMoneyMin = 0x28;
             s.startMoneyMax = 0x3d;
+            s.starterRoom = true; // the ROM's room has these three
+            s.kitSpecies = i;
             for (const auto &it : kRows[i].items)
                 s.starterItems.push_back({legacyItemId(it.item), it.count});
             db.put(std::move(s));
@@ -288,6 +290,37 @@ namespace gp
         return done;
     }
 
+    // A roaming pet npc drawn with a species' art: its idle, walk, turn and reaction animations (the ones importNpcs makes for the ROM's species).
+    inline void drawNpcAsSpecies(const Rom &rom, ContentDB &db, NpcDef &d, int species)
+    {
+        const SpeciesArt &art = artOf(species);
+        const int pal = d.appearancePalette;
+        for (int rid : reactIdsForTier(species))
+            importAnim(rom, db, rid, pal);
+        d.anim = importAnim(rom, db, art.idleBase, pal);
+        d.walkAnim[0] = importAnim(rom, db, art.walkUp, pal);
+        d.walkAnim[1] = importAnim(rom, db, art.walkDown, pal);
+        d.walkAnim[2] = importAnim(rom, db, art.walkSide, pal);
+        d.turn180Anim = importAnim(rom, db, art.turn180, pal);
+        d.turn90Anim = importAnim(rom, db, art.turn90, pal);
+        d.idleSideAnim = importAnim(rom, db, art.idleSide, pal);
+        d.sickIdleAnim = importAnim(rom, db, art.idleFlagB, pal);
+        d.sadIdleAnim = importAnim(rom, db, art.idleFlagA, pal);
+    }
+
+    // The npcs whose record names a species (NpcDef::speciesId): drawn with its art. Call after importMods. Returns how many.
+    inline int applyNpcSpecies(const Rom &rom, ContentDB &db)
+    {
+        int done = 0;
+        for (const NpcDef *seen : db.allNpcs())
+            if (!seen->speciesId.empty() && !seen->stationary && knownSpecies(seen->speciesOrAnim))
+            {
+                drawNpcAsSpecies(rom, db, *db.npcMutable(seen->id), seen->speciesOrAnim);
+                ++done;
+            }
+        return done;
+    }
+
     // The pets that stand in for the player's own species (a roaming npc with speciesOrAnim 0xfffe, and the three portraits of npcs 0x30..0x32)
     // were drawn for the species the save held when the ROM was imported. Once the mods are loaded the real one may be a mod's species (it only
     // exists then): draw them again for it. Returns how many npcs changed.
@@ -304,7 +337,6 @@ namespace gp
             if (!starter && !roaming)
                 continue;
             NpcDef *d = db.npcMutable(seen->id);
-            const int pal = d->appearancePalette;
             if (starter)
             {
                 d->portraitSprite = art.npcPortraitTile;
@@ -312,19 +344,7 @@ namespace gp
                 importUiSprite(db, rom, d->portraitSprite, d->portraitPalette);
             }
             if (roaming)
-            {
-                for (int rid : reactIdsForTier(species))
-                    importAnim(rom, db, rid, pal);
-                d->anim = importAnim(rom, db, art.idleBase, pal);
-                d->walkAnim[0] = importAnim(rom, db, art.walkUp, pal);
-                d->walkAnim[1] = importAnim(rom, db, art.walkDown, pal);
-                d->walkAnim[2] = importAnim(rom, db, art.walkSide, pal);
-                d->turn180Anim = importAnim(rom, db, art.turn180, pal);
-                d->turn90Anim = importAnim(rom, db, art.turn90, pal);
-                d->idleSideAnim = importAnim(rom, db, art.idleSide, pal);
-                d->sickIdleAnim = importAnim(rom, db, art.idleFlagB, pal);
-                d->sadIdleAnim = importAnim(rom, db, art.idleFlagA, pal);
-            }
+                drawNpcAsSpecies(rom, db, *d, species);
             ++done;
         }
         return done;

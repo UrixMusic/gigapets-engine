@@ -6,6 +6,7 @@
 // No SDL, no ROM, no drawing: input events in, next state / sfx id / save data out.
 // Not ported yet: starter select (0x11), name entry (0x12, HandleNameEntryInput not read), options (5).
 #pragma once
+#include "npc_anim_ids.hpp" // the species' records: which kit a species takes
 #include <cstdint>
 #include <cstdio>
 #include <algorithm>
@@ -335,7 +336,7 @@ namespace gp::fe
             {{{1, 1}, {0x6d, 1}, {0x6f, 1}, {0x74, 1}, {0x86, 1}, {0x23, 2}, {0x9f, 1}, {0x9c, 1}},
              {{0x1b, 0x6d}, {0x1c, 0x6f}, {3, 0x74}, {6, 0x86}, {1, 0x9f}, {0, 0x9c}}},
         };
-        return k[std::clamp(species, 0, 2)];
+        return k[std::clamp(artOf(species).kit, 0, 2)]; // a mod's species names the base one whose furnishings it takes
     }
 
     constexpr int kNoIllness = 10; // the save's "illness" value for healthy

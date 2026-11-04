@@ -86,6 +86,13 @@ int main()
     CHECK(rep.errors.empty());
     CHECK(speciesArts().size() == baseCount + 2);
 
+    { // loading the mods again (the front end and then the game do) gives the same numbers, not new ones
+        ContentDB again = baseDb();
+        ModReport r2 = importMods(again, root);
+        CHECK(r2.errors.empty() && speciesArts().size() == baseCount + 2);
+        const SpeciesDef *f2 = again.species("fox:species/fox");
+        CHECK(f2 && f2->legacyIndex == int(baseCount) && speciesNumber("fox:species/fox") == int(baseCount));
+    }
     const SpeciesDef *fox = db.species("fox:species/fox");
     CHECK(fox && fox->legacyIndex == int(baseCount) && db.speciesByLegacy(int(baseCount)) == fox);
     CHECK(fox && fox->defaultPalette == 99 && fox->ownIllness == 4 && fox->startHealth == 70 && fox->startHunger == 50 && fox->startMoneyMin == 10 && fox->startMoneyMax == 20);
@@ -123,10 +130,64 @@ int main()
         CHECK(loadSpecies(gone) == 0 && speciesNumber("removed:species/x") == -1 && speciesNumber("base:species/1") == 1);
     }
 
+    { // the starter room: only what the record says; a patch can change a base species too
+        fs::remove_all(root / "fox");
+        writeFile(root / "st" / "manifest.json", R"({"id":"st","version":"1.0","game_api":"1"})");
+        solidPng(root / "st" / "a.png");
+        writeFile(root / "st" / "data" / "a.json", R"([
+ {"type":"palette","mode":"add","id":"st:pal/red","colors":[[255,0,0]]},
+ {"type":"anim","mode":"add","id":"st:anim/a","frames":[{"png":"a.png"}]},
+ {"type":"species","mode":"add","id":"st:species/clone","based_on":"base:species/0"},
+ {"type":"species","mode":"add","id":"st:species/shown","based_on":"base:species/0","starter_kit":2,
+  "starter":{"room":true,"colors":[500,"st:pal/red"],"rare_colors":[501],"requires":["seen_it","other:key"]}},
+ {"type":"species","mode":"patch","id":"base:species/0","starter":{"room":false}}
+])");
+        ContentDB d3 = baseDb();
+        d3.species("base:species/0");
+        if (SpeciesDef *b0 = d3.speciesMutable("base:species/0"))
+            b0->starterRoom = true;
+        ModReport r3 = importMods(d3, root);
+        for (const auto &e : r3.errors)
+            std::cerr << e << "\n";
+        CHECK(r3.errors.empty());
+        const SpeciesDef *c = d3.species("st:species/clone"), *sh = d3.species("st:species/shown"), *b = d3.species("base:species/0");
+        CHECK(c && !c->starterRoom && c->starterColors.empty() && c->kitSpecies == 0);
+        CHECK(sh && sh->starterRoom && sh->kitSpecies == 2 && sh->starterColors.size() == 2 && sh->starterColors[0] == 500 && isModPalette(sh->starterColors[1]));
+        CHECK(sh && sh->starterRareColors == std::vector<int>{501} && sh->starterRequires.size() == 2 && sh->starterRequires[1] == "other:key");
+        CHECK(b && !b->starterRoom); // the patch took the base species out of the room
+        fs::remove_all(root / "st");
+    }
+
+    { // a roaming pet npc of a mod's species: found by id once every mod is loaded, its number in speciesOrAnim
+        writeFile(root / "np" / "manifest.json", R"({"id":"np","version":"1.0","game_api":"1"})");
+        solidPng(root / "np" / "a.png");
+        writeFile(root / "np" / "data" / "a.json", R"([
+ {"type":"anim","mode":"add","id":"np:anim/a","frames":[{"png":"a.png"}]},
+ {"type":"npc","mode":"add","id":"np:npc/pet","based_on":"base:npc/12","species":"np:species/s"},
+ {"type":"species","mode":"add","id":"np:species/s","art":{"walkUp":"np:anim/a","walkDown":"np:anim/a","walkSide":"np:anim/a","idleBase":"np:anim/a"}}
+])");
+        ContentDB d4 = baseDb();
+        NpcDef pet;
+        pet.id = "base:npc/12";
+        pet.area = 0;
+        pet.speciesOrAnim = 1;
+        pet.anim = "base:anim/139";
+        d4.put(std::move(pet));
+        ModReport r4 = importMods(d4, root);
+        for (const auto &e : r4.errors)
+            std::cerr << e << "\n";
+        CHECK(r4.errors.empty());
+        const NpcDef *n = d4.npc("np:npc/pet"), *basePet = d4.npc("base:npc/12");
+        const SpeciesDef *sp = d4.species("np:species/s");
+        CHECK(n && sp && n->speciesId == "np:species/s" && n->speciesOrAnim == sp->legacyIndex && sp->legacyIndex >= 3);
+        CHECK(basePet && basePet->speciesOrAnim == 1 && basePet->speciesId.empty());
+        fs::remove_all(root / "np");
+    }
+
     // mistakes are reported and add nothing
     auto bad = [&](const std::string &rec, const std::string &want)
     {
-        const size_t n = speciesArts().size();
+        const size_t n = baseCount; // every load starts again from the base species
         fs::remove_all(root / "bad");
         writeFile(root / "bad" / "manifest.json", R"({"id":"bad","version":"1.0","game_api":"1"})");
         solidPng(root / "bad" / "a.png");
@@ -149,6 +210,30 @@ int main()
     CHECK(bad(head + R"("based_on":"base:species/0","art":{"idleStyle":"bad:anim/a"}})", "must be a number"));
     CHECK(bad(head + R"("based_on":"base:species/0","starter_items":[{"item":"base:item/999"}]})", "starter item"));
     CHECK(bad(head + R"("based_on":"base:species/0","art":{"trickRules":[{"zzz":1}]}})", "unknown field"));
+    { // an npc naming a species nobody defined, and a stationary one
+        fs::remove_all(root / "bad");
+        writeFile(root / "bad" / "manifest.json", R"({"id":"bad","version":"1.0","game_api":"1"})");
+        writeFile(root / "bad" / "data" / "x.json", R"([{"type":"npc","mode":"add","id":"bad:npc/a","based_on":"base:npc/12","species":"bad:species/none"}])");
+        ContentDB d5 = baseDb();
+        NpcDef pet;
+        pet.id = "base:npc/12";
+        pet.anim = "base:anim/139";
+        d5.put(std::move(pet));
+        ModReport r5 = importMods(d5, root);
+        CHECK(mentions(r5.errors, "unknown species 'bad:species/none'"));
+        writeFile(root / "bad" / "data" / "x.json", R"([{"type":"npc","mode":"add","id":"bad:npc/a","based_on":"base:npc/12","stationary":true,"lines":["base:text/1","base:text/1","base:text/1"],"species":"base:species/0"}])");
+        ContentDB d6 = baseDb();
+        NpcDef pet2;
+        pet2.id = "base:npc/12";
+        pet2.anim = "base:anim/139";
+        d6.put(std::move(pet2));
+        CHECK(mentions(importMods(d6, root).errors, "roaming pets"));
+    }
+
+    CHECK(bad(head + R"("based_on":"base:species/0","starter":{"colors":["bad:nope"]}})", "starter 'colors'"));
+    CHECK(bad(head + R"("based_on":"base:species/0","starter":{"zzz":1}})", "'starter'"));
+    CHECK(bad(head + R"("based_on":"base:species/0","starter_kit":7})", "starter_kit"));
+
     CHECK(bad(head + R"("based_on":"base:species/0","art":{"trickNames":["base:text/1","base:text/1","nope"]}})", "trickNames"));
 
     fs::remove_all(root);

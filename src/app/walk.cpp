@@ -46,6 +46,7 @@
 #include "../game/resume_area.hpp"
 #include "../game/save.hpp"
 #include "../game/save_player.hpp"
+#include "../game/profile.hpp"
 #include "../game/debug_mode.hpp"
 #include "../game/settings.hpp"
 #include "../game/thought_bubble.hpp"
@@ -307,6 +308,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         gp::EngineRegistry engineValues; // what engine.get / engine.set reach; filled in below, once the variables exist
         scripts.setRegistry(&engineValues);
         scripts.loadModSave(sd.kv); // what the mods kept in this slot (save.get)
+        scripts.loadProfile(gp::loadProfileFile()); // and for the whole game (profile.get)
         for (const auto &w : rep.warnings)
             std::fprintf(stderr, "mod warning: %s\n", w.c_str());
         for (const auto &e : rep.errors)
@@ -326,6 +328,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         }
         for (const gp::Id &bad : gp::resolveModPalettes(rom, db))
             std::fprintf(stderr, "mod palette %s: its ROM palette does not exist, so it is left out\n", bad.c_str());
+        if (const int n = gp::applyNpcSpecies(rom, db))
+            std::printf("%d npcs drawn with a species' art\n", n);
         if (const int n = gp::applyNpcPalettes(rom, db, playerSpecies))
         {
             std::printf("recoloured %d pet npcs\n", n);
@@ -2375,7 +2379,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             const int s = encNpc->def->speciesOrAnim == 0xfffe ? playerSpecies : encNpc->def->speciesOrAnim;
             // The idle noise's one odd call passes 4 where the others pass 0xbe; at volume 4 it is inaudible and the first
             // sound of a meeting sometimes vanished, so it plays at the usual level (GUESS: 4 isn't a volume).
-            gp::audio().playSfx(gp::petVoiceId(s <= 2 ? s : playerSpecies, c), vol < 0x20 ? 0xbe : vol);
+            gp::audio().playSfx(gp::petVoiceId(gp::knownSpecies(s) ? s : playerSpecies, c), vol < 0x20 ? 0xbe : vol);
         };
         host.npc.bubble = [](int id)
         { std::printf("npc bubble 0x%x\n", id); };
@@ -4593,7 +4597,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
         // The art for the tricks idle NPCs perform (activity 0x13), in their own species and palette.
         for (const gp::NpcDef *d : npcByIndex)
-            if (d && !d->stationary && (d->behaviorFlags & 0xe0) && d->speciesOrAnim <= 2)
+            if (d && !d->stationary && (d->behaviorFlags & 0xe0) && gp::knownSpecies(d->speciesOrAnim))
             {
                 const int s = d->speciesOrAnim;
                 const std::vector<int> ids = gp::artOf(s).trickAnims(); // the trick art of this species, the panda's reaction chain too
@@ -4637,7 +4641,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             int s = d ? d->speciesOrAnim : 0;
             if (s == 0xfffe)
                 s = sp; // 0xfffe = "same as the player", as in importNpcs
-            return (s >= 0 && s <= 2) ? s : 0;
+            return gp::knownSpecies(s) ? std::clamp(gp::artOf(s).kit, 0, 2) : 0; // a mod's species counts as the base one it takes its kit from
         };
 
         auto camNowX = [&]
@@ -4805,6 +4809,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             for (const auto &[k, v] : scripts.modSaveKv())
                 s.kv[k] = v;
             gp::saveToFile(savePath, s);
+            if (scripts.profileDirty()) // a script changed what the mods keep for the whole game
+            {
+                gp::saveProfileFile(scripts.profileKv());
+                scripts.profileSaved();
+            }
         };
 
         // Game.hooks().onStatChange: every change to money, a personality stat or a care stat passes through the script first
@@ -5624,7 +5633,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 if (showNpc)
                 {
                     gp::NpcActor &t = *showNpc;
-                    const int species = t.def->speciesOrAnim == 0xfffe || t.def->speciesOrAnim > 2 ? sp : t.def->speciesOrAnim;
+                    const int species = t.def->speciesOrAnim == 0xfffe || !gp::knownSpecies(t.def->speciesOrAnim) ? sp : t.def->speciesOrAnim;
                     if (!showStarted)
                     {
                         if (t.settled()) // wait for any walk or turn it was in the middle of

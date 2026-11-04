@@ -143,6 +143,21 @@ int main()
             CHECK(h.runString("m", "assert(save.get('n') == 42 and math.type(save.get('n')) == 'integer' and save.get('flag') == true and save.get('who') == 'Rex Jr.' and math.type(save.get('speed')) == 'float')"));
             CHECK(h.errors().empty());
         }
+        { // profile.*: the same calls, kept for the whole game, apart from the slot's save
+            gp::ScriptHost h;
+            CHECK(!h.profileDirty());
+            CHECK(h.runString("m", "profile.set('unlocked_fox', true); profile.set('n', 3); save.set('s', 1)"));
+            CHECK(h.profileDirty());
+            const auto p = h.profileKv();
+            CHECK(p.size() == 2 && p.count("mod.m.unlocked_fox") && p.count("mod.m.n") && !h.modSaveKv().count("mod.m.unlocked_fox"));
+            CHECK(h.runString("m", "assert(profile.get('unlocked_fox') == true and profile.get('s') == nil and #profile.keys() == 2 and save.get('n') == nil)"));
+            h.profileSaved();
+            CHECK(!h.profileDirty());
+            gp::ScriptHost h2; // the next session
+            h2.loadProfile(p);
+            CHECK(h2.runString("m", "assert(profile.get('unlocked_fox') == true and profile.get('n') == 3)") && !h2.profileDirty());
+            CHECK(h2.runString("other", "assert(profile.get('n') == nil)")); // a mod's own keys
+        }
         auto bad = [&](const char *code, const char *expect)
         {
             gp::ScriptHost g;

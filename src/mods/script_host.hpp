@@ -215,9 +215,12 @@ namespace gp
             bind("engine", "has", l_eHas);
             bind("engine", "list", l_eList);
             bind("engine", "describe", l_eDescribe);
-            bind("save", "get", l_sGet);
-            bind("save", "set", l_sSet);
-            bind("save", "keys", l_sKeys);
+            bind("save", "get", l_kvGet<false>);
+            bind("save", "set", l_kvSet<false>);
+            bind("save", "keys", l_kvKeys<false>);
+            bind("profile", "get", l_kvGet<true>);
+            bind("profile", "set", l_kvSet<true>);
+            bind("profile", "keys", l_kvKeys<true>);
             bind("Scene", "hooks", l_sceneHooks);
             bind("sound", "play", l_soundPlay);
             bind("scene", "open", l_scOpen);
@@ -256,6 +259,25 @@ namespace gp
                 out["mod." + k] = v;
             return out;
         }
+        // What the mods keep for the whole game (profile.get / profile.set), "mod.<mod>.<key>" like the save's keys; the game loads data/profile.txt
+        // into it when it starts and writes it back when profileDirty() says a script changed it.
+        void loadProfile(const std::map<std::string, std::string> &kv)
+        {
+            profile_.clear();
+            for (const auto &[k, v] : kv)
+                if (k.rfind("mod.", 0) == 0 && k.size() > 4)
+                    profile_[k.substr(4)] = v;
+            profileDirty_ = false;
+        }
+        std::map<std::string, std::string> profileKv() const
+        {
+            std::map<std::string, std::string> out;
+            for (const auto &[k, v] : profile_)
+                out["mod." + k] = v;
+            return out;
+        }
+        bool profileDirty() const { return profileDirty_; }
+        void profileSaved() { profileDirty_ = false; }
         const std::vector<std::string> &errors() const { return errors_; }
 
         // Once per game tick (30 Hz): scripts that called wait(n) count down and carry on.
@@ -1425,18 +1447,20 @@ namespace gp
             const size_t n = std::strlen(k);
             return n >= 1 && n <= 64 && std::strspn(k, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-") == n;
         }
-        static int l_sGet(lua_State *L)
+        // profile.get / profile.set / profile.keys: the same as save.*, but kept for the whole game, not one slot (the game keeps them in
+        // data/profile.txt). What a mod uses to unlock something for every new game, a species in the starter room for one.
+        template <bool P> static int l_kvGet(lua_State *L)
         {
             ScriptHost &h = self(L);
             const char *key = luaL_checkstring(L, 1);
             lua_settop(L, 2); // an absent default is nil
             if (h.curMod_.empty())
-                return luaL_error(L, "save.get: only a mod's scripts can use the save");
+                return luaL_error(L, "%s: only a mod's scripts can use it", P ? "profile.get" : "save.get");
             luaL_argcheck(L, saveKeyOk(key), 1, "a save key is 1 to 64 letters, digits, _ . or -");
             bool found = false;
             {
-                const auto it = h.modSave_.find(h.curMod_ + "." + key);
-                if (it != h.modSave_.end() && !it->second.empty())
+                const auto it = (P ? h.profile_ : h.modSave_).find(h.curMod_ + "." + key);
+                if (it != (P ? h.profile_ : h.modSave_).end() && !it->second.empty())
                 {
                     const std::string &v = it->second;
                     found = true;
@@ -1463,12 +1487,12 @@ namespace gp
                 lua_pushvalue(L, 2); // the default, or nil when there is none
             return 1;
         }
-        static int l_sSet(lua_State *L)
+        template <bool P> static int l_kvSet(lua_State *L)
         {
             ScriptHost &h = self(L);
             const char *key = luaL_checkstring(L, 1);
             if (h.curMod_.empty())
-                return luaL_error(L, "save.set: only a mod's scripts can use the save");
+                return luaL_error(L, "%s: only a mod's scripts can use it", P ? "profile.set" : "save.set");
             luaL_argcheck(L, saveKeyOk(key), 1, "a save key is 1 to 64 letters, digits, _ . or -");
             const int t = lua_type(L, 2);
             char text[1100] = "";
@@ -1501,33 +1525,35 @@ namespace gp
             {
                 const std::string full = h.curMod_ + "." + key;
                 if (!text[0])
-                    h.modSave_.erase(full);
+                    (P ? h.profile_ : h.modSave_).erase(full);
                 else
                 {
-                    if (!h.modSave_.count(full))
+                    if (!(P ? h.profile_ : h.modSave_).count(full))
                     {
                         int mine = 0;
                         const std::string pre = h.curMod_ + ".";
-                        for (const auto &kv : h.modSave_)
+                        for (const auto &kv : (P ? h.profile_ : h.modSave_))
                             mine += kv.first.compare(0, pre.size(), pre) == 0;
                         tooMany = mine >= 500;
                     }
                     if (!tooMany)
-                        h.modSave_[full] = text;
+                        (P ? h.profile_ : h.modSave_)[full] = text;
                 }
             }
+            if (P)
+                h.profileDirty_ = true;
             if (tooMany)
-                return luaL_error(L, "save.set: a mod can keep at most 500 keys");
+                return luaL_error(L, "%s: a mod can keep at most 500 keys", P ? "profile.set" : "save.set");
             return 0;
         }
         // save.keys() -> sorted array of this mod's keys
-        static int l_sKeys(lua_State *L)
+        template <bool P> static int l_kvKeys(lua_State *L)
         {
             ScriptHost &h = self(L);
             lua_newtable(L);
             const std::string pre = h.curMod_ + ".";
             lua_Integer n = 0;
-            for (const auto &kv : h.modSave_)
+            for (const auto &kv : (P ? h.profile_ : h.modSave_))
                 if (!h.curMod_.empty() && kv.first.compare(0, pre.size(), pre) == 0)
                 {
                     lua_pushlstring(L, kv.first.data() + pre.size(), kv.first.size() - pre.size());
@@ -2221,6 +2247,8 @@ namespace gp
         ScriptApi api_;
         EngineRegistry *registry_ = nullptr;
         std::map<std::string, std::string> modSave_; // "<mod>.<key>" -> typed text ("i12", "n1.5", "btrue", "sabc")
+        std::map<std::string, std::string> profile_; // the same for profile.* (kept for the whole game)
+        bool profileDirty_ = false;
         std::map<std::string, Hook> npcHooks_;
         std::map<std::string, Hook> areaHooks_;
         std::map<std::string, Hook> sceneHooks_;

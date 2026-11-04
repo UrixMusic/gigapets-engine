@@ -209,6 +209,7 @@ namespace gp
         bool full = false;
         std::string name;
         int species = 0, colour = -1, appearance = -1;
+        std::string speciesId; // a mod's species (its number depends on the mods, see saveSpecies); empty for the base three
         std::string appearanceId; // a mod palette's id when the pet wears one (its number then holds the species default; see pet_colour_save.hpp)
     };
 
@@ -221,6 +222,7 @@ namespace gp
         i.full = true;
         i.name = s.getStr("name");
         i.species = s.getInt("species");
+        i.speciesId = s.getStr("speciesId");
         i.colour = s.getIntStrict("colour", -1);
         i.appearance = s.getIntStrict("appearance", i.colour);
         // the id of a mod palette: "appearanceId" (else "colourId"), or one typed straight into appearance= / colour=

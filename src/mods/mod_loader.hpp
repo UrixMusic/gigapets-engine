@@ -94,7 +94,7 @@ namespace gp
         inline void applyNpc(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
         {
             static const std::set<std::string> allowed{"type", "mode", "id", "name", "area", "x", "y",
-                                                       "stationary", "anim", "lines", "palette", "based_on", "quest_min", "quest_max"};
+                                                       "stationary", "anim", "lines", "palette", "based_on", "quest_min", "quest_max", "species"};
             for (auto it = rec.begin(); it != rec.end(); ++it)
                 if (!allowed.count(it.key()))
                     return err(rep, file, m.id, "unknown field '" + it.key() + "' in npc record");
@@ -151,6 +151,12 @@ namespace gp
                 n = *from;
                 n.id = id;
                 n.index = 1000 + db.npcCount();
+            }
+            if (rec.contains("species")) // a roaming pet drawn with a species' art: the record is found once every mod is loaded
+            {
+                if (!rec["species"].is_string())
+                    return err(rep, file, m.id, "'" + id + "': 'species' must be the id of a species");
+                n.speciesId = rec["species"].get<std::string>();
             }
             if (rec.contains("palette"))
             {
@@ -218,7 +224,9 @@ namespace gp
                     n.lines.push_back(l.get<std::string>());
                 }
             }
-            if (mode == "add" && n.anim.empty())
+            if (!n.speciesId.empty() && n.stationary)
+                return err(rep, file, m.id, "'" + id + "': 'species' is for roaming pets, not a stationary npc");
+            if (mode == "add" && n.anim.empty() && n.speciesId.empty())
                 return err(rep, file, m.id, "add '" + id + "': missing 'anim'");
             if (n.stationary && n.lines.size() < 3)
                 return err(rep, file, m.id, "'" + id + "': a stationary npc needs 3 lines");
@@ -2200,10 +2208,135 @@ namespace gp
             return true;
         }
 
+        // A palette for a species' colours: a number (a ROM palette) or the id of a mod's palette.
+        inline bool colourList(const ContentDB &db, const json &v, std::vector<int> &out, std::string &why)
+        {
+            if (!v.is_array() || v.size() > 64)
+                return why = "must be a list of palette numbers or palette ids", false;
+            std::vector<int> r;
+            for (const json &e : v)
+            {
+                if (e.is_number_integer() && e.get<int>() >= 0 && e.get<int>() < kModPaletteBase)
+                    r.push_back(e.get<int>());
+                else if (e.is_string() && db.palette(e.get<std::string>()))
+                    r.push_back(db.palette(e.get<std::string>())->number);
+                else
+                    return why = "must be a list of ROM palette numbers or ids of palettes", false;
+            }
+            out = r;
+            return true;
+        }
+
+        // The fields of a species record that both `add` and `patch` take, applied to def and art.
+        inline bool fillSpecies(const ContentDB &db, const json &rec, SpeciesDef &def, SpeciesArt &art, std::string &why)
+        {
+            if (!optInt(rec, "default_palette", def.defaultPalette, 0, 0x7ffff, why) || !optInt(rec, "own_illness", def.ownIllness, 0, 9, why) ||
+                !optInt(rec, "starter_kit", def.kitSpecies, 0, 2, why))
+                return false;
+            if (rec.contains("start"))
+            {
+                const json &s = rec["start"];
+                if (!s.is_object())
+                    return why = "'start' must be an object", false;
+                for (auto it = s.begin(); it != s.end(); ++it)
+                {
+                    int *dst = it.key() == "health" ? &def.startHealth : it.key() == "hunger" ? &def.startHunger : it.key() == "happiness" ? &def.startHappiness
+                               : it.key() == "cleanliness" ? &def.startCleanliness : it.key() == "tiredness" ? &def.startTiredness : nullptr;
+                    if (!dst)
+                        return why = "unknown field '" + it.key() + "' in 'start'", false;
+                    if (!it.value().is_number_integer() || it.value().get<int>() < 0 || it.value().get<int>() > 255)
+                        return why = "start " + it.key() + " must be 0 to 255", false;
+                    *dst = it.value().get<int>();
+                }
+            }
+            int lo = def.startMoneyMin, hi = def.startMoneyMax;
+            if (!optPair(rec, "money", lo, hi, 0, 9999, why))
+                return false;
+            if (hi < lo)
+                return why = "'money' must be [low, high]", false;
+            def.startMoneyMin = lo;
+            def.startMoneyMax = hi;
+            if (rec.contains("starter_items"))
+            {
+                if (!rec["starter_items"].is_array() || rec["starter_items"].size() > 64)
+                    return why = "'starter_items' must be a list of { item, count }", false;
+                def.starterItems.clear();
+                for (const json &e : rec["starter_items"])
+                {
+                    if (!e.is_object() || !e.contains("item") || !e["item"].is_string() || !db.item(e["item"].get<std::string>()))
+                        return why = "a starter item needs the id of an item", false;
+                    StarterItem si;
+                    si.item = e["item"].get<std::string>();
+                    if (!optInt(e, "count", si.count, 1, 99, why))
+                        return false;
+                    def.starterItems.push_back(si);
+                }
+            }
+            if (rec.contains("starter"))
+            {
+                const json &st = rec["starter"];
+                if (!st.is_object())
+                    return why = "'starter' must be an object { room, colors, rare_colors, requires }", false;
+                for (auto it = st.begin(); it != st.end(); ++it)
+                {
+                    const std::string &k = it.key();
+                    if (k == "room")
+                    {
+                        if (!it.value().is_boolean())
+                            return why = "starter 'room' must be true or false", false;
+                        def.starterRoom = it.value().get<bool>();
+                    }
+                    else if (k == "colors" || k == "rare_colors")
+                    {
+                        if (!colourList(db, it.value(), k == "colors" ? def.starterColors : def.starterRareColors, why))
+                            return why = "starter '" + k + "' " + why, false;
+                    }
+                    else if (k == "requires")
+                    {
+                        if (!it.value().is_array() || it.value().size() > 16)
+                            return why = "starter 'requires' must be a list of profile keys", false;
+                        def.starterRequires.clear();
+                        for (const json &e : it.value())
+                        {
+                            if (!e.is_string() || e.get<std::string>().empty())
+                                return why = "starter 'requires' must be a list of profile keys", false;
+                            def.starterRequires.push_back(e.get<std::string>());
+                        }
+                    }
+                    else
+                        return why = "unknown field '" + k + "' in 'starter'", false;
+                }
+            }
+            if (rec.contains("art") && !readSpeciesArt(db, rec["art"], art, why))
+                return false;
+            return true;
+        }
+
         inline void applySpecies(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
         {
-            static const std::set<std::string> allowed{"type", "mode", "id", "based_on", "default_palette", "own_illness", "start", "money", "starter_items", "art"};
+            static const std::set<std::string> allowed{"type", "mode", "id", "based_on", "default_palette", "own_illness", "start", "money", "starter_items", "art", "starter", "starter_kit"};
             std::string id, why;
+            if (rec.contains("mode") && rec["mode"].is_string() && rec["mode"].get<std::string>() == "patch")
+            { // changes a species that is there (a base one too): the same fields as add, without based_on
+                for (auto it = rec.begin(); it != rec.end(); ++it)
+                    if (!allowed.count(it.key()) || it.key() == "based_on")
+                        return err(rep, file, m.id, "unknown field '" + it.key() + "' in a species patch");
+                if (!rec.contains("id") || !rec["id"].is_string())
+                    return err(rep, file, m.id, "record has no string 'id'");
+                id = rec["id"].get<std::string>();
+                SpeciesDef *def = db.speciesMutable(id);
+                if (!def || !knownSpecies(def->legacyIndex))
+                    return err(rep, file, m.id, "patch '" + id + "': no such species");
+                SpeciesDef d2 = *def;
+                SpeciesArt a2 = artOf(def->legacyIndex);
+                if (!fillSpecies(db, rec, d2, a2, why))
+                    return err(rep, file, m.id, "'" + id + "': " + why);
+                *def = d2;
+                a2.kit = d2.kitSpecies;
+                speciesArts()[size_t(def->legacyIndex)] = a2;
+                rep.lastWriter[id] = m.id;
+                return;
+            }
             if (!beginAdd(m, file, rec, rep, "species", allowed, [&](const std::string &i)
                           { return db.species(i) != nullptr; }, id))
                 return;
@@ -2217,6 +2350,10 @@ namespace gp
                     return err(rep, file, m.id, "'" + id + "': 'based_on' must be the id of a species (like \"base:species/0\")");
                 art = artOf(b->legacyIndex);
                 def = *b;
+                def.starterRoom = false; // a copy is not offered until its record says so
+                def.starterColors.clear();
+                def.starterRareColors.clear();
+                def.starterRequires.clear();
             }
             else
             {
@@ -2225,45 +2362,7 @@ namespace gp
                 def.defaultPalette = 0x1df;
             }
             def.id = id;
-            if (!optInt(rec, "default_palette", def.defaultPalette, 0, 0x7ffff, why) || !optInt(rec, "own_illness", def.ownIllness, 0, 9, why))
-                return err(rep, file, m.id, "'" + id + "': " + why);
-            if (rec.contains("start"))
-            {
-                const json &s = rec["start"];
-                if (!s.is_object())
-                    return err(rep, file, m.id, "'" + id + "': 'start' must be an object");
-                for (auto it = s.begin(); it != s.end(); ++it)
-                {
-                    int *dst = it.key() == "health" ? &def.startHealth : it.key() == "hunger" ? &def.startHunger : it.key() == "happiness" ? &def.startHappiness
-                               : it.key() == "cleanliness" ? &def.startCleanliness : it.key() == "tiredness" ? &def.startTiredness : nullptr;
-                    if (!dst)
-                        return err(rep, file, m.id, "'" + id + "': unknown field '" + it.key() + "' in 'start'");
-                    if (!it.value().is_number_integer() || it.value().get<int>() < 0 || it.value().get<int>() > 255)
-                        return err(rep, file, m.id, "'" + id + "': start " + it.key() + " must be 0 to 255");
-                    *dst = it.value().get<int>();
-                }
-            }
-            if (!optPair(rec, "money", def.startMoneyMin, def.startMoneyMax, 0, 9999, why))
-                return err(rep, file, m.id, "'" + id + "': " + why);
-            if (def.startMoneyMax < def.startMoneyMin)
-                return err(rep, file, m.id, "'" + id + "': 'money' must be [low, high]");
-            if (rec.contains("starter_items"))
-            {
-                if (!rec["starter_items"].is_array() || rec["starter_items"].size() > 64)
-                    return err(rep, file, m.id, "'" + id + "': 'starter_items' must be a list of { item, count }");
-                def.starterItems.clear();
-                for (const json &e : rec["starter_items"])
-                {
-                    if (!e.is_object() || !e.contains("item") || !e["item"].is_string() || !db.item(e["item"].get<std::string>()))
-                        return err(rep, file, m.id, "'" + id + "': a starter item needs the id of an item");
-                    StarterItem si;
-                    si.item = e["item"].get<std::string>();
-                    if (!optInt(e, "count", si.count, 1, 99, why))
-                        return err(rep, file, m.id, "'" + id + "': " + why);
-                    def.starterItems.push_back(si);
-                }
-            }
-            if (rec.contains("art") && !readSpeciesArt(db, rec["art"], art, why))
+            if (!fillSpecies(db, rec, def, art, why))
                 return err(rep, file, m.id, "'" + id + "': " + why);
             if (!clone)
                 for (int role : {art.walkUp, art.walkDown, art.walkSide, art.idleBase})
@@ -2271,6 +2370,7 @@ namespace gp
                         return err(rep, file, m.id, "'" + id + "': a species with no 'based_on' needs art.walkUp, walkDown, walkSide and idleBase");
             def.legacyIndex = int(speciesArts().size()); // its runtime number (not saved: a save keeps the id)
             art.id = id;
+            art.kit = def.kitSpecies;
             speciesArts().push_back(art);
             db.put(std::move(def));
             rep.lastWriter[id] = m.id;
@@ -2369,6 +2469,7 @@ namespace gp
     inline ModReport importMods(ContentDB &db, const fs::path &modsDir)
     {
         ModReport rep;
+        forgetModSpecies(); // the front end and the game each load the mods: the species of a mod must not be added twice
         if (!fs::exists(modsDir))
             return rep;
 
@@ -2403,6 +2504,16 @@ namespace gp
             }
             rep.loaded.push_back(m.id);
         }
+        // an npc's species is found by its id now that every mod's species is there; its number is what the code keeps
+        for (const NpcDef *seen : db.allNpcs())
+            if (!seen->speciesId.empty())
+            {
+                const SpeciesDef *sd = db.species(seen->speciesId);
+                if (!sd || !knownSpecies(sd->legacyIndex))
+                    rep.errors.push_back("npc '" + seen->id + "': unknown species '" + seen->speciesId + "'");
+                else
+                    db.npcMutable(seen->id)->speciesOrAnim = sd->legacyIndex;
+            }
         return rep;
     }
 
