@@ -222,13 +222,27 @@ namespace gp
             Rect,
             Sprite,
             Text,
-            Num
+            Num,
+            Line,        // x, y -> x2, y2, thick
+            Circle,      // x, y, radius (w), fill
+            Poly,        // pts = x, y pairs: a filled convex shape (a fan), or its outline
+            Mesh,        // str = a canvas (or "@frame"); pts = 8 numbers a vertex: x, y, u, v, r, g, b, a (u, v 0..1); idx = triangles
+            CanvasBegin, // str = name, w, h: what follows (to CanvasEnd) is drawn into that canvas, in its own pixels
+            CanvasEnd,
+            Blit         // str = a canvas (or "@frame": the picture as it is so far); x, y, w, h = its place (0 = its own size)
         };
         Kind kind = Kind::Clear;
         int x = 0, y = 0, w = 0, h = 0;
         int r = 0, g = 0, b = 0, a = 255; // Clear, Rect
         bool fill = true;                 // Rect: false = an outline
         int blend = 0;                    // Rect: 0 normal (alpha), 1 add (lighten), 2 multiply (darken / tint)
+        float sx = 1, sy = 1, angle = 0;  // Sprite, Blit: scale and rotation (degrees, around the anchor / the middle)
+        float pivotX = 0, pivotY = 0;     // Sprite, Blit: the point it turns around, from the picture's top left; used when hasPivot
+        bool hasPivot = false;
+        int tr = 255, tg = 255, tb = 255, ta = 255; // Sprite, Blit: tint and alpha
+        int x2 = 0, y2 = 0, thick = 1;    // Line
+        std::vector<float> pts;           // Poly, Mesh
+        std::vector<int> idx;             // Mesh
         std::string str;                  // Sprite: the picture's id; Text: the text id
         double num = 0;                   // Num: the number
         int frame = 0;                    // Sprite: frame number from 0
@@ -980,7 +994,7 @@ namespace gp
             drawing_ = true;
             runHook(sceneHooks_, 'S', sceneId_, "onDraw", [&]
                     {
-                        const std::pair<const char *, lua_CFunction> fns[] = {{"clear", l_gClear}, {"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}};
+                        const std::pair<const char *, lua_CFunction> fns[] = {{"clear", l_gClear}, {"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}};
                         for (const auto &[name, f] : fns)
                         {
                             lua_pushlightuserdata(L_, this);
@@ -1001,7 +1015,7 @@ namespace gp
                 return sceneCmds_;
             auto fns = [&]
             {
-                const std::pair<const char *, lua_CFunction> list[] = {{"clear", l_gClear}, {"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}};
+                const std::pair<const char *, lua_CFunction> list[] = {{"clear", l_gClear}, {"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}};
                 for (const auto &[name, f] : list)
                 {
                     lua_pushlightuserdata(L_, this);
@@ -1024,7 +1038,7 @@ namespace gp
                 return sceneCmds_;
             auto fns = [&]
             {
-                const std::pair<const char *, lua_CFunction> list[] = {{"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}};
+                const std::pair<const char *, lua_CFunction> list[] = {{"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}};
                 for (const auto &[name, f] : list)
                 {
                     lua_pushlightuserdata(L_, this);
@@ -1383,7 +1397,7 @@ namespace gp
         bool haveNumber_ = false; // the last hook that was asked for its result returned a number
         double number_ = 0;
         // scene state
-        bool sceneOpen_ = false, closeRequested_ = false, drawing_ = false, hud_ = false;
+        bool sceneOpen_ = false, closeRequested_ = false, drawing_ = false, hud_ = false, canvasOpen_ = false;
         std::string sceneId_, pendingOpen_;
         long sceneTicks_ = 0;
         std::vector<DrawCmd> sceneCmds_;
@@ -2242,7 +2256,7 @@ namespace gp
         }
 
         // ---- the draw handle (the ctx table of onDraw) ----
-        static constexpr size_t kMaxDrawCmds = 2000;
+        static constexpr size_t kMaxDrawCmds = 4000;
         // A colour is { r, g, b [, a] }, each 0 to 255.
         static bool colourArg(lua_State *L, int idx, int out[4])
         {
@@ -2322,6 +2336,277 @@ namespace gp
             self(L).sceneCmds_.push_back(std::move(d));
             return 0;
         }
+        // ---- richer drawing: the options a sprite / blit takes, shapes, canvases and meshes ----
+        static float optNum(lua_State *L, int idx, const char *key, float def)
+        {
+            lua_getfield(L, idx, key);
+            float v = def;
+            if (!lua_isnil(L, -1))
+            {
+                if (!lua_isnumber(L, -1))
+                    luaL_error(L, "'%s' must be a number", key);
+                v = float(lua_tonumber(L, -1));
+                if (!(v > -100000.f && v < 100000.f))
+                    luaL_error(L, "'%s' is out of range", key);
+            }
+            lua_pop(L, 1);
+            return v;
+        }
+        static int blendOf(lua_State *L, int idx)
+        {
+            lua_getfield(L, idx, "mode");
+            int b = 0;
+            if (lua_type(L, -1) == LUA_TSTRING)
+            {
+                const std::string m = lua_tostring(L, -1);
+                if (m == "add")
+                    b = 1;
+                else if (m == "mul")
+                    b = 2;
+                else if (m != "blend")
+                    luaL_error(L, "mode must be 'blend', 'add' or 'mul'");
+            }
+            lua_pop(L, 1);
+            return b;
+        }
+        // { scale = 2 | scaleX, scaleY, angle = degrees, pivot = { x, y } (from the picture's top left), tint = { r, g, b }, alpha = 0..1, mode = "blend" | "add" | "mul" }
+        static void transformOpts(lua_State *L, int idx, DrawCmd &d)
+        {
+            const float sc = optNum(L, idx, "scale", 1.f);
+            d.sx = optNum(L, idx, "scaleX", sc);
+            d.sy = optNum(L, idx, "scaleY", sc);
+            d.angle = optNum(L, idx, "angle", 0.f);
+            d.blend = blendOf(L, idx);
+            lua_getfield(L, idx, "pivot");
+            if (!lua_isnil(L, -1))
+            {
+                luaL_checktype(L, -1, LUA_TTABLE);
+                lua_rawgeti(L, -1, 1);
+                lua_rawgeti(L, -2, 2);
+                if (!lua_isnumber(L, -2) || !lua_isnumber(L, -1))
+                    luaL_error(L, "pivot is { x, y }");
+                d.pivotX = float(lua_tonumber(L, -2));
+                d.pivotY = float(lua_tonumber(L, -1));
+                d.hasPivot = true;
+                lua_pop(L, 2);
+            }
+            lua_pop(L, 1);
+            lua_getfield(L, idx, "tint");
+            if (!lua_isnil(L, -1))
+            {
+                int c[4];
+                colourArg(L, lua_gettop(L), c);
+                d.tr = c[0];
+                d.tg = c[1];
+                d.tb = c[2];
+            }
+            lua_pop(L, 1);
+            const float al = optNum(L, idx, "alpha", 1.f);
+            d.ta = int(al < 0.f ? 0.f : al > 1.f ? 255.f : al * 255.f + 0.5f);
+        }
+        // g.line(x1, y1, x2, y2, color [, width = 1])
+        static int l_gLine(lua_State *L)
+        {
+            drawGuard(L);
+            DrawCmd d;
+            d.kind = DrawCmd::Kind::Line;
+            d.x = int(luaL_checkinteger(L, 1));
+            d.y = int(luaL_checkinteger(L, 2));
+            d.x2 = int(luaL_checkinteger(L, 3));
+            d.y2 = int(luaL_checkinteger(L, 4));
+            int c[4];
+            colourArg(L, 5, c);
+            d.r = c[0]; d.g = c[1]; d.b = c[2]; d.a = c[3];
+            d.thick = int(luaL_optinteger(L, 6, 1));
+            luaL_argcheck(L, d.thick >= 1 && d.thick <= 64, 6, "a width of 1 to 64");
+            self(L).sceneCmds_.push_back(std::move(d));
+            return 0;
+        }
+        // g.circle(x, y, radius, color [, fill = true [, mode]])
+        static int l_gCircle(lua_State *L)
+        {
+            drawGuard(L);
+            DrawCmd d;
+            d.kind = DrawCmd::Kind::Circle;
+            d.x = int(luaL_checkinteger(L, 1));
+            d.y = int(luaL_checkinteger(L, 2));
+            d.w = int(luaL_checkinteger(L, 3));
+            luaL_argcheck(L, d.w >= 0 && d.w <= 4096, 3, "a radius of 0 to 4096");
+            int c[4];
+            colourArg(L, 4, c);
+            d.r = c[0]; d.g = c[1]; d.b = c[2]; d.a = c[3];
+            d.fill = lua_isnoneornil(L, 5) || lua_toboolean(L, 5);
+            if (!lua_isnoneornil(L, 6))
+            {
+                const std::string m = luaL_checkstring(L, 6);
+                d.blend = m == "add" ? 1 : m == "mul" ? 2 : 0;
+                if (m != "add" && m != "mul" && m != "blend")
+                    return luaL_error(L, "g.circle mode must be 'blend', 'add' or 'mul'");
+            }
+            self(L).sceneCmds_.push_back(std::move(d));
+            return 0;
+        }
+        // g.poly({ x1, y1, x2, y2, ... }, color [, fill = true [, mode]]): a convex shape with 3 to 64 corners (filled as a fan from the first corner)
+        static int l_gPoly(lua_State *L)
+        {
+            drawGuard(L);
+            luaL_checktype(L, 1, LUA_TTABLE);
+            DrawCmd d;
+            d.kind = DrawCmd::Kind::Poly;
+            const lua_Integer n = lua_rawlen(L, 1);
+            luaL_argcheck(L, n >= 6 && n <= 128 && n % 2 == 0, 1, "{ x1, y1, x2, y2, ... } with 3 to 64 corners");
+            for (lua_Integer i = 1; i <= n; ++i)
+            {
+                lua_rawgeti(L, 1, i);
+                if (!lua_isnumber(L, -1))
+                    luaL_argerror(L, 1, "corners are numbers");
+                d.pts.push_back(float(lua_tonumber(L, -1)));
+                lua_pop(L, 1);
+            }
+            int c[4];
+            colourArg(L, 2, c);
+            d.r = c[0]; d.g = c[1]; d.b = c[2]; d.a = c[3];
+            d.fill = lua_isnoneornil(L, 3) || lua_toboolean(L, 3);
+            if (!lua_isnoneornil(L, 4))
+            {
+                const std::string m = luaL_checkstring(L, 4);
+                d.blend = m == "add" ? 1 : m == "mul" ? 2 : 0;
+                if (m != "add" && m != "mul" && m != "blend")
+                    return luaL_error(L, "g.poly mode must be 'blend', 'add' or 'mul'");
+            }
+            self(L).sceneCmds_.push_back(std::move(d));
+            return 0;
+        }
+        static bool canvasNameOk(const char *n)
+        {
+            if (!*n || std::strlen(n) > 40)
+                return false;
+            if (n[0] == '@')
+                return !std::strcmp(n, "@frame");
+            for (const char *c = n; *c; ++c)
+                if (!(std::isalnum(static_cast<unsigned char>(*c)) || *c == '_' || *c == '-' || *c == ':' || *c == '/'))
+                    return false;
+            return true;
+        }
+        // g.canvas(name, width, height, function() ... end): the drawing calls inside (use the same g) go to an offscreen picture of that size, in its own pixels, starting empty.
+        // Draw it later with g.blit(name, x, y, opts) or g.mesh. 1..2048 a side; at most 8 canvases are kept.
+        static int l_gCanvas(lua_State *L)
+        {
+            drawGuard(L);
+            ScriptHost &h = self(L);
+            const char *name = luaL_checkstring(L, 1);
+            const lua_Integer w = luaL_checkinteger(L, 2), hh = luaL_checkinteger(L, 3);
+            luaL_checktype(L, 4, LUA_TFUNCTION);
+            luaL_argcheck(L, canvasNameOk(name) && name[0] != '@', 1, "a canvas name: letters, digits, _ - : / (no @)");
+            luaL_argcheck(L, w >= 1 && w <= 2048 && hh >= 1 && hh <= 2048, 2, "a size of 1 to 2048");
+            if (h.canvasOpen_)
+                return luaL_error(L, "canvases do not nest");
+            DrawCmd b;
+            b.kind = DrawCmd::Kind::CanvasBegin;
+            b.str = name;
+            b.w = int(w);
+            b.h = int(hh);
+            h.sceneCmds_.push_back(std::move(b));
+            h.canvasOpen_ = true;
+            lua_pushvalue(L, 4);
+            const int rc = lua_pcall(L, 0, 0, 0);
+            h.canvasOpen_ = false;
+            DrawCmd e;
+            e.kind = DrawCmd::Kind::CanvasEnd;
+            h.sceneCmds_.push_back(std::move(e));
+            if (rc != LUA_OK)
+                return lua_error(L);
+            return 0;
+        }
+        // g.blit(name, x, y [, { w, h, scale, scaleX, scaleY, angle, pivot, tint, alpha, mode, flip }]): a canvas of this frame drawn at x, y (its top left), or "@frame": the picture
+        // drawn so far, whole (only in Game.hooks().onPostDraw it is the finished frame). w, h = a size to fit it to.
+        static int l_gBlit(lua_State *L)
+        {
+            drawGuard(L);
+            const char *name = luaL_checkstring(L, 1);
+            luaL_argcheck(L, canvasNameOk(name), 1, "a canvas name, or \"@frame\"");
+            DrawCmd d;
+            d.kind = DrawCmd::Kind::Blit;
+            d.str = name;
+            d.x = int(luaL_checkinteger(L, 2));
+            d.y = int(luaL_checkinteger(L, 3));
+            if (!lua_isnoneornil(L, 4))
+            {
+                luaL_checktype(L, 4, LUA_TTABLE);
+                d.w = int(optNum(L, 4, "w", 0.f));
+                d.h = int(optNum(L, 4, "h", 0.f));
+                lua_getfield(L, 4, "flip");
+                d.flip = lua_toboolean(L, -1) != 0;
+                lua_pop(L, 1);
+                transformOpts(L, 4, d);
+            }
+            self(L).sceneCmds_.push_back(std::move(d));
+            return 0;
+        }
+        // g.mesh(name, vertices [, triangles [, opts]]): a canvas (or "@frame") drawn on triangles, for waves, curls and warps. vertices = { { x, y, u, v [, tint] }, ... } with u, v from 0 to 1
+        // across the picture; triangles = { i1, i2, i3, i4, i5, i6, ... } (1-based vertex numbers; default: the vertices are taken three at a time). At most 4096 vertices.
+        static int l_gMesh(lua_State *L)
+        {
+            drawGuard(L);
+            const char *name = luaL_checkstring(L, 1);
+            luaL_argcheck(L, canvasNameOk(name), 1, "a canvas name, or \"@frame\"");
+            luaL_checktype(L, 2, LUA_TTABLE);
+            DrawCmd d;
+            d.kind = DrawCmd::Kind::Mesh;
+            d.str = name;
+            const lua_Integer nv = lua_rawlen(L, 2);
+            luaL_argcheck(L, nv >= 3 && nv <= 4096, 2, "3 to 4096 vertices");
+            for (lua_Integer i = 1; i <= nv; ++i)
+            {
+                lua_rawgeti(L, 2, i);
+                luaL_argcheck(L, lua_istable(L, -1), 2, "a vertex is { x, y, u, v [, { r, g, b, a }] }");
+                float f[4];
+                for (int k = 0; k < 4; ++k)
+                {
+                    lua_rawgeti(L, -1, k + 1);
+                    if (!lua_isnumber(L, -1))
+                        luaL_argerror(L, 2, "a vertex is { x, y, u, v [, { r, g, b, a }] }");
+                    f[k] = float(lua_tonumber(L, -1));
+                    lua_pop(L, 1);
+                }
+                int c[4] = {255, 255, 255, 255};
+                lua_rawgeti(L, -1, 5);
+                if (!lua_isnil(L, -1))
+                    colourArg(L, lua_gettop(L), c);
+                lua_pop(L, 2);
+                for (float v : f)
+                    d.pts.push_back(v);
+                for (int v : c)
+                    d.pts.push_back(float(v));
+            }
+            if (!lua_isnoneornil(L, 3))
+            {
+                luaL_checktype(L, 3, LUA_TTABLE);
+                const lua_Integer ni = lua_rawlen(L, 3);
+                luaL_argcheck(L, ni >= 3 && ni % 3 == 0 && ni <= 12288, 3, "triangles: a multiple of 3 numbers");
+                for (lua_Integer i = 1; i <= ni; ++i)
+                {
+                    lua_rawgeti(L, 3, i);
+                    const lua_Integer v = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : 0;
+                    lua_pop(L, 1);
+                    luaL_argcheck(L, v >= 1 && v <= nv, 3, "a vertex number from 1 to the number of vertices");
+                    d.idx.push_back(int(v - 1));
+                }
+            }
+            else
+            {
+                luaL_argcheck(L, nv % 3 == 0, 2, "without a triangle list, a multiple of 3 vertices");
+                for (int i = 0; i < int(nv); ++i)
+                    d.idx.push_back(i);
+            }
+            if (!lua_isnoneornil(L, 4))
+            {
+                luaL_checktype(L, 4, LUA_TTABLE);
+                d.blend = blendOf(L, 4);
+            }
+            self(L).sceneCmds_.push_back(std::move(d));
+            return 0;
+        }
         // g.sprite(id, x, y [, { frame = 0, flip = false }]): a picture of a mod (an anim record's id) or of the game, with its anchor at x, y
         static int l_gSprite(lua_State *L)
         {
@@ -2330,6 +2615,7 @@ namespace gp
             const int x = int(luaL_checkinteger(L, 2)), y = int(luaL_checkinteger(L, 3));
             int frame = 0;
             bool flip = false;
+            DrawCmd d;
             if (!lua_isnoneornil(L, 4))
             {
                 luaL_checktype(L, 4, LUA_TTABLE);
@@ -2340,9 +2626,9 @@ namespace gp
                 lua_getfield(L, 4, "flip");
                 flip = lua_toboolean(L, -1) != 0;
                 lua_pop(L, 1);
+                transformOpts(L, 4, d);
             }
             luaL_argcheck(L, idCharsOk(id) && frame >= 0 && frame < 10000, 1, "a picture id (and a frame from 0)");
-            DrawCmd d;
             d.kind = DrawCmd::Kind::Sprite;
             d.str = id;
             d.x = x;

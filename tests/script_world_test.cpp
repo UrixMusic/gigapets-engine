@@ -196,6 +196,57 @@ int main()
         gp::ScriptHost none;
         CHECK(none.drawPost().empty());
     }
+    { // richer drawing: shapes, canvases, blits, meshes and sprite transforms become draw commands; mistakes are script errors
+        gp::ScriptHost hh;
+        CHECK(hh.runString("m", R"(
+            local G = Game.hooks()
+            function G:onPostDraw(g)
+              g.line(0, 0, 10, 10, {1, 2, 3}, 4)
+              g.circle(5, 6, 7, {9, 9, 9, 50}, false, 'add')
+              g.poly({0, 0, 10, 0, 5, 9}, {1, 1, 1})
+              g.canvas('c1', 32, 16, function() g.rect(0, 0, 4, 4, {5, 5, 5}) end)
+              g.blit('c1', 3, 4, { scale = 2, angle = 45, tint = {10, 20, 30}, alpha = 0.5, mode = 'mul', pivot = {1, 2} })
+              g.blit('@frame', 0, 0)
+              g.mesh('@frame', { {0, 0, 0, 0}, {10, 0, 1, 0}, {0, 10, 0, 1, {255, 0, 0}} })
+              g.sprite('m:anim/a', 1, 2, { scale = 3, angle = 90, flip = true })
+            end
+            )"));
+        const std::vector<gp::DrawCmd> &c = hh.drawPost();
+        using K = gp::DrawCmd::Kind;
+        CHECK(c.size() == 10);
+        if (c.size() == 10)
+        {
+            CHECK(c[0].kind == K::Line && c[0].thick == 4 && c[0].x2 == 10);
+            CHECK(c[1].kind == K::Circle && c[1].w == 7 && !c[1].fill && c[1].blend == 1);
+            CHECK(c[2].kind == K::Poly && c[2].pts.size() == 6 && c[2].fill);
+            CHECK(c[3].kind == K::CanvasBegin && c[3].str == "c1" && c[3].w == 32 && c[4].kind == K::Rect && c[5].kind == K::CanvasEnd);
+            CHECK(c[6].kind == K::Blit && c[6].sx == 2.f && c[6].angle == 45.f && c[6].tg == 20 && c[6].ta == 128 && c[6].blend == 2 && c[6].hasPivot && c[6].pivotY == 2.f);
+            CHECK(c[7].kind == K::Blit && c[7].str == "@frame");
+            CHECK(c[8].kind == K::Mesh && c[8].pts.size() == 24 && c[8].idx.size() == 3 && c[8].pts[8 + 4] == 255.f && c[8].pts[16 + 4] == 255.f && c[8].pts[16 + 5] == 0.f);
+            CHECK(c[9].kind == K::Sprite && c[9].sx == 3.f && c[9].sy == 3.f && c[9].angle == 90.f && c[9].flip);
+        }
+        CHECK(hh.errors().empty());
+        const char *bad[] = {
+            "g.canvas('a', 10, 10, function() g.canvas('b', 5, 5, function() end) end)",           // canvases do not nest
+            "g.canvas('@frame', 10, 10, function() end)",                                           // @ is not a canvas name
+            "g.canvas('a', 5000, 10, function() end)",                                              // too big
+            "g.blit('bad name!', 0, 0)",                                                            // a name of letters, digits and _ - : /
+            "g.mesh('@frame', { {0, 0, 0, 0} })",                                                  // 3 vertices at least
+            "g.mesh('@frame', { {0, 0, 0, 0}, {1, 1, 1, 1}, {2, 2, 0, 0} }, { 1, 2, 9 })",         // a vertex that is not there
+            "g.poly({0, 0, 1, 1}, {1, 1, 1})",                                                      // 3 corners at least
+            "g.line(0, 0, 1, 1, {1, 1, 1}, 0)",                                                     // a width of at least 1
+            "g.sprite('m:anim/a', 1, 1, { scale = 'big' })",                                        // a number
+            "g.blit('c', 0, 0, { mode = 'xor' })",                                                  // a known mode
+        };
+        for (const char *b : bad)
+        {
+            gp::ScriptHost bh;
+            CHECK(bh.runString("m", std::string("local G = Game.hooks(); function G:onPostDraw(g) ") + b + " end"));
+            bh.drawPost();
+            CHECK(!bh.errors().empty());
+        }
+        CHECK(hh.drawPost().size() == 10); // (and it works again the next frame: nothing is left open)
+    }
     { // with nothing wired the calls are harmless
         gp::ScriptHost h2;
         CHECK(h2.runString("m", "assert(player.pos() == nil and player.setPos(1, 2) == false and player.react('happy') == false and area.go('a:b', 1, 2) == false and area.current() == '')"));
