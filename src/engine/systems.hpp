@@ -88,6 +88,8 @@ namespace gp
              "npc, pet, target (the deltas), player and animal (the reaction codes the rules gave: 1, 2 friendly, 3 / 7 startled or sad, 4, 5 hostile, 6 bored): change them. A friendly animal code with a player code that is not 4 or 5 is a friendly outcome; 4 or 5 on the animal side is a hostile one; anything else neutral"},
             {"encounter.finish", "the sequence has ended; after a friendly outcome the game rolls for friendship",
              "npc, outcome (\"friend\" or \"other\"), chance (the roll's number, 0..100+), friend (1 = they become friends: set it to decide; the default rolls only after a friendly outcome)"},
+            {"friend.gift", "a new friend is made: the gift that drops where the pet stands, and on the 10th, 20th, 30th, 35th and 40th friend an extra one",
+             "npc, friends (how many, counting this one), drop and milestone (item ids, \"\" = nothing): change them. An unknown id gives nothing"},
             {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
              "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };

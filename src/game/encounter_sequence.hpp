@@ -38,6 +38,9 @@ namespace gp
         // Optional: lets the game (and so the mods: system "encounter.classify") change the two reaction codes the rules gave for these deltas. Called once, when the
         // pets have finished their first calls; the codes then decide the reactions and the outcome (see EncounterSequence).
         std::function<void(int petDelta, int npcDelta, int &playerCode, int &animalCode)> classify;
+        // Optional: a new friend's gifts. `drop` is the item (a number; 0 or less = none) that lands where the pet is about to stand, `milestone` the extra one at 10, 20, 30, 35
+        // and 40 friends (0 = none); both start at the base game's values and the host may change them (system "friend.gift"). `friends` counts the new one.
+        std::function<void(int friends, int &drop, int &milestone)> gifts;
     };
 
     class EncounterSequence
@@ -210,11 +213,17 @@ namespace gp
                     // (SpawnPendingEvent(area, -1, 0xa3, g_petTargetX, petY + 10, visible, not persistent, category)),
                     // and every 5th..10th friend a milestone item 20 px further out and 20 px below.
                     const int py = h.petY ? h.petY() : 0;
-                    h.event("pending_event", 0xa3);
-                    if (h.spawnItem)
-                        h.spawnItem(kFriendDropItem, targetX_, py + kFriendDropDY);
+                    int drop = kFriendDropItem, ms = milestoneEvent(friends);
+                    if (h.gifts)
+                        h.gifts(friends, drop, ms);
+                    if (drop > 0)
+                    {
+                        h.event("pending_event", drop);
+                        if (h.spawnItem)
+                            h.spawnItem(drop, targetX_, py + kFriendDropDY);
+                    }
                     h.event("sound", 0x54);
-                    if (const int ms = milestoneEvent(friends))
+                    if (ms > 0)
                     {
                         h.event("pending_event", ms);
                         if (h.spawnItem)

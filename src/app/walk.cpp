@@ -2307,6 +2307,17 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
         host.petY = [&]
         { return pos.y; };
+        host.gifts = [&](int friends, int &drop, int &milestone)
+        {
+            // the engine system "friend.gift": what a new friend gives. `drop` and `milestone` are item ids ("" = none); the milestone is the extra gift at 10, 20, 30, 35 and 40 friends
+            const auto idOf = [&](int n) -> std::string { return n > 0 && size_t(n) < itemDefs.size() ? itemDefs[size_t(n)].id : std::string(); };
+            const auto numOf = [&](const std::string &id) { const gp::ItemDef *d = id.empty() ? nullptr : db.item(id); return d ? d->index : 0; };
+            gp::SystemCtx c;
+            c.set("npc", encNpc ? encNpc->def->id : std::string()).set("friends", friends).set("drop", idOf(drop)).set("milestone", idOf(milestone));
+            scripts.system("friend.gift", c, [] {});
+            drop = numOf(c.str("drop"));
+            milestone = numOf(c.str("milestone"));
+        };
         host.spawnItem = [&](int item, int x, int y) // SpawnPendingEvent: visible, not persistent, category-flagged
         { events.placeAt(cur->def->legacyId, item, x, y, false); };
 

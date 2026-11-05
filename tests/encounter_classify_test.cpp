@@ -1,8 +1,13 @@
 // encounter_classify_test.cpp - the host's classify hook can change the reaction codes of an encounter, and with them its outcome.
 #include <cstdio>
+#include <vector>
 #include <functional>
 #include "../src/game/encounter_sequence.hpp"
 using namespace gp;
+
+static std::vector<int> g_drops;
+static std::function<void(int, int &, int &)> g_gifts;
+static int g_friends = 3;
 
 static EncounterSequence::Outcome run(int petDelta, int npcDelta, std::function<void(int, int, int &, int &)> classify, int *calls = nullptr)
 {
@@ -11,7 +16,9 @@ static EncounterSequence::Outcome run(int petDelta, int npcDelta, std::function<
     h.npcX = [] { return 100; };
     h.npcY = [] { return 200; };
     h.petY = [] { return 200; };
-    h.spawnItem = [](int, int, int) {};
+    g_drops.clear();
+    h.spawnItem = [](int item, int, int) { g_drops.push_back(item); };
+    h.gifts = g_gifts;
     h.petWalkToX = [](int) { return true; };
     h.petWalkToY = [](int) { return true; };
     h.petFace = [](bool) {};
@@ -24,7 +31,7 @@ static EncounterSequence::Outcome run(int petDelta, int npcDelta, std::function<
     h.npcUnlock = [] {};
     h.npcNoise = [] {};
     h.npcReact = [](int) {};
-    h.markFriended = [] { return 3; };
+    h.markFriended = [] { return g_friends; };
     h.event = [](const char *, int) {};
     if (classify)
         h.classify = [&, calls](int p, int n, int &pc, int &ac)
@@ -63,6 +70,24 @@ int main()
     check("a blocking player code stops the friendship", run(40, 40, [](int, int, int &pc, int &) { pc = 4; }) == O::Neutral);
     check("a hook sees the deltas", [&]
           { int sp = 0, sn = 0; run(12, -7, [&](int p, int n, int &, int &) { sp = p; sn = n; }); return sp == 12 && sn == -7; }());
+    { // gifts: the base game's drop and milestone, and a hook that changes them
+        g_gifts = nullptr;
+        run(40, 40, nullptr);
+        check("no hook: the friend drops 0xa3", g_drops.size() == 1 && g_drops[0] == 0xa3);
+        g_friends = 10;
+        run(40, 40, nullptr);
+        check("no hook: the 10th friend adds the milestone 0xc4", g_drops.size() == 2 && g_drops[1] == 0xc4);
+        int seen = 0, seenDrop = 0, seenMs = 0;
+        g_gifts = [&](int f, int &drop, int &ms) { seen = f; seenDrop = drop; seenMs = ms; drop = 7; ms = 0; };
+        run(40, 40, nullptr);
+        check("a hook sees the count and the base values", seen == 10 && seenDrop == 0xa3 && seenMs == 0xc4);
+        check("a hook changes the drop and removes the milestone", g_drops.size() == 1 && g_drops[0] == 7);
+        g_gifts = [](int, int &drop, int &ms) { drop = 0; ms = 9; };
+        run(40, 40, nullptr);
+        check("no drop, only the milestone", g_drops.size() == 1 && g_drops[0] == 9);
+        g_gifts = nullptr;
+        g_friends = 3;
+    }
     std::printf(fails ? "encounter_classify_test: %d failure(s)\n" : "encounter_classify_test: all passed\n", fails);
     return fails ? 1 : 0;
 }
