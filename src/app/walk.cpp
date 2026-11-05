@@ -286,6 +286,7 @@ static void grantStarterItems(gp::Player &p, const std::vector<gp::ItemDef> &def
 #include "../game/walk/walk_bar_gfx.hpp" // the menu bar host and the two Gfx adapters
 #include "../game/walk/walk_frame_draw.hpp"
 #include "../game/walk/walk_world_step.hpp"
+#include "../game/walk/walk_encounter_host.hpp"
 int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 {
     // globals from the standalone days: reset so a second run (after going back to the menu) starts clean
@@ -1591,233 +1592,51 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
 
         gp::EncounterHost host;
-        host.classify = [&](int petDelta, int npcDelta, int &playerCode, int &animalCode)
-        {
-            // the engine system "encounter.classify": the reaction codes the rules gave (1, 2 = friendly, 3, 7 = startled / sad, 4, 5 = hostile, 6 = bored); a mod may change them
-            gp::SystemCtx c;
-            c.set("npc", encNpc ? encNpc->def->id : std::string()).set("pet", petDelta).set("target", npcDelta).set("player", playerCode).set("animal", animalCode);
-            scripts.system("encounter.classify", c, [] {});
-            playerCode = int(c.num("player"));
-            animalCode = int(c.num("animal"));
-        };
-        auto walkAxis = [&](int target, bool xAxis) -> bool
-        {
-            int &c = xAxis ? pos.x : pos.y;
-            if (c == target)
-                return true;
-            const uint8_t dir = xAxis ? (target < c ? gp::DirLeft : gp::DirRight)
-                                      : (target < c ? gp::DirUp : gp::DirDown);
-            const int before = c;
-            pos = gp::stepPlayer(*world, pos, dir).pos;
-            if ((before < target) != (c < target)) // overshot: snap
-                c = target;
+        std::unique_ptr<EncounterHostBindings> encounterHostBindingsCtl; // built below, once everything it takes is declared (walk_encounter_host.hpp)
+        host.classify = [&](int petDelta, int npcDelta, int &playerCode, int &animalCode) { return (*encounterHostBindingsCtl).host_classifyRun(petDelta, npcDelta, playerCode, animalCode); };
+        auto walkAxis = [&](int target, bool xAxis) -> decltype(auto) { return (*encounterHostBindingsCtl).walkAxis(target, xAxis); };
+        host.petX = [&]() { return (*encounterHostBindingsCtl).host_petXRun(); };
+        host.npcX = [&]() { return (*encounterHostBindingsCtl).host_npcXRun(); };
+        host.npcY = [&]() { return (*encounterHostBindingsCtl).host_npcYRun(); };
+        host.petWalkToX = [&](int x) { return (*encounterHostBindingsCtl).host_petWalkToXRun(x); };
+        host.petWalkToY = [&](int y) { return (*encounterHostBindingsCtl).host_petWalkToYRun(y); };
+        host.npcLock = [&]() { return (*encounterHostBindingsCtl).host_npcLockRun(); };
+        host.npcSettled = [&]() { return (*encounterHostBindingsCtl).host_npcSettledRun(); };
+        host.npcUnlock = [&]() { return (*encounterHostBindingsCtl).host_npcUnlockRun(); };
+        host.markFriended = [&]() { return (*encounterHostBindingsCtl).host_markFriendedRun(); };
+        host.event = [&](const char *k, int v) { return (*encounterHostBindingsCtl).host_eventRun(k, v); };
+        host.petY = [&]() { return (*encounterHostBindingsCtl).host_petYRun(); };
+        host.gifts = [&](int friends, int &drop, int &milestone) { return (*encounterHostBindingsCtl).host_giftsRun(friends, drop, milestone); };
+        host.spawnItem = [&](int item, int x, int y) { return (*encounterHostBindingsCtl).host_spawnItemRun(item, x, y); };
 
-            pose = Pose::Move;
-            settleTicks = 0;
-            const int oldF = facing;
-            const bool oldL = faceLeft;
-            if (xAxis)
-            {
-                facing = 2;
-                faceLeft = dir == gp::DirLeft;
-            }
-            else
-                facing = dir == gp::DirUp ? 0 : 1;
-            if (facing != oldF || faceLeft != oldL)
-                walkTicks = 0;
-            ++walkTicks;
-            return c == target;
-        };
-        host.petX = [&]
-        { return pos.x; };
-        host.npcX = [&]
-        { return encNpc->x(); };
-        host.npcY = [&]
-        { return encNpc->y(); };
-        host.petWalkToX = [&](int x)
-        { return walkAxis(x, true); };
-        host.petWalkToY = [&](int y)
-        { return walkAxis(y, false); };
-        host.npcLock = [&]
-        {
-            const bool wasWalking = encNpc->walking();
-            if (wasWalking)
-                encNpc->startActivity(gp::kActivityTalkedTo, npcRng);
-            encNpc->locked = true;
-            return wasWalking;
-        };
-        host.npcSettled = [&]
-        {
-            return encNpc->settled();
-        };
-        host.npcUnlock = [&]
-        {
-            encNpc->locked = false;
-            encNpc->clearForced();
-        };
-        host.markFriended = [&]
-        {
-            player.markFriended(encNpc->def->id);
-            return int(player.friended.size());
-        };
-        host.event = [&](const char *k, int v)
-        {
-            std::printf("event %s 0x%x\n", k, v);
-            if (std::strcmp(k, "sound") == 0)
-                sfx(v); // PlaySoundEffect(0x54, 200) when a friend is made
-        };
-        host.petY = [&]
-        { return pos.y; };
-        host.gifts = [&](int friends, int &drop, int &milestone)
-        {
-            // the engine system "friend.gift": what a new friend gives. `drop` and `milestone` are item ids ("" = none); the milestone is the extra gift at 10, 20, 30, 35 and 40 friends
-            const auto idOf = [&](int n) -> std::string { return n > 0 && size_t(n) < itemDefs.size() ? itemDefs[size_t(n)].id : std::string(); };
-            const auto numOf = [&](const std::string &id) { const gp::ItemDef *d = id.empty() ? nullptr : db.item(id); return d ? d->index : 0; };
-            gp::SystemCtx c;
-            c.set("npc", encNpc ? encNpc->def->id : std::string()).set("friends", friends).set("drop", idOf(drop)).set("milestone", idOf(milestone));
-            scripts.system("friend.gift", c, [] {});
-            drop = numOf(c.str("drop"));
-            milestone = numOf(c.str("milestone"));
-        };
-        host.spawnItem = [&](int item, int x, int y) // SpawnPendingEvent: visible, not persistent, category-flagged
-        { events.placeAt(cur->def->legacyId, item, x, y, false); };
+        host.pet.play = [&](gp::ReactAnim a, int v) { return (*encounterHostBindingsCtl).host_pet_playRun(a, v); };
 
-        host.pet.play = [&](gp::ReactAnim a, int v)
-        {
-            const bool side = facing == 2;
-            if (facing == 0 && (a == gp::ReactAnim::Idle || a == gp::ReactAnim::Positive ||
-                                a == gp::ReactAnim::Emote || a == gp::ReactAnim::Shocked))
-                return false; // facing up: no art in these tables
-            const int id = gp::reactId(a, sp, v, side);
-            const int n = id < 0 ? 0 : int(getAnim(id).size());
-            if (n == 0)
-                return false;
-            playAnim(id, false, a == gp::ReactAnim::Bored ? 7 : 14, Pose::Special);
-            animReverse = gp::playsReversed(a);
-            if (animReverse)
-                animFrame = n - 1;
-            return true;
-        };
-
-        host.pet.busy = [&]
-        { return !animLoop && !animDone; };
-        host.pet.sound = [&](int c, int vol)
-        { gp::audio().playSfx(gp::petVoiceId(playerSpecies, c), vol < 0x20 ? 0xbe : vol); }; // PlaySoundFromCategory(species, c, vol); see host.npc.sound for vol 4
-        host.pet.bubble = [&](int id)
-        {
-            if (id == gp::kExclaimIntroAnim) // the exclamation over the head (SpawnMessageBubble 0xb, phase 4)
-                exclaimTicks = 0;
-            else
-                std::printf("bubble 0x%x\n", id);
-        };
-        host.pet.rand = [&](int lo, int hi)
-        { return hi <= lo ? lo : lo + std::rand() % (hi - lo); }; // RandRange: hi exclusive
+        host.pet.busy = [&]() { return (*encounterHostBindingsCtl).host_pet_busyRun(); };
+        host.pet.sound = [&](int c, int vol) { return (*encounterHostBindingsCtl).host_pet_soundRun(c, vol); };
+        host.pet.bubble = [&](int id) { return (*encounterHostBindingsCtl).host_pet_bubbleRun(id); };
+        host.pet.rand = [&](int lo, int hi) { return (*encounterHostBindingsCtl).host_pet_randRun(lo, hi); };
 
         int &settlePhase = S.pet.settlePhase; // TickActor_SettleFacing: no 0.15 s wait, ends facing down
-        host.pet.settle = [&]() -> bool
-        {
-            if (settlePhase == 0)
-            {
-                if (facing == 1)
-                    return true;
-                if (facing == 0)
-                {
-                    faceLeft = (std::rand() % 3) == 0;
-                    playAnim(gp::artOf(sp).turn180, false, 14, Pose::Settle, {{gp::artOf(sp).turn90, false, 14}, {restIdleId(), true, restIdleRate()}});
-                }
-                else
-                    playAnim(gp::artOf(sp).turn90, false, 14, Pose::Settle, {{restIdleId(), true, restIdleRate()}});
-                settlePhase = 1;
-                return false;
-            }
-            if (pose == Pose::Idle && isRestIdle(animId))
-            {
-                facing = 1;
-                settlePhase = 0;
-                return true;
-            }
-            return false;
-        };
-        host.petIdle = [&]
-        {
-            if (facing == 1)
-                playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
-            else if (facing == 2)
-                playAnim(gp::artOf(sp).idleSide, true, 14, Pose::Idle); // gp::artOf(0).idleSide
-            else
-            {
-                pose = Pose::Move; // up: no idle art, keep the old hold
-                walkTicks = 0;
-                settleTicks = 0;
-            }
-        };
-        host.petFace = [&](bool left)
-        { facing = 2; faceLeft = left; walkTicks = 0; }; // petIdle follows
-        host.petEngage = [&]
-        {
-            if (facing == 0)
-            {
-                facing = 2;
-                faceLeft = pos.x >= encNpc->x();
-            }
-            playAnim(gp::artOf(sp).idleSide, true, 14, Pose::Idle); // gp::artOf(0).idleSide
-        };
+        host.pet.settle = [&]() { return (*encounterHostBindingsCtl).host_pet_settleRun(); };
+        host.petIdle = [&]() { return (*encounterHostBindingsCtl).host_petIdleRun(); };
+        host.petFace = [&](bool left) { return (*encounterHostBindingsCtl).host_petFaceRun(left); };
+        host.petEngage = [&]() { return (*encounterHostBindingsCtl).host_petEngageRun(); };
 
-        host.npcIdle = [&]
-        { encNpc->clearForced(); };
-        host.npcFacePet = [&]
-        {
-            encNpc->body.facing = encNpc->x() < pos.x ? gp::FaceRight : gp::FaceLeft;
-        };
+        host.npcIdle = [&]() { return (*encounterHostBindingsCtl).host_npcIdleRun(); };
+        host.npcFacePet = [&]() { return (*encounterHostBindingsCtl).host_npcFacePetRun(); };
         host.npc.rand = [](int lo, int hi)
         { return hi <= lo ? lo : lo + std::rand() % (hi - lo); }; // RandRange: hi exclusive
         bool npcMute = false; // an idle NPC off screen makes no sound
-        host.npc.sound = [&](int c, int vol)
-        {
-            if (npcMute)
-                return;
-            const int s = encNpc->def->speciesOrAnim == 0xfffe ? playerSpecies : encNpc->def->speciesOrAnim;
-            // The idle noise's one odd call passes 4 where the others pass 0xbe; at volume 4 it is inaudible and the first
-            // sound of a meeting sometimes vanished, so it plays at the usual level (GUESS: 4 isn't a volume).
-            gp::audio().playSfx(gp::petVoiceId(gp::knownSpecies(s) ? s : playerSpecies, c), vol < 0x20 ? 0xbe : vol);
-        };
+        host.npc.sound = [&](int c, int vol) { return (*encounterHostBindingsCtl).host_npc_soundRun(c, vol); };
         host.npc.bubble = [](int id)
         { std::printf("npc bubble 0x%x\n", id); };
-        host.npc.settle = [&]
-        { return encNpc->settled(); };
-        host.npc.busy = [&]
-        { return !encNpc->forcedAnimId.empty() && encNpc->animBusy(); };
-        host.npc.play = [&](gp::ReactAnim a, int v)
+        host.npc.settle = [&]() { return (*encounterHostBindingsCtl).host_npc_settleRun(); };
+        host.npc.busy = [&]() { return (*encounterHostBindingsCtl).host_npc_busyRun(); };
+        host.npc.play = [&](gp::ReactAnim a, int v) { return (*encounterHostBindingsCtl).host_npc_playRun(a, v); };
         {
-            const gp::NpcActor &n = *encNpc;
-            const int f = n.body.facing;
-            const bool side = f == gp::FaceLeft || f == gp::FaceRight;
-            if (!side && f != gp::FaceDown &&
-                (a == gp::ReactAnim::Idle || a == gp::ReactAnim::Positive || a == gp::ReactAnim::Emote || a == gp::ReactAnim::Shocked))
-                return false; // facing up: no art
-            const int idle = std::atoi(n.def->anim.c_str() + n.def->anim.rfind('/') + 1);
-            const int tier = idle < 0x70 ? 0 : idle < 0xc0 ? 1
-                                                           : 2; // GUESS: tier from the idle id's range
-            const int sp = n.def->speciesOrAnim == 0xfffe ? playerSpecies : n.def->speciesOrAnim;
-            const int id = gp::reactId(a, sp, v, side);
-            if (id < 0)
-                return false;
-            const gp::Id full = reactAnimId(id, n.def->appearancePalette);
-            if (animRefById(full).size() == 0)
-                return false;
-            encNpc->forceAnim(full); // change forceAnim/forcedAnim to store an Id (std::string)
-            // Outros play last frame to first, same as the pet's (host.pet.play); the ROM shares one routine for both.
-            encNpc->forcedReverse = gp::playsReversed(a);
-            const bool neg = a == gp::ReactAnim::Negative || a == gp::ReactAnim::NegIntro ||
-                             a == gp::ReactAnim::NegOutro;
-            const bool panda = gp::artOf(sp).facesRight; // the art faces right (the panda's)
-            if (neg)
-                encNpc->forcedFlip = panda ? (f == gp::FaceLeft) : (f != gp::FaceLeft);
-            else
-                encNpc->forcedFlip = side && gp::reactMirror(sp, f == gp::FaceRight);
-
-            return true;
-        };
+            EncounterHostBindingsEnv env{animDone, animFrame, animId, animLoop, animRefById, animReverse, cur, db, encNpc, events, exclaimTicks, faceLeft, facing, getAnim, isRestIdle, itemDefs, itemName, npcMute, npcRng, ownedCount, playAnim, playerSpecies, pos, pose, reactAnimId, restIdleId, restIdleRate, scripts, settlePhase, settleTicks, sfx, sp, walkTicks, world};
+            encounterHostBindingsCtl = std::make_unique<EncounterHostBindings>(std::move(env));
+        }
 
         std::unique_ptr<PetActivities> petActivitiesCtl; // built below, once everything it takes is declared (walk_pet_activities.hpp)
         auto petSound = [&](auto &&...a) -> decltype(auto) { return (*petActivitiesCtl).petSound(std::forward<decltype(a)>(a)...); };
