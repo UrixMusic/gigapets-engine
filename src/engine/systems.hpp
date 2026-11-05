@@ -132,6 +132,8 @@ namespace gp
              "cleanliness (the pet's cleanliness now)"},
             {"pet.sit", "the idle pet is about to sit down after a few seconds of standing; cancel or replace and it keeps standing",
              "idle (seconds it has stood)"},
+            {"pet.activity", "one of the pet's running activities takes its step this tick (only while it runs); change `step` to jump (0 ends it), or cancel / replace and drive the pet yourself while the game's step is skipped",
+             "kind (\"feed\", \"dig\", \"wash\", \"drop\" = a minigame prize being dropped, \"potion\", \"bark\", \"trick\", \"question\", \"colour\"), step (where it is: 1, 2, 3 ...; 0 = not running)"},
             {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
              "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };

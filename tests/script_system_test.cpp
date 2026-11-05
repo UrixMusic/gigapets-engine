@@ -2,6 +2,7 @@
 // after sees the result; with no hooks the default runs untouched; unknown systems are an error; mods do not overwrite each other.
 #include "../src/mods/script_host.hpp"
 #include "../src/mods/script_check.hpp"
+#include "../src/engine/activity_system.hpp"
 #include <cstdio>
 #include <tuple>
 
@@ -157,6 +158,29 @@ int main()
         // what the trusted one defined stays in its own environment (the sandboxed one wrote to the shared globals, as before)
         CHECK(h.runString("probe", "assert(lib == nil and again == nil and have_os == false)"));
         fs::remove_all(root, rmEc);
+    }
+    { // pet.activity: a running activity's step goes through the system; step 0 never does
+        gp::ScriptHost h;
+        int step = 0, ran = 0;
+        gp::runActivity(h, "feed", step, [&] { ++ran; });
+        CHECK(ran == 1); // idle: just the tick
+        step = 2;
+        CHECK(h.runString("a", "log_ = ''; local A = System.hooks('pet.activity'); function A:before(ctx) log_ = log_ .. ctx.kind .. ctx.step; if ctx.kind == 'wash' then ctx.step = 5 end end; function A:after(ctx) if ctx.kind == 'dig' then ctx.step = 9 end end"));
+        gp::runActivity(h, "feed", step, [&] { ++ran; step = 3; });
+        CHECK(ran == 2 && step == 3); // untouched by the mod: the game's own move stands
+        step = 1;
+        int seenInTick = -1;
+        gp::runActivity(h, "wash", step, [&] { seenInTick = step; step = 6; });
+        CHECK(seenInTick == 5 && step == 6); // before changed it: the tick starts from there, and moves on
+        step = 1;
+        gp::runActivity(h, "dig", step, [&] { step = 2; });
+        CHECK(step == 9); // after set it
+        CHECK(h.runString("b", "local A = System.hooks('pet.activity'); function A:replace(ctx) if ctx.kind == 'bark' then ctx.step = 0 end end"));
+        step = 3;
+        int ticks = 0;
+        gp::runActivity(h, "bark", step, [&] { ++ticks; });
+        CHECK(ticks == 0 && step == 0); // replaced: the game's step is skipped, and the mod ended it
+        CHECK(h.errors().empty());
     }
     { // player.tricks / setTricks: the mask of known tricks, in any order
         gp::ScriptHost h;

@@ -1,6 +1,7 @@
 // walk_world_step.hpp - sliced out of runWalk() by tools/slice_walk.py: the lambdas of walk.cpp listed in the tool's spec are the methods of WorldStep.
 // What they need from the rest of the walk session comes in through WorldStepEnv, under the names they had, so the bodies read as before.
 #pragma once
+#include "../../engine/activity_system.hpp"
 #include <functional>
 #include <map>
 #include <memory>
@@ -931,11 +932,13 @@ public:
         }
         if (overId >= 0)
             ++overTicks;
-        tickFeed();
-        tickDig();
+        // The engine system "pet.activity" (activity_system.hpp): each running activity of the pet takes its step through it
+        const auto activity = [&](const char *kind, int &step, const std::function<void()> &tick) { gp::runActivity(scripts, kind, step, tick); };
+        activity("feed", feedStep, [&] { tickFeed(); });
+        activity("dig", digStep, [&] { tickDig(); });
         tickHoleFills();
-        tickWash();
-        tickSwiftDrop();
+        activity("wash", washStep, [&] { tickWash(); });
+        activity("drop", swiftDropStep, [&] { tickSwiftDrop(); });
         if (gp::updateStatGates(player, db.gatesIn(cur->def->legacyId), quests.counter)) // CheckStatsAndMoneyGate
         {
             refreshBits();
@@ -954,13 +957,13 @@ public:
         }
         tickStatNotice();
         tickWorldTutorial();
-        tickPotion();
-        tickBark();
-        tickTrick();
-        tickQuestion();
+        activity("potion", potionStep, [&] { tickPotion(); });
+        activity("bark", barkStep, [&] { tickBark(); });
+        activity("trick", trickStep, [&] { tickTrick(); });
+        activity("question", questionStep, [&] { tickQuestion(); });
         tickBlasts();
         shakeDy = cameraShake.step(); // AdvanceScriptedCameraPanStep
-        tickColorMachine(zDown);
+        activity("colour", colorStep, [&] { tickColorMachine(zDown); });
         tickThoughtBubble();
         quests.tick(int(gameTicks));
         scripts.tick(); // scripts that called wait(n)
