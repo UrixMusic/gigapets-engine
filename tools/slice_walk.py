@@ -220,7 +220,7 @@ def main():
         h.append('{')
         for n, t in sorted(env.items()):
             t = t.replace('std::__cxx11::basic_string<char>', 'std::string')
-            t = re.sub(r'runWalk\([^)]*\)::', '', t)  # a struct local to runWalk(), moved to the header by the spec's types: its plain name
+            t = re.sub(r'\w+\([^)]*\)::', '', t)  # a struct local to runWalk(), moved to the header by the spec's types: its plain name
             t = re.sub(r'runWalk\([^)]*\)::', '', t)   # a struct local to runWalk(): moved to the header by the spec's "types", so its plain name
             if t.startswith('fn:'):
                 h.append('    std::function<%s> %s;' % (t[3:], n + ('Fn' if n in defaults else '')))
@@ -246,7 +246,18 @@ def main():
         for t in static_texts:
             h.append(t)
             h.append('')
-        h.append((NL + NL).join(methods))
+        body = (NL + NL).join(methods)
+        # a lambda inside a moved body that captures an Env member by name ([&create, slot]): members are not captured by name, `this` is
+        def fixcap(m):
+            items = [x.strip() for x in m.group(1).split(',')]
+            keep = [x for x in items if not (x.startswith('&') and x[1:] in env)]
+            if len(keep) == len(items):
+                return m.group(0)
+            if 'this' not in keep and '&' not in keep and '=' not in keep:
+                keep.insert(0, 'this')
+            return '[' + ', '.join(keep) + ']'
+        body = re.sub(r'\[([^\[\]]*)\](?=\s*[({])', fixcap, body)
+        h.append(body)
         h.append('};')
         return NL.join(h) + NL
 
