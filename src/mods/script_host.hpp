@@ -419,7 +419,7 @@ namespace gp
                 {
                     HookInfo info;
                     info.kind = kind;
-                    info.id = id;
+                    info.id = id.substr(0, id.find('')); // (a second mod's table for an id is kept under "<id><mod>")
                     info.mod = hook.mod;
                     info.where = hook.where;
                     const std::vector<std::string> names = hookNames(kind);
@@ -854,7 +854,7 @@ namespace gp
         // If the last onTick is still waiting (wait / ask) no new one starts. True if a script ran.
         bool fireNpcTick(const std::string &npcId, int x, int y, int facing, bool walking, bool scripted, long tick)
         {
-            if (npcHooks_.find(npcId) == npcHooks_.end() || routineActive(hookKey('N', npcId, "onTick")))
+            if (npcHooks_.find(npcId) == npcHooks_.end())
                 return false;
             return runHook(npcHooks_, 'N', npcId, "onTick", [&]
                            {
@@ -877,7 +877,7 @@ namespace gp
                                lua_setfield(L_, -2, "dt");
                                lua_pushinteger(L_, tick);
                                lua_setfield(L_, -2, "tick"); },
-                           nullptr);
+                           nullptr, true);
         }
         // Fires Area.hooks(areaId).onTick once per game tick (30 a second) while the pet is in that area and the world is running.
         // ctx.area = { id }, ctx.dt = seconds per tick (1/30), ctx.tick = ticks since the game started (30 a second, counting
@@ -885,7 +885,7 @@ namespace gp
         // waiting (it called wait or ask) no new one starts, so a slow script cannot pile up. Returns true if a script ran.
         bool fireAreaTick(const std::string &areaId, long tick, const SceneInput &in = SceneInput())
         {
-            if (areaHooks_.find(areaId) == areaHooks_.end() || routineActive(hookKey('A', areaId, "onTick")))
+            if (areaHooks_.find(areaId) == areaHooks_.end())
                 return false;
             return runHook(areaHooks_, 'A', areaId, "onTick", [&]
                            {
@@ -895,7 +895,7 @@ namespace gp
                                lua_pushinteger(L_, tick);
                                lua_setfield(L_, -2, "tick");
                                pushKeys(in); },
-                           nullptr);
+                           nullptr, true);
         }
         // ctx.input (pressed this tick) and ctx.held (down now), the same keys a scene gets
         void pushKeys(const SceneInput &in)
@@ -978,19 +978,50 @@ namespace gp
             int ref;
             std::string mod;
             std::string where; // "file:line" of the registering call, for validation messages
+            int seq = 0;       // the order the tables were made in = the order the mods loaded in
         };
+        int hookSeq_ = 0;
 
         // Runs one named hook function from a hook table (npcHooks_ / areaHooks_ / itemHooks_). Hooks are switched off one by one:
         // an error in onTalk does not stop onTalkStart. `fillCtx` adds the hook's own fields to the ctx table on top of
         // the stack. If suppress is given, the function's result is read into it (true = it returned exactly `false`).
+        // Every mod that hooks an id has a table of its own (Npc.hooks(id) gives each mod its own), and they all run, in the order the mods loaded in. A hook that returns
+        // `false` takes over: the mods after it are not asked. Each mod's hook is switched off on its own when it errors. `skipIfBusy`: a mod whose last run of this hook is
+        // still waiting (wait / ask) is not started again.
         template <class FillCtx>
         bool runHook(std::map<std::string, Hook> &hooks, char kind, const std::string &id, const char *hook,
-                     FillCtx fillCtx, bool *suppress)
+                     FillCtx fillCtx, bool *suppress, bool skipIfBusy = false)
         {
-            auto it = hooks.find(id);
-            // \x1f is forbidden in ids, so keys cannot collide; `kind` keeps NPC, area and item ids apart
-            const std::string key = hookKey(kind, id, hook);
-            if (!L_ || it == hooks.end() || disabled_.count(key))
+            if (!L_)
+                return false;
+            std::vector<std::pair<int, std::string>> owners; // (seq, key in the map)
+            if (auto it = hooks.find(id); it != hooks.end())
+                owners.push_back({it->second.seq, id});
+            const std::string prefix = id + '\x1e';
+            for (auto it = hooks.lower_bound(prefix); it != hooks.end() && it->first.compare(0, prefix.size(), prefix) == 0; ++it)
+                owners.push_back({it->second.seq, it->first});
+            std::sort(owners.begin(), owners.end());
+            bool ran = false;
+            for (const auto &o : owners)
+            {
+                bool took = false;
+                ran = runHookOne(hooks, o.second, kind, id, hook, fillCtx, suppress ? &took : nullptr, skipIfBusy) || ran;
+                if (took)
+                {
+                    *suppress = true;
+                    break;
+                }
+            }
+            return ran;
+        }
+        template <class FillCtx>
+        bool runHookOne(std::map<std::string, Hook> &hooks, const std::string &mapKey, char kind, const std::string &id, const char *hook,
+                        FillCtx fillCtx, bool *suppress, bool skipIfBusy)
+        {
+            auto it = hooks.find(mapKey);
+            // \x1f is forbidden in ids, so keys cannot collide; `kind` keeps NPC, area and item ids apart; the map key says which mod's table it is
+            const std::string key = hookKey(kind, mapKey, hook);
+            if (!L_ || it == hooks.end() || disabled_.count(key) || (skipIfBusy && routineActive(key)))
                 return false;
             lua_rawgeti(L_, LUA_REGISTRYINDEX, it->second.ref);
             lua_getfield(L_, -1, hook);
@@ -1319,14 +1350,22 @@ namespace gp
         // Returns (creating it on first use) the hook table for an id: Npc.hooks("testmod:npc/tester"),
         // Area.hooks("base:area/3"), Item.hooks("mymod:item/pie"). Scripts define functions on it: onTalkStart, onTalk,
         // onInteract, onItemUse.
-        static int hooksFor(lua_State *L, std::map<std::string, Hook> &hooks)
+        static int hooksFor(lua_State *L, std::map<std::string, Hook> &hooks, bool perMod = true)
         {
-            return hooksTable(L, hooks, luaL_checkstring(L, 1)); // plain C value: Lua may unwind (longjmp) below
+            return hooksTable(L, hooks, luaL_checkstring(L, 1), perMod); // plain C value: Lua may unwind (longjmp) below
         }
-        static int hooksTable(lua_State *L, std::map<std::string, Hook> &hooks, const char *id)
+        // The hook table of the calling mod for an id. The first mod to ask is kept under the plain id, every other mod under "<id>\x1e<mod>", so mods never overwrite each other's
+        // functions (a scene's id belongs to one mod: those share the one table).
+        static int hooksTable(lua_State *L, std::map<std::string, Hook> &hooks, const char *id0, bool perMod = true)
         {
             ScriptHost &h = self(L);
+            std::string id = id0;
             auto it = hooks.find(id);
+            if (perMod && it != hooks.end() && !h.curMod_.empty() && it->second.mod != h.curMod_)
+            {
+                id += '\x1e' + h.curMod_;
+                it = hooks.find(id);
+            }
             if (it == hooks.end())
             {
                 lua_newtable(L);
@@ -1337,7 +1376,7 @@ namespace gp
                 lua_pop(L, 1);
                 while (!where.empty() && (where.back() == ' ' || where.back() == ':'))
                     where.pop_back();
-                hooks.emplace(id, Hook{ref, h.curMod_, std::move(where)});
+                hooks.emplace(id, Hook{ref, h.curMod_, std::move(where), ++h.hookSeq_});
             }
             else
                 lua_rawgeti(L, LUA_REGISTRYINDEX, it->second.ref);
@@ -1345,10 +1384,10 @@ namespace gp
         }
         static int l_npcHooks(lua_State *L) { return hooksFor(L, self(L).npcHooks_); }
         static int l_areaHooks(lua_State *L) { return hooksFor(L, self(L).areaHooks_); }
-        static int l_sceneHooks(lua_State *L) { return hooksFor(L, self(L).sceneHooks_); }
+        static int l_sceneHooks(lua_State *L) { return hooksFor(L, self(L).sceneHooks_, false); }
         static int l_itemHooks(lua_State *L) { return hooksFor(L, self(L).itemHooks_); }
         // Game.hooks() -> the one global hook table (no id): function G:onQuestComplete(ctx)
-        static int l_gameHooks(lua_State *L) { return hooksTable(L, self(L).gameHooks_, ""); }
+        static int l_gameHooks(lua_State *L) { return hooksTable(L, self(L).gameHooks_, "", true); }
         // world.drop(itemId, x, y) -> true if the item exists
         static int l_drop(lua_State *L)
         {
