@@ -5368,6 +5368,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         refreshBits(); // add
         scripts.fireGameLoad(); // a mod's chance to set its engine values again from what it saved
         scripts.fireAreaEnter(cur->def->id, ""); // the game starts here: ctx.from.id is nil
+        long gameTickN = 0;         // steps since the game started, for the game-wide tick hooks
+        gp::SceneInput lastKeys;    // the keys of the latest step
         bool &running = S.flow.running;
         bool &backToMenu = S.flow.backToMenu;
         const auto tickHz = [] { return std::max(1.0, gp::tuning().tickHz); }; // verified: the game ticks at 30 Hz (tuning.tickHz, a mod can change it)
@@ -5636,6 +5638,30 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             {
                 acc -= 1.0 / tickHz();
                 gameTicks += 2;
+                // The game-wide tick (Game.hooks onTickStart / onTickEnd): first and last in every step, even one that stops early (a menu, a screen change)
+                const auto tickInfo = [&]
+                {
+                    gp::ScriptHost::TickInfo t;
+                    t.tick = gameTickN;
+                    t.area = cur->def->id;
+                    t.petX = pos.x;
+                    t.petY = pos.y;
+                    t.dialogue = dialogue.open();
+                    t.menu = im.open || statsOpen || pendingScreen != nullptr;
+                    t.room = room != nullptr;
+                    t.encounter = enc != nullptr;
+                    t.scene = scripts.sceneOpen();
+                    t.keys = lastKeys;
+                    return t;
+                };
+                ++gameTickN;
+                scripts.fireGameTick(false, tickInfo());
+                struct TickEnd
+                {
+                    std::function<void()> f;
+                    ~TickEnd() { f(); }
+                } tickEnd{[&]
+                          { scripts.fireGameTick(true, tickInfo()); }};
                 if (const int every = gp::tuning().shopRestockRomTicks; every > 0 && (shopRestockAccum += 2) >= every) // +2 ROM ticks per 30 Hz step, like gameTicks
                 {
                     shopRestockAccum = 0; // RollShopItemStock (TickCareStatWatchdog condition 12): one more weighted pick for every shop
@@ -5761,6 +5787,19 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 prevMenu = menuDown;
                 prevX = xDown;
                 prevZ = zDown;
+                lastKeys = gp::SceneInput(); // what a game-wide tick hook sees as the keys
+                lastKeys.z = zPressed;
+                lastKeys.x = xPressed;
+                lastKeys.left = newlyPressed & gp::DirLeft;
+                lastKeys.right = newlyPressed & gp::DirRight;
+                lastKeys.up = newlyPressed & gp::DirUp;
+                lastKeys.down = newlyPressed & gp::DirDown;
+                lastKeys.heldZ = zDown;
+                lastKeys.heldX = xDown;
+                lastKeys.heldLeft = rawDirs & gp::DirLeft;
+                lastKeys.heldRight = rawDirs & gp::DirRight;
+                lastKeys.heldUp = rawDirs & gp::DirUp;
+                lastKeys.heldDown = rawDirs & gp::DirDown;
                 if (barAnim.visible)
                 {
                     const AnimRef A = barAnimRef(barAnim.id);

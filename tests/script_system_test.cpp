@@ -119,6 +119,24 @@ int main()
         CHECK(ran && c.str("id") == "base:npc/3" && c.num("x") == 40);
         CHECK(h.runString("m", "assert(seen_[1] == 'base:npc/3:40,60:0', seen_[1])"));
     }
+    { // the game-wide tick: onTickStart / onTickEnd, with the state and the keys; a mod's two tables both run
+        gp::ScriptHost h;
+        CHECK(h.runString("a", "log_ = ''; local G = Game.hooks(); function G:onTickStart(ctx) log_ = log_ .. 'S' .. ctx.tick .. (ctx.state.dialogue and 'd' or '-') .. ctx.area.id .. ctx.pet.x end; function G:onTickEnd(ctx) log_ = log_ .. 'E' .. (ctx.held.z and 'z' or '-') .. (ctx.input.left and 'l' or '-') end"));
+        gp::ScriptHost::TickInfo t;
+        t.tick = 7;
+        t.area = "base:area/0";
+        t.petX = 12;
+        t.dialogue = true;
+        t.keys.heldZ = true;
+        t.keys.left = true;
+        h.fireGameTick(false, t);
+        h.fireGameTick(true, t);
+        CHECK(h.runString("m", "assert(log_ == 'S7dbase:area/012Ezl', log_)"));
+        CHECK(h.errors().empty());
+        // validation knows the two names
+        gp::HookTargets targets;
+        CHECK(gp::validateHooks(h, targets).empty());
+    }
     { // unknown system names are an error at registration; System.list shows the real ones
         gp::ScriptHost h;
         CHECK(!h.runString("a", "System.hooks('care.decya')"));

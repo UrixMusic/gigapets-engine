@@ -524,7 +524,7 @@ namespace gp
                 return {"before", "replace", "after"};
             case 'G':
                 return {"onQuestComplete", "onEnterArea", "onLoad", "onSave", "onBeforeDig", "onAfterDig", "onBeforePickup", "onAfterPickup",
-                        "onBeforeBuy", "onAfterBuy", "onBeforeExit", "onStatChange", "onBefriend", "onQuestAccept", "onQuestDecline", "onQuestFail", "onBeforeItemUse", "onSceneClose", "onHud"};
+                        "onBeforeBuy", "onAfterBuy", "onBeforeExit", "onStatChange", "onBefriend", "onQuestAccept", "onQuestDecline", "onQuestFail", "onBeforeItemUse", "onSceneClose", "onHud", "onTickStart", "onTickEnd"};
             default:
                 return {"onInteract", "onEnter", "onLeave", "onTick", "onHud"};
             }
@@ -1006,6 +1006,46 @@ namespace gp
                                lua_setfield(L_, -2, "tick");
                                pushKeys(in); },
                            nullptr, true);
+        }
+        // The game-wide tick (Game.hooks): onTickStart runs first in every simulation step (30 a second), whatever is open; onTickEnd runs last (also when the step stopped early,
+        // for a menu or a screen change). In between: the pet's input and movement, the NPCs, the world, and Area.hooks(id).onTick. Then the frame is drawn (scene onDraw, onHud).
+        // ctx = { tick (counts every step since the game started), dt = 1/30, area = { id }, pet = { x, y }, state = { dialogue, menu, room, encounter, scene } (what is open: true
+        // means the world is not running), input / held (the keys; at the start they are the previous step's) }.
+        struct TickInfo
+        {
+            long tick = 0;
+            std::string area;
+            int petX = 0, petY = 0;
+            bool dialogue = false, menu = false, room = false, encounter = false, scene = false;
+            SceneInput keys;
+        };
+        void fireGameTick(bool end, const TickInfo &t)
+        {
+            if (gameHooks_.empty() && !L_)
+                return;
+            runHook(gameHooks_, 'G', "", end ? "onTickEnd" : "onTickStart", [&]
+                    {
+                        lua_pushnumber(L_, 1.0 / 30.0);
+                        lua_setfield(L_, -2, "dt");
+                        lua_pushinteger(L_, t.tick);
+                        lua_setfield(L_, -2, "tick");
+                        pushIdRef("area", t.area);
+                        lua_newtable(L_);
+                        lua_pushinteger(L_, t.petX);
+                        lua_setfield(L_, -2, "x");
+                        lua_pushinteger(L_, t.petY);
+                        lua_setfield(L_, -2, "y");
+                        lua_setfield(L_, -2, "pet");
+                        lua_newtable(L_);
+                        const std::pair<const char *, bool> st[] = {{"dialogue", t.dialogue}, {"menu", t.menu}, {"room", t.room}, {"encounter", t.encounter}, {"scene", t.scene}};
+                        for (const auto &[k, v] : st)
+                        {
+                            lua_pushboolean(L_, v);
+                            lua_setfield(L_, -2, k);
+                        }
+                        lua_setfield(L_, -2, "state");
+                        pushKeys(t.keys); },
+                    nullptr, true);
         }
         // ctx.input (pressed this tick) and ctx.held (down now), the same keys a scene gets
         void pushKeys(const SceneInput &in)
