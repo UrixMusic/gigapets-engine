@@ -5427,7 +5427,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         {
             for (const gp::DrawCmd &c : cmds)
             {
-                SDL_SetRenderDrawBlendMode(ren, c.a < 255 ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE);
+                SDL_SetRenderDrawBlendMode(ren, c.blend == 1 ? SDL_BLENDMODE_ADD : c.blend == 2 ? SDL_BLENDMODE_MOD : c.a < 255 ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE);
                 SDL_SetRenderDrawColor(ren, Uint8(c.r), Uint8(c.g), Uint8(c.b), Uint8(c.a));
                 switch (c.kind)
                 {
@@ -7135,6 +7135,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     fade.go(0.0, 6.0 / 30);
                 }
             }
+            drawScriptCmds(scripts.drawPost()); // Game.hooks().onPostDraw: over the finished frame
             gp::useWholeScreen(ren); // the fade covers the whole window
             {
                 const Uint64 t = SDL_GetPerformanceCounter();

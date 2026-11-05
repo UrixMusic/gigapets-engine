@@ -182,6 +182,20 @@ int main()
         CHECK(none.drawHud("m:area/t").empty()); // nothing hooked: nothing drawn
         CHECK(!none.runString("m", "g.rect(1, 1, 1, 1, {0,0,0})")); // draw calls only exist inside onHud / onDraw
     }
+    { // onPostDraw: over the finished frame; g.rect has blend modes
+        gp::ScriptHost hh;
+        CHECK(hh.runString("m", R"(
+            local G = Game.hooks()
+            function G:onPostDraw(g) g.rect(0, 0, 320, 240, {200, 150, 100}, true, 'mul'); g.rect(0, 0, 10, 10, {9, 9, 9, 50}, true, 'add'); g.rect(0, 0, 1, 1, {0,0,0}) end
+            )"));
+        const std::vector<gp::DrawCmd> &c = hh.drawPost();
+        CHECK(c.size() == 3 && c[0].blend == 2 && c[1].blend == 1 && c[2].blend == 0);
+        CHECK(hh.runString("m", "local G = Game.hooks(); function G:onPostDraw(g) g.rect(0,0,1,1,{0,0,0},true,'xor') end"));
+        hh.drawPost();
+        CHECK(!hh.errors().empty());
+        gp::ScriptHost none;
+        CHECK(none.drawPost().empty());
+    }
     { // with nothing wired the calls are harmless
         gp::ScriptHost h2;
         CHECK(h2.runString("m", "assert(player.pos() == nil and player.setPos(1, 2) == false and player.react('happy') == false and area.go('a:b', 1, 2) == false and area.current() == '')"));

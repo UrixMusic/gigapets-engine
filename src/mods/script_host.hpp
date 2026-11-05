@@ -220,6 +220,7 @@ namespace gp
         int x = 0, y = 0, w = 0, h = 0;
         int r = 0, g = 0, b = 0, a = 255; // Clear, Rect
         bool fill = true;                 // Rect: false = an outline
+        int blend = 0;                    // Rect: 0 normal (alpha), 1 add (lighten), 2 multiply (darken / tint)
         std::string str;                  // Sprite: the picture's id; Text: the text id
         double num = 0;                   // Num: the number
         int frame = 0;                    // Sprite: frame number from 0
@@ -524,7 +525,7 @@ namespace gp
                 return {"before", "replace", "after"};
             case 'G':
                 return {"onQuestComplete", "onEnterArea", "onLoad", "onSave", "onBeforeDig", "onAfterDig", "onBeforePickup", "onAfterPickup",
-                        "onBeforeBuy", "onAfterBuy", "onBeforeExit", "onStatChange", "onBefriend", "onQuestAccept", "onQuestDecline", "onQuestFail", "onBeforeItemUse", "onSceneClose", "onHud", "onTickStart", "onTickEnd"};
+                        "onBeforeBuy", "onAfterBuy", "onBeforeExit", "onStatChange", "onBefriend", "onQuestAccept", "onQuestDecline", "onQuestFail", "onBeforeItemUse", "onSceneClose", "onHud", "onTickStart", "onTickEnd", "onPostDraw"};
             default:
                 return {"onInteract", "onEnter", "onLeave", "onTick", "onHud"};
             }
@@ -910,6 +911,28 @@ namespace gp
             drawing_ = hud_ = true;
             runHook(gameHooks_, 'G', "", "onHud", fns, nullptr);
             runHook(areaHooks_, 'A', areaId, "onHud", fns, nullptr);
+            drawing_ = hud_ = false;
+            return sceneCmds_;
+        }
+        // The last thing drawn each frame: Game.hooks().onPostDraw(g), over everything (world, menus, dialogue, scenes). Same drawing calls as onHud, and g.rect's blend modes make
+        // tints, darkening, vignettes and scanlines. ctx.w / ctx.h are the screen's size (320 x 240).
+        const std::vector<DrawCmd> &drawPost()
+        {
+            sceneCmds_.clear();
+            if (!L_ || gameHooks_.empty())
+                return sceneCmds_;
+            auto fns = [&]
+            {
+                const std::pair<const char *, lua_CFunction> list[] = {{"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}};
+                for (const auto &[name, f] : list)
+                {
+                    lua_pushlightuserdata(L_, this);
+                    lua_pushcclosure(L_, f, 1);
+                    lua_setfield(L_, -2, name);
+                }
+            };
+            drawing_ = hud_ = true;
+            runHook(gameHooks_, 'G', "", "onPostDraw", fns, nullptr);
             drawing_ = hud_ = false;
             return sceneCmds_;
         }
@@ -2136,6 +2159,7 @@ namespace gp
             self(L).sceneCmds_.push_back(std::move(d));
             return 0;
         }
+        // g.rect(x, y, w, h, color [, fill = true [, mode = "blend"]]): mode "add" lightens what is under it, "mul" multiplies it (darken / tint), "blend" is the usual alpha
         // g.rect(x, y, w, h, color [, fill = true])
         static int l_gRect(lua_State *L)
         {
@@ -2144,7 +2168,16 @@ namespace gp
             int c[4];
             colourArg(L, 5, c);
             const bool fill = lua_isnoneornil(L, 6) || lua_toboolean(L, 6);
+            int blend = 0;
+            if (!lua_isnoneornil(L, 7))
+            {
+                const std::string m = luaL_checkstring(L, 7);
+                if (m == "add") blend = 1;
+                else if (m == "mul") blend = 2;
+                else if (m != "blend") return luaL_error(L, "g.rect mode must be 'blend', 'add' or 'mul'");
+            }
             DrawCmd d;
+            d.blend = blend;
             d.kind = DrawCmd::Kind::Rect;
             d.x = x;
             d.y = y;
