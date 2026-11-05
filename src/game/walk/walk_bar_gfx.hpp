@@ -1,4 +1,4 @@
-// walk_bar_gfx.hpp - the menu bar's host and the two drawing adapters of a walk session (they were local structs of runWalk()).
+// walk_bar_gfx.hpp - the menu bar's host, the two drawing adapters and the script NPC bookkeeping of a walk session (they were local structs of runWalk()).
 #pragma once
 
 struct WalkBarHost : menubar::MenuBarHost
@@ -75,4 +75,24 @@ struct ItemGfx : gp::Gfx
     void drawTile(int s, int p, int x, int y, int layer, int) override { tile(s, p, x, y, layer); }
     void drawTextBox(int st, int, int x, int y, const std::string &t, int w, int m, int l) override { box(st, x, y, t, w, m, l); }
     int getSpriteWidth(int s) override { return spriteW ? spriteW(s) : 0; } // new
+};
+
+// What scripts changed about the NPCs of the area the pet is in (npc.spawn / move / remove). loadNpcs is run again at times
+// (a quest moving on) and must not undo it; leaving the area forgets it. `defs` keeps the records of moved and spawned
+// NPCs, actors point into it, so it is only cleared together with the actors.
+struct ScriptNpcState
+{
+    gp::Id area;
+    std::deque<gp::NpcDef> defs;
+    std::set<gp::Id> removed;                                 // this area's own NPCs a script removed
+    std::map<gp::Id, gp::IPoint> moved;                       // ... or moved
+    std::vector<std::pair<gp::Id, gp::IPoint>> spawned;       // NPCs a script put here
+    struct Op
+    {
+        enum Kind { Spawn, Move, Remove, Walk, Face, Play, Stop, Release } kind;
+        gp::Id id;
+        gp::IPoint at;
+        std::string str; // Play: the anim ('' = stop playing); Face: at.x is the facing
+    };
+    std::vector<Op> pending;                                  // changes to the live actors, made at the start of a safe tick
 };

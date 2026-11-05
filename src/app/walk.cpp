@@ -925,25 +925,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 return {smoothAt(npcPrev[i].first, n.x()), smoothAt(npcPrev[i].second, n.y())};
             return {float(n.x()), float(n.y())};
         };
-        // What scripts changed about the NPCs of the area the pet is in (npc.spawn / move / remove). loadNpcs is run again at times
-        // (a quest moving on) and must not undo it; leaving the area forgets it. `defs` keeps the records of moved and spawned
-        // NPCs, actors point into it, so it is only cleared together with the actors.
-        struct ScriptNpcState
-        {
-            gp::Id area;
-            std::deque<gp::NpcDef> defs;
-            std::set<gp::Id> removed;                                 // this area's own NPCs a script removed
-            std::map<gp::Id, gp::IPoint> moved;                       // ... or moved
-            std::vector<std::pair<gp::Id, gp::IPoint>> spawned;       // NPCs a script put here
-            struct Op
-            {
-                enum Kind { Spawn, Move, Remove, Walk, Face, Play, Stop, Release } kind;
-                gp::Id id;
-                gp::IPoint at;
-                std::string str; // Play: the anim ('' = stop playing); Face: at.x is the facing
-            };
-            std::vector<Op> pending;                                  // changes to the live actors, made at the start of a safe tick
-        } scriptNpc;
+        ScriptNpcState scriptNpc;
         constexpr size_t kMaxNpcs = 64;
         auto loadNpcs = [&]()
         {
