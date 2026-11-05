@@ -6351,9 +6351,20 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     }
                     if (!n.trickStarted)
                     {
-                        n.trickStarted = true;
-                        n.body.facing = gp::FaceDown;
-                        n.trick.startWith(n.trickLevel, s, gp::trickRepeatCount(n.trickLevel, s, npcRng));
+                        // the engine system "npc.sequence" (kind "trick"): an idle NPC starts a trick; `level` (1..3) and `repeats` may be changed; cancel or replace and it does not
+                        gp::SystemCtx sc;
+                        sc.set("npc", n.def->id).set("kind", "trick").set("level", n.trickLevel).set("repeats", gp::trickRepeatCount(n.trickLevel, s, npcRng));
+                        const bool ran = scripts.system("npc.sequence", sc, [&]
+                                                        {
+                            n.trickStarted = true;
+                            n.body.facing = gp::FaceDown;
+                            n.trickLevel = std::clamp(int(sc.num("level")), 1, 3);
+                            n.trick.startWith(n.trickLevel, s, std::max(0, int(sc.num("repeats")))); });
+                        if (!ran)
+                        {
+                            n.endTrick(npcRng);
+                            return;
+                        }
                     }
                     const bool seen = std::abs(n.x() - pos.x) < W / 2 + 40 && std::abs(n.y() - pos.y) < 150;
                     auto start = [&](int id, int rate, bool reverse)
@@ -6417,10 +6428,20 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     }
                     if (!n.react)
                     {
-                        n.body.facing = gp::FaceDown;
-                        using K = gp::ReactionSeq::Kind;
-                        n.react.emplace(n.activity == gp::kActivityNoise ? K::Noise : n.activity == gp::kActivityHappy ? K::Positive : K::Bored,
-                                        n.reactCount, n.reactVariant);
+                        // the engine system "npc.sequence" (kind "call", "happy" or "yawn"): an idle NPC starts one; `count` (how many times) may be changed; cancel or replace and it does not
+                        gp::SystemCtx sc;
+                        sc.set("npc", n.def->id).set("kind", n.activity == gp::kActivityNoise ? "call" : n.activity == gp::kActivityHappy ? "happy" : "yawn").set("count", n.reactCount);
+                        const bool ran = scripts.system("npc.sequence", sc, [&]
+                                                        {
+                            n.body.facing = gp::FaceDown;
+                            using K = gp::ReactionSeq::Kind;
+                            n.react.emplace(n.activity == gp::kActivityNoise ? K::Noise : n.activity == gp::kActivityHappy ? K::Positive : K::Bored,
+                                            std::max(0, int(sc.num("count"))), n.reactVariant); });
+                        if (!ran)
+                        {
+                            n.endTrick(npcRng);
+                            return;
+                        }
                     }
                     gp::NpcActor *saved = encNpc;
                     encNpc = &n;

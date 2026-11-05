@@ -122,6 +122,8 @@ namespace gp
              "panel (\"stats\", \"items\", \"tricks\" or \"map\")"},
             {"thought.show", "a thought bubble is about to go up over the pet (the game's hungry / sick / tired / low mood ones, or a mod's player.think); cancel or replace and none goes up",
              "kind (\"hungry\", \"sick\", \"tired\" or \"mood\": change it to show another icon)"},
+            {"npc.sequence", "an idle NPC starts one of its show-off sequences: a trick, a call, a happy hop or a yawn; cancel or replace and it does not (it goes back to idling)",
+             "npc (id), kind (\"trick\", \"call\", \"happy\" or \"yawn\"), level (trick only: 1..3, change it), repeats (trick only: how many times), count (call / happy / yawn: how many times)"},
             {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
              "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };

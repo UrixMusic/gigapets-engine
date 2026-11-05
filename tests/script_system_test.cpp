@@ -85,6 +85,18 @@ int main()
         CHECK(h.runString("m", "assert(tutorial.once('second', 'm:str/x') == true)"));
         CHECK(!h.runString("m", "tutorial.once('bad name', 'm:str/x')")); // a name is letters, digits, _ and -
     }
+    { // npc.sequence: a mod may change how many times, or stop it
+        gp::ScriptHost h;
+        CHECK(h.runString("a", "local S = System.hooks('npc.sequence'); function S:before(ctx) if ctx.kind == 'yawn' then return false end; if ctx.kind == 'trick' then ctx.repeats = ctx.repeats + 2 end end"));
+        gp::SystemCtx t;
+        t.set("npc", "x").set("kind", "trick").set("level", 2).set("repeats", 1);
+        int ran = 0;
+        h.system("npc.sequence", t, [&] { ran = int(t.num("repeats")); });
+        CHECK(ran == 3);
+        gp::SystemCtx y;
+        y.set("npc", "x").set("kind", "yawn").set("count", 1);
+        CHECK(!h.system("npc.sequence", y, [] {}));
+    }
     { // player.tricks / setTricks: the mask of known tricks, in any order
         gp::ScriptHost h;
         int mask = 1;
