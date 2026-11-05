@@ -1823,14 +1823,16 @@ namespace gp
         //     pool: [ { item: "mymod:item/pie", weight: 2, buried: false } ]   (what it asks for; empty = the default errand's pool),
         //     count_lo / count_hi: 1..99 (how many of each item), objective_count / bonus_count: [ { from: 0, lo: 1, hi: 3 } ] (how many different items, and bonus items, once `from`
         //     quests are done; empty = the default errand's), spawn: [ { item, count } ] (extra items dropped for the quest), fixed_area_tier: 0..6, excluded_tiers: [..],
-        //     timed: true (a time limit is worked out), spawns_on_accept: false, receiver: "random" (default) | "other" (a different NPC) | "self" (the giver),
+        //     timed: true (a time limit is worked out), spawns_on_accept: false, receiver: "random" (default) | "other" (a different NPC) | "self" (the giver)
+        //     | "fixed" (with fixed_npc: an NPC id; giver and receiver are both that NPC; skipped when it was just used),
+        //     a pool entry may use  by_species: [ { species: 0 | 1 | 2 | -1 (any), item, buried, alt_item, alt_buried } ]  instead of `item` (the item depends on the pet's kind),
         //     roll_lo / roll_hi: the generator rolls 1..9 (10+ gives this type its own share: roll_hi up to 99), roll_min_total: only once this many quests are done,
         //     request_text, complete_text, reminder_text: lists of text ids (one is picked at random; request_text has {npc} the receiver, {area}, {item}, {list}) }
         // A type with no roll_lo / roll_hi is never rolled by the generator (a script's `quest.load` can still pick it by id).
         inline void applyQuestType(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
         {
             static const std::set<std::string> allowed{"type", "mode", "id", "pool", "count_lo", "count_hi", "objective_count", "bonus_count", "spawn", "fixed_area_tier", "excluded_tiers",
-                                                       "timed", "spawns_on_accept", "receiver", "roll_lo", "roll_hi", "roll_min_total", "request_text", "complete_text", "reminder_text"};
+                                                       "timed", "spawns_on_accept", "receiver", "fixed_npc", "roll_lo", "roll_hi", "roll_min_total", "request_text", "complete_text", "reminder_text"};
             std::string id, why;
             if (!beginAdd(m, file, rec, rep, "quest_type", allowed, [&](const std::string &i)
                           {
@@ -1913,15 +1915,41 @@ namespace gp
                     if (!e.is_object())
                         return err(rep, file, m.id, "'" + id + "': every entry in 'pool' must be an object");
                     for (auto it = e.begin(); it != e.end(); ++it)
-                        if (it.key() != "item" && it.key() != "weight" && it.key() != "buried")
+                        if (it.key() != "item" && it.key() != "weight" && it.key() != "buried" && it.key() != "by_species")
                             return err(rep, file, m.id, "'" + id + "': unknown field '" + it.key() + "' in 'pool'");
                     QuestPoolEntry p;
                     bool buried = false;
-                    if (!itemOf(e, "item", p.item))
+                    if (e.contains("by_species") == e.contains("item"))
+                        return err(rep, file, m.id, "'" + id + "': a pool entry has either an 'item' or a 'by_species' list");
+                    if (e.contains("item") && !itemOf(e, "item", p.item))
                         return;
                     if (!optInt(e, "weight", p.weight, 1, 100, why) || !optBool(e, "buried", buried, why))
                         return err(rep, file, m.id, "'" + id + "': " + why);
                     p.buried = buried ? 1 : 0;
+                    if (e.contains("by_species")) // { species: 0 | 1 | 2 | -1 (any, the fallback), item, buried, alt_item (a coin flip picks item or alt_item), alt_buried }
+                    {
+                        if (!e["by_species"].is_array() || e["by_species"].empty() || e["by_species"].size() > 8)
+                            return err(rep, file, m.id, "'" + id + "': 'by_species' must be a list of 1 to 8");
+                        for (const json &v : e["by_species"])
+                        {
+                            if (!v.is_object())
+                                return err(rep, file, m.id, "'" + id + "': every 'by_species' entry must be an object");
+                            for (auto it = v.begin(); it != v.end(); ++it)
+                                if (it.key() != "species" && it.key() != "item" && it.key() != "buried" && it.key() != "alt_item" && it.key() != "alt_buried")
+                                    return err(rep, file, m.id, "'" + id + "': unknown field '" + it.key() + "' in 'by_species'");
+                            QuestPoolEntry::Variant var;
+                            bool vb = false, ab = false;
+                            if (!itemOf(v, "item", var.item))
+                                return;
+                            if (v.contains("alt_item") && !itemOf(v, "alt_item", var.altItem))
+                                return;
+                            if (!optInt(v, "species", var.species, -1, 2, why) || !optBool(v, "buried", vb, why) || !optBool(v, "alt_buried", ab, why))
+                                return err(rep, file, m.id, "'" + id + "': " + why);
+                            var.buried = vb ? 1 : 0;
+                            var.altBuried = ab ? 1 : 0;
+                            p.bySpecies.push_back(std::move(var));
+                        }
+                    }
                     t.pool.push_back(std::move(p));
                 }
             }
@@ -1959,10 +1987,18 @@ namespace gp
             if (rec.contains("receiver"))
             {
                 const std::string r = rec["receiver"].is_string() ? rec["receiver"].get<std::string>() : "";
-                if (r != "random" && r != "other" && r != "self")
-                    return err(rep, file, m.id, "'" + id + "': 'receiver' must be \"random\", \"other\" or \"self\"");
-                t.receiver = r == "other" ? QuestReceiver::Other : r == "self" ? QuestReceiver::Self : QuestReceiver::Random;
+                if (r != "random" && r != "other" && r != "self" && r != "fixed")
+                    return err(rep, file, m.id, "'" + id + "': 'receiver' must be \"random\", \"other\", \"self\" or \"fixed\"");
+                t.receiver = r == "other" ? QuestReceiver::Other : r == "self" ? QuestReceiver::Self : r == "fixed" ? QuestReceiver::Fixed : QuestReceiver::Random;
             }
+            if (t.receiver == QuestReceiver::Fixed)
+            {
+                if (!rec.contains("fixed_npc") || !rec["fixed_npc"].is_string() || !db.hasNpc(rec["fixed_npc"].get<std::string>()))
+                    return err(rep, file, m.id, "'" + id + "': receiver \"fixed\" needs 'fixed_npc', the id of an npc that exists (it must be a base npc or have quest_pool, to be in the quest pool)");
+                t.fixedNpcId = rec["fixed_npc"].get<std::string>();
+            }
+            else if (rec.contains("fixed_npc"))
+                return err(rep, file, m.id, "'" + id + "': 'fixed_npc' only goes with receiver \"fixed\"");
             if (!optInt(rec, "count_lo", t.countLo, 1, 99, why) || !optInt(rec, "count_hi", t.countHi, 1, 99, why) || !optInt(rec, "fixed_area_tier", t.fixedAreaTier, -1, 6, why) ||
                 !optBool(rec, "timed", t.timed, why) || !optBool(rec, "spawns_on_accept", t.spawnsOnAccept, why) || !optInt(rec, "roll_min_total", t.rollMinTotal, 0, 100000, why))
                 return err(rep, file, m.id, "'" + id + "': " + why);

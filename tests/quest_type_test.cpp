@@ -52,6 +52,10 @@ static ContentDB baseDb()
         it.maxQty = 5;
         db.put(std::move(it));
     }
+    NpcDef n;
+    n.id = "base:npc/12";
+    n.anim = "base:anim/139";
+    db.put(std::move(n));
     for (const QuestTypeDef &t : baseQuestTypes())
         db.put(t);
     return db;
@@ -101,6 +105,29 @@ int main()
                 if (x.id == "q:questtype/delivery")
                     mode2 = x.mode;
             CHECK(mode2 == t->mode);
+        }
+    }
+    { // a fixed receiver, and a pool entry that depends on the pet's kind
+        ContentDB db = baseDb();
+        const auto errs = load("fixed", R"({"type":"quest_type","mode":"add","id":"q:questtype/fx","receiver":"fixed","fixed_npc":"base:npc/12",
+          "pool":[{"by_species":[{"species":0,"item":"base:item/173","alt_item":"base:item/174","alt_buried":true},{"species":-1,"item":"base:item/174"}],"weight":2}]})", db);
+        CHECK(errs.empty());
+        for (const auto &e : errs)
+            std::cerr << e << "\n";
+        const QuestTypeDef *t = nullptr;
+        for (const QuestTypeDef &x : db.questTypes())
+            if (x.id == "q:questtype/fx")
+                t = &x;
+        CHECK(t && t->receiver == QuestReceiver::Fixed && t->fixedNpcId == "base:npc/12");
+        CHECK(t && t->pool.size() == 1 && t->pool[0].bySpecies.size() == 2 && t->pool[0].bySpecies[0].species == 0 && t->pool[0].bySpecies[0].altItem == "base:item/174" &&
+              t->pool[0].bySpecies[0].altBuried == 1 && t->pool[0].bySpecies[1].species == -1);
+        for (const char *b : {R"({"type":"quest_type","mode":"add","id":"q:questtype/a","receiver":"fixed"})",
+                              R"({"type":"quest_type","mode":"add","id":"q:questtype/a","fixed_npc":"base:npc/12"})",
+                              R"({"type":"quest_type","mode":"add","id":"q:questtype/a","pool":[{"item":"base:item/173","by_species":[]}]})",
+                              R"({"type":"quest_type","mode":"add","id":"q:questtype/a","pool":[{"by_species":[{"species":7,"item":"base:item/173"}]}]})"})
+        {
+            ContentDB d2 = baseDb();
+            CHECK(!load("bad2", b, d2).empty());
         }
     }
     { // errors: each is said, nothing is added

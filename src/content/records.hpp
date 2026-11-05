@@ -293,6 +293,7 @@ namespace gp
         int rollLo = 0, rollHi = -1, rollMinTotal = 0;
         QuestReceiver receiver = QuestReceiver::Random;
         int fixedNpc = -1; // receiver == Fixed: giver and receiver are this NPC; skipped if just used
+        Id fixedNpcId;     // a mod type names its fixed NPC by id; the game turns it into fixedNpc (its pool number) when the world is set up
     };
 
     struct OfferSetDef

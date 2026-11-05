@@ -270,7 +270,7 @@ namespace gp
                 h.textSystem(kind, s);
             return s;
         }
-        std::string textFor(int id) { return id >= 0 ? h.text(id) : txt.s("placeholder_generated"); }
+        std::string textFor(int id) { return id >= 0 ? styled("story", h.text(id)) : txt.s("placeholder_generated"); }
 
         std::string failText()
         {

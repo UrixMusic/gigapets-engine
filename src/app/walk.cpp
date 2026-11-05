@@ -4701,6 +4701,19 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         quests.table = db.quests();          // scripted quests: imported by importRom, mods can replace or append
         quests.world.rom = db.questTables(); // generic-quest item weights and category distances: also from the db
         quests.world.types = db.questTypes();
+        for (gp::QuestTypeDef &t : quests.world.types) // a mod type's fixed NPC, by id -> its pool number (it must be in the pool: a base NPC, or one with quest_pool); else the type picks randomly
+            if (!t.fixedNpcId.empty())
+            {
+                t.fixedNpc = -1;
+                for (int p = 0; p < 0x4e && t.fixedNpc < 0; ++p)
+                    if (npcByIndex[size_t(p)] && npcByIndex[size_t(p)]->id == t.fixedNpcId)
+                        t.fixedNpc = p;
+                for (const auto &[p, n] : modPoolNpcs)
+                    if (n->id == t.fixedNpcId)
+                        t.fixedNpc = p;
+                if (t.fixedNpc < 0)
+                    t.receiver = gp::QuestReceiver::Random;
+            }
         quests.world.playerSpecies = sp;
         for (const auto &[idx, d] : modPoolNpcs)
             quests.world.extraPool.push_back(idx);
