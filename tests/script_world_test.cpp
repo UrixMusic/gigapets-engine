@@ -19,7 +19,8 @@ struct Fake
     int x = 100, y = 200, lock = 0, shakes = 0, lastReact = -1, trips = 0;
     bool inRoom = false, busy = false;
     int w = 448, h = 288;
-    std::string lastObj, lastType, npcCalls;
+    std::string lastObj, lastType, npcCalls, plays;
+    bool playing = false;
     std::string area = "base:area/0", tripArea;
     int tripX = 0, tripY = 0;
     void wire(gp::ScriptApi &a)
@@ -41,6 +42,24 @@ struct Fake
         a.npcStop = [this, here](const std::string &id) { if (!here(id)) return false; npcCalls += "stop;"; return true; };
         a.npcRelease = [this, here](const std::string &id) { if (!here(id)) return false; npcCalls += "release;"; return true; };
         a.npcInfo = [here](const std::string &id, int &px, int &py, int &fc, bool &walking, bool &scripted) { if (!here(id)) return false; px = 40; py = 50; fc = 1; walking = true; scripted = false; return true; };
+        a.petAnimNumber = [](const std::string &what) -> int
+        {
+            if (what == "sit") return 20;
+            if (what == "base:anim/34") return 34;
+            if (what == "m:anim/swing") return 0x30001;
+            return -1;
+        };
+        a.petPlay = [this](int an, bool loop, int rate, const std::vector<int> &next)
+        {
+            if (busy) return false;
+            plays += std::to_string(an) + (loop ? "L" : "o") + std::to_string(rate);
+            for (int n : next) plays += "," + std::to_string(n);
+            plays += ";";
+            playing = true;
+            return true;
+        };
+        a.petStopAnim = [this] { playing = false; plays += "stop;"; };
+        a.petPlaying = [this] { return playing; };
         a.areaSize = [this](int &aw, int &ah) { if (inRoom) return false; aw = w; ah = h; return true; };
     }
 };
@@ -102,6 +121,24 @@ int main()
     CHECK(h.runString("m", "assert(area.walkable(100, 100) == false and area.size() == nil)"));
     f.inRoom = false;
     CHECK(h.runString("m", "assert(object.setType('m:obj/s1', 'm:objtype/hit') == true and object.setType('m:obj/zz', 'm:objtype/hit') == false and object.setType('m:obj/s1', 'nope:objtype/x') == false and object.setType('bad id,', 'm:objtype/hit') == false)") && f.lastObj == "m:obj/s1" && f.lastType == "m:objtype/hit");
+    { // player.play / stopAnim / playing
+        f.busy = false;
+        CHECK(h.runString("m", R"(
+            assert(player.play('sit') == true)
+            assert(player.play('base:anim/34', { loop = true, rate = 8 }) == true)
+            assert(player.play('m:anim/swing', { next = { 'sit', 34 } }) == true)
+            assert(player.play(5) == true)
+            assert(player.playing() == true); player.stopAnim(); assert(player.playing() == false)
+        )"));
+        CHECK(f.plays == "20o14;34L8;196609o14,20,34;5o14;stop;");
+        CHECK(!h.runString("m", "player.play('nonsense')"));       // no such animation: an error that says what is allowed
+        CHECK(!h.runString("m", "player.play('sit', { rate = 0 })")); // frames a second 1 to 60
+        CHECK(!h.runString("m", "player.play(99999)"));
+        CHECK(!h.runString("m", "player.play('sit', { next = { 'nonsense' } })"));
+        f.busy = true;
+        CHECK(h.runString("m", "assert(player.play('sit') == false)")); // the pet is busy
+        f.busy = false;
+    }
     { // npc.walkTo / face / play / stop / release / info, and Npc.hooks(id).onTick
         f.npcCalls.clear();
         CHECK(h.runString("m", R"(
@@ -149,7 +186,7 @@ int main()
         gp::ScriptHost h2;
         CHECK(h2.runString("m", "assert(player.pos() == nil and player.setPos(1, 2) == false and player.react('happy') == false and area.go('a:b', 1, 2) == false and area.current() == '')"));
         CHECK(h2.runString("m", "player.lock(); player.unlock(); camera.shake()"));
-        CHECK(h2.runString("m", "assert(area.walkable(1, 1) == false and area.size() == nil and object.setType('a', 'b') == false and npc.walkTo('a', 1, 2) == false and npc.info('a') == nil and npc.release('a') == false)"));
+        CHECK(h2.runString("m", "assert(area.walkable(1, 1) == false and area.size() == nil and object.setType('a', 'b') == false and npc.walkTo('a', 1, 2) == false and npc.info('a') == nil and npc.release('a') == false and player.play(5) == false and player.playing() == false)"));
     }
     std::printf(fails ? "script_world_test: %d failure(s)\n" : "script_world_test: all passed\n", fails);
     return fails ? 1 : 0;

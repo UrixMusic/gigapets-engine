@@ -5149,6 +5149,44 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 static const gp::ReactAnim as[4] = {gp::ReactAnim::Positive, gp::ReactAnim::Emote, gp::ReactAnim::Shocked, gp::ReactAnim::Negative};
                 return host.pet.play(as[std::clamp(kind, 0, 3)], 1);
             };
+            wapi.petAnimNumber = [&](const std::string &what) -> int
+            {
+                const gp::SpeciesArt &art = gp::artOf(sp);
+                if (what.find(':') != std::string::npos) // an anim id: a mod's, or the game's "base:anim/34"
+                {
+                    int n = -1;
+                    if (std::sscanf(what.c_str(), "base:anim/%d", &n) == 1 && n >= 0 && n <= 0x2ff && what.find('@') == std::string::npos)
+                        return n;
+                    return db.hasAnim(what) ? gp::modAnimNumber(what) : -1;
+                }
+                static const std::pair<const char *, int gp::SpeciesArt::*> roles[] = {
+                    {"walk_up", &gp::SpeciesArt::walkUp}, {"walk_down", &gp::SpeciesArt::walkDown}, {"walk_side", &gp::SpeciesArt::walkSide}, {"sit", &gp::SpeciesArt::sitDown},
+                    {"sit_idle", &gp::SpeciesArt::sitAlt}, {"eat", &gp::SpeciesArt::eat}, {"bowl_bite", &gp::SpeciesArt::bowlBite}, {"bed_in", &gp::SpeciesArt::bedGetIn},
+                    {"sleep", &gp::SpeciesArt::sleepCycle}, {"bed_out", &gp::SpeciesArt::bedGetOut}, {"idle", &gp::SpeciesArt::idleBase}, {"idle_side", &gp::SpeciesArt::idleSide},
+                    {"turn_180", &gp::SpeciesArt::turn180}, {"turn_90", &gp::SpeciesArt::turn90}, {"settled", &gp::SpeciesArt::settled}, {"call_front", &gp::SpeciesArt::callFront},
+                    {"call_side", &gp::SpeciesArt::callSide}, {"happy_side", &gp::SpeciesArt::posSide}, {"happy_down", &gp::SpeciesArt::posDown}, {"excited_side", &gp::SpeciesArt::emoSide},
+                    {"excited_down", &gp::SpeciesArt::emoDown}, {"shocked_side", &gp::SpeciesArt::shkSide}, {"shocked_down", &gp::SpeciesArt::shkDown}, {"no1", &gp::SpeciesArt::neg1},
+                    {"no2", &gp::SpeciesArt::neg2}, {"sad", &gp::SpeciesArt::sad}, {"bored", &gp::SpeciesArt::bored}, {"dig", &gp::SpeciesArt::dig}};
+                for (const auto &r : roles)
+                    if (what == r.first)
+                        return art.*(r.second);
+                for (int k = 0; k < 3; ++k) // the three tricks: "trick1" .. "trick3" (the main animation of each level)
+                    if (what == "trick" + std::to_string(k + 1))
+                        return art.trickMain[k];
+                return -1;
+            };
+            wapi.petPlay = [&](int anim, bool loop, int rate, const std::vector<int> &next)
+            {
+                if (room || pendingExit || host.pet.busy())
+                    return false;
+                std::vector<AnimStep> rest;
+                for (size_t i = 0; i < next.size(); ++i)
+                    rest.push_back({next[i], i + 1 == next.size() && loop, rate});
+                playAnim(anim, loop && next.empty(), rate, Pose::Special, std::move(rest));
+                return true;
+            };
+            wapi.petStopAnim = [&] { playAnim(restIdleId(), true, restIdleRate(), Pose::Idle); };
+            wapi.petPlaying = [&] { return pose == Pose::Special && !(animDone && queue.empty()); };
             wapi.travel = [&](const std::string &area, int x, int y)
             {
                 if (!db.area(area) || pendingExit || fade.a > 0.0 || room)

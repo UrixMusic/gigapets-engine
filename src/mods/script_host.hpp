@@ -71,6 +71,13 @@ namespace gp
         std::function<bool(int kind)> petReact;
         std::function<bool(const std::string &area, int x, int y)> travel;
         std::function<std::string()> currentArea;
+        // The pet's own animations (player.play / stopAnim / playing). petAnimNumber turns what a script gave (an anim id of a mod, "base:anim/34", or a role of the
+        // pet's species: "sit", "eat", "dig"...) into the animation's number, or -1 if there is none. petPlay shows it once or looping at `rate` frames a second and
+        // then the ones in `next`, in order; false if the pet is busy or not in the world. petStopAnim puts the pet back to its idle. petPlaying: is an animation on?
+        std::function<int(const std::string &what)> petAnimNumber;
+        std::function<bool(int anim, bool loop, int rate, const std::vector<int> &next)> petPlay;
+        std::function<void()> petStopAnim;
+        std::function<bool()> petPlaying;
         // area.walkable(x, y): could the pet stand there (the ground, objects and the area's edge)? area.size(): the area's width and height in pixels.
         std::function<bool(int x, int y)> walkable;
         std::function<bool(int &w, int &h)> areaSize;
@@ -284,6 +291,9 @@ namespace gp
             bind("player", "lock", l_petLock);
             bind("player", "unlock", l_petUnlock);
             bind("player", "react", l_petReact);
+            bind("player", "play", l_petPlay);
+            bind("player", "stopAnim", l_petStopAnim);
+            bind("player", "playing", l_petPlaying);
             bind("area", "go", l_areaGo);
             bind("area", "current", l_areaCurrent);
             bind("area", "walkable", l_areaWalkable);
@@ -2323,6 +2333,75 @@ namespace gp
             if (kind < 0)
                 return luaL_argerror(L, 1, "react how? \"happy\", \"excited\", \"shocked\" or \"sad\"");
             lua_pushboolean(L, h.api_.petReact && h.api_.petReact(kind));
+            return 1;
+        }
+        // player.play(anim [, { loop = false, rate = 14, next = { anim, ... } }]) -> true if the animation started. `anim` is an anim record of a mod ("mymod:anim/swing": PNG
+        // frames, drawn as they are, not recoloured), one of the game's by number or id (34, "base:anim/34": drawn in the pet's colours), or a role of the pet's species
+        // (a word with no colon: "sit", "eat", "dig", "bark", "sleep", "idle", "walk_up" ... see the doc): original art, so it looks like the game. Once it plays through and
+        // the `next` ones, the pet is idle again; with loop = true it plays until player.stopAnim(), the pet walks off, or another animation starts. False while the pet is busy.
+        static int l_petPlay(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            auto number = [&](int i) -> int
+            {
+                if (lua_type(L, i) == LUA_TNUMBER)
+                {
+                    const lua_Integer n = luaL_checkinteger(L, i);
+                    luaL_argcheck(L, n >= 0 && n <= 0x2ff, i, "a game animation number (0 to 767), a mod anim id or a role like \"sit\"");
+                    return int(n);
+                }
+                const char *w = luaL_checkstring(L, i);
+                const int n = h.api_.petAnimNumber && idCharsOk(w) ? h.api_.petAnimNumber(w) : -1;
+                luaL_argcheck(L, n >= 0, i, "no such animation (a mod's anim id, \"base:anim/34\", or a role of the pet like \"sit\")");
+                return n;
+            };
+            const int first = number(1);
+            bool loop = false;
+            int rate = 14;
+            std::vector<int> next;
+            if (!lua_isnoneornil(L, 2))
+            {
+                luaL_checktype(L, 2, LUA_TTABLE);
+                lua_getfield(L, 2, "loop");
+                loop = lua_toboolean(L, -1);
+                lua_getfield(L, 2, "rate");
+                if (!lua_isnil(L, -1))
+                {
+                    const lua_Integer r = luaL_checkinteger(L, -1);
+                    luaL_argcheck(L, r >= 1 && r <= 60, 2, "rate is frames a second, 1 to 60");
+                    rate = int(r);
+                }
+                lua_getfield(L, 2, "next");
+                if (!lua_isnil(L, -1))
+                {
+                    luaL_checktype(L, -1, LUA_TTABLE);
+                    const int n = int(lua_rawlen(L, -1));
+                    luaL_argcheck(L, n <= 16, 2, "next: at most 16 animations");
+                    for (int i = 1; i <= n; ++i)
+                    {
+                        lua_rawgeti(L, -1, i);
+                        next.push_back(number(lua_gettop(L)));
+                        lua_pop(L, 1);
+                    }
+                }
+                lua_pop(L, 3);
+            }
+            lua_pushboolean(L, h.api_.petPlay && h.api_.petPlay(first, loop, rate, next));
+            return 1;
+        }
+        // player.stopAnim(): the pet goes back to its idle.
+        static int l_petStopAnim(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            if (h.api_.petStopAnim)
+                h.api_.petStopAnim();
+            return 0;
+        }
+        // player.playing() -> true while one of the pet's animations (not its idle or its walk) is on: use it to wait for a play to finish.
+        static int l_petPlaying(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            lua_pushboolean(L, h.api_.petPlaying && h.api_.petPlaying());
             return 1;
         }
         // area.go(areaId, x, y) -> true if the trip started: the screen fades out, the pet lands at x, y of that area (any area of the game or a
