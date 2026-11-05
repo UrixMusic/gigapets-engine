@@ -150,6 +150,42 @@ int main()
         CHECK(!run("small", R"({"type":"item","mode":"add","id":"q:item/w","name":"q:str/n","category":"wall","icon":"q:anim/i","room_art":"assets/layer.png"})", "room_small.png", d4).empty());
         CHECK(d4.roomArt("q:item/w") == nullptr);
     }
+    { // a mod's window, hanging and decoration: an item with `decor_art` (an anim)
+        auto run = [&](const std::string &name, const std::string &records, ContentDB &db)
+        {
+            TmpMods t(name);
+            fs::create_directories(t.root / "q" / "assets");
+            fs::copy_file(fs::path("tests/assets") / "room_small.png", t.root / "q" / "assets" / "icon.png", fs::copy_options::overwrite_existing);
+            t.data(std::string("[") + R"({"type":"text","mode":"add","id":"q:str/n","text":"Lamp"},
+              {"type":"anim","mode":"add","id":"q:anim/i","frames":[{"png":"assets/icon.png","anchorX":0,"anchorY":0}]},
+              {"type":"anim","mode":"add","id":"q:anim/lamp","frames":[{"png":"assets/icon.png","anchorX":10,"anchorY":50}]},)" + records + "]");
+            return importMods(db, t.root).errors;
+        };
+        for (const char *cat : {"window", "hanging", "decor"})
+        {
+            ContentDB db = baseDb();
+            const auto errs = run(cat, std::string(R"({"type":"item","mode":"add","id":"q:item/d","name":"q:str/n","icon":"q:anim/i","decor_art":"q:anim/lamp","maxQty":3,"category":")") + cat + "\"}", db);
+            CHECK(errs.empty());
+            for (const auto &e : errs)
+                std::cerr << e << "\n";
+            const ItemDef *it = db.item("q:item/d");
+            const int want = std::string(cat) == "window" ? int(ItemType::Window) : std::string(cat) == "hanging" ? int(ItemType::HangingDecor) : int(ItemType::PlacedDecor);
+            CHECK(it && it->type == want && isFurnishingType(it->type) && it->use.action == "none");
+            CHECK(it && it->decorSprite != 0xffff && isModSprite(it->decorSprite) && it->decorSprite != it->iconSprite && it->w7 == kMenuPalette && it->w9 == 0xffff);
+        }
+        const char *bad[] = {
+            R"({"type":"item","mode":"add","id":"q:item/d","name":"q:str/n","icon":"q:anim/i","category":"decor"})",                                         // needs decor_art
+            R"({"type":"item","mode":"add","id":"q:item/d","name":"q:str/n","icon":"q:anim/i","category":"decor","decor_art":"q:anim/nope"})",                // no such anim
+            R"({"type":"item","mode":"add","id":"q:item/d","name":"q:str/n","icon":"q:anim/i","category":"quest","decor_art":"q:anim/lamp"})",               // only furnishings
+            R"({"type":"item","mode":"add","id":"q:item/d","name":"q:str/n","icon":"q:anim/i","category":"decor","decor_art":7})",                            // not an anim id
+        };
+        for (const char *b : bad)
+        {
+            ContentDB db = baseDb();
+            CHECK(!run("baddecor", b, db).empty());
+            CHECK(db.item("q:item/d") == nullptr);
+        }
+    }
     if (g_fail)
     {
         std::cerr << "room_record_test: " << g_fail << " failure(s)\n";

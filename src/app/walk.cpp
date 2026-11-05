@@ -634,7 +634,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             // The room's own pieces (door, hooks, ...) and the sprites of every furnishing item: sprite ids, not anim ids.
             auto importDecor = [&](int sprite, int palette)
             {
-                if (sprite <= 0 || sprite == gp::kNoSprite)
+                if (sprite <= 0 || sprite == gp::kNoSprite || gp::isModSprite(sprite)) // (a mod item's picture is already registered)
                     return;
                 try
                 {

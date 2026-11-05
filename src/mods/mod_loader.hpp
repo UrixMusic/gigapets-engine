@@ -377,6 +377,9 @@ namespace gp
                                                            {"dish", ItemType::FoodDish},
                                                            {"medicine", ItemType::Medicine},
                                                            {"quest", ItemType::GenericQuestItem},
+                                                           {"window", ItemType::Window},
+                                                           {"hanging", ItemType::HangingDecor},
+                                                           {"decor", ItemType::PlacedDecor},
                                                            {"wall", ItemType::Wall},
                                                            {"floor", ItemType::Floor}};
             auto i = t.find(s);
@@ -387,6 +390,7 @@ namespace gp
         }
 
         inline bool loadRoomArt(ContentDB &db, const ModManifest &m, const std::string &item, const std::string &rel, std::string &why);
+        constexpr bool isDecorType(int t) { return t == int(ItemType::Window) || t == int(ItemType::HangingDecor) || t == int(ItemType::PlacedDecor); }
         // Fields: category ("food" | "dish" | "medicine" | "quest" | "wall" | "floor"; a wall or floor needs room_art: a 1152 x 256 picture of one layer of the room), name / plural (text ids), maxQty (1..99),
         // price (0..9999), icon / world (anim ids), use {action, num{}, str{}}.
         // icon is drawn at (x - anchorX + dx, y - anchorY + dy) from the inventory cell's corner, so give it anchor
@@ -395,7 +399,7 @@ namespace gp
         inline void applyItem(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
         {
             static const std::set<std::string> allowed{"type", "mode", "id", "name", "plural", "category",
-                                                       "maxQty", "price", "icon", "world", "use", "room_art"};
+                                                       "maxQty", "price", "icon", "world", "use", "room_art", "decor_art"};
             for (auto it = rec.begin(); it != rec.end(); ++it)
                 if (!allowed.count(it.key()))
                     return err(rep, file, m.id, "unknown field '" + it.key() + "' in item record");
@@ -477,7 +481,7 @@ namespace gp
             if (rec.contains("category"))
             {
                 if (!rec["category"].is_string() || !itemCategory(rec["category"].get<std::string>(), d.type))
-                    return err(rep, file, m.id, "'" + id + "': 'category' must be food, dish, medicine, quest, wall or floor");
+                    return err(rep, file, m.id, "'" + id + "': 'category' must be food, dish, medicine, quest, wall, floor, window, hanging or decor");
             }
             else if (mode == "add")
                 return err(rep, file, m.id, "add '" + id + "': missing 'category'");
@@ -534,8 +538,8 @@ namespace gp
             }
             else if (mode == "add")
             {
-                if (d.type != int(ItemType::GenericQuestItem) && d.type != int(ItemType::Wall) && d.type != int(ItemType::Floor))
-                    return err(rep, file, m.id, "add '" + id + "': missing 'use' (only quest items, walls and floors default to doing nothing)");
+                if (d.type != int(ItemType::GenericQuestItem) && d.type != int(ItemType::Wall) && d.type != int(ItemType::Floor) && !isDecorType(d.type))
+                    return err(rep, file, m.id, "add '" + id + "': missing 'use' (only quest items and furnishings default to doing nothing)");
                 d.use.action = "none";
             }
 
@@ -565,6 +569,22 @@ namespace gp
                 return;
             if (mode == "add" && !hasIcon)
                 return err(rep, file, m.id, "add '" + id + "': missing 'icon'");
+            // A decoration of a mod (window, hanging or decor): the picture it has in the room, put at the room's own places for that kind (the ROM's slot tables).
+            if (rec.contains("decor_art") && !isDecorType(d.type))
+                return err(rep, file, m.id, "'" + id + "': 'decor_art' only goes with category window, hanging or decor");
+            if (isDecorType(d.type))
+            {
+                bool hasDecor = false;
+                if (!artField("decor_art", d.decorSprite, hasDecor))
+                    return;
+                if (mode == "add" && !hasDecor)
+                    return err(rep, file, m.id, "add '" + id + "': a window, hanging or decor item needs 'decor_art' (an anim: its first frame is drawn in the room)");
+                if (hasDecor)
+                {
+                    d.w7 = kMenuPalette;
+                    d.w9 = 0xffff;
+                }
+            }
             // A wall or floor of a mod: its picture is one layer of a room (the room is 36 x 8 tiles of 32 px = 1152 x 256). A floor's see-through pixels show the wall behind.
             const bool layer = d.type == int(ItemType::Wall) || d.type == int(ItemType::Floor);
             if (rec.contains("room_art") && !layer)
