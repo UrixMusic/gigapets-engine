@@ -112,6 +112,12 @@ namespace gp
              "location, target (\"door\", \"bowl\", \"bed\" or \"visitor\"), x (the pet's place along the room)"},
             {"room.activity", "a button of the house bar starts a sequence in a room: sleeping or washing (the bed and the food bowl in the room itself are room.interact); cancel or replace and nothing starts",
              "location, activity (\"sleep\" or \"wash\")"},
+            {"camera.view", "every frame in the walking world: where the camera is (the view's top left corner in the area), after the game worked it out; the belly-flop shake is already in it",
+             "x, y (the pet's drawn place), camX, camY (the corner: change them to look elsewhere; not clamped to the area), w, h (the area's size), viewW, viewH (the view's size in pixels)"},
+            {"minigame.start", "a minigame is about to open (a well, a game tent, a friend's game, a trick lesson); cancel or replace and it does not open",
+             "game (\"swift_pick\", \"three_in_a_row\", \"memory_match\" or \"trick_guess\")"},
+            {"minigame.prize", "a minigame ended and is about to hand out its prize (the pet drops it); cancel or replace and nothing drops",
+             "game (\"swift_pick\", \"three_in_a_row\" or \"memory_match\"), items (item ids joined by commas, one per prize: change the list; an unknown id is dropped)"},
             {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
              "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };

@@ -41,6 +41,20 @@ int main()
         CHECK(c.num("x") == 105 && c.num("y") == 50);
         CHECK(h.errors().empty());
     }
+    { // camera and minigame systems exist; a camera hook's numbers (fractions too) and a prize list come back changed
+        gp::ScriptHost h;
+        CHECK(h.runString("a", "local C = System.hooks('camera.view'); function C:after(ctx) ctx.camX = ctx.camX + 0.5; ctx.camY = ctx.y end;"
+                               "local P = System.hooks('minigame.prize'); function P:before(ctx) ctx.items = ctx.items .. ',base:item/5' end; System.hooks('minigame.start')"));
+        gp::SystemCtx c;
+        c.set("x", 100).set("y", 60).set("camX", 10).set("camY", 20);
+        h.system("camera.view", c, [] {});
+        CHECK(c.num("camX") == 10.5 && c.num("camY") == 60);
+        gp::SystemCtx p;
+        p.set("game", "swift_pick").set("items", "base:item/1");
+        h.system("minigame.prize", p, [] {});
+        CHECK(p.str("items") == "base:item/1,base:item/5");
+        CHECK(h.errors().empty());
+    }
     { // player.tricks / setTricks: the mask of known tricks, in any order
         gp::ScriptHost h;
         int mask = 1;

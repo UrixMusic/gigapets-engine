@@ -4103,7 +4103,43 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             settlePhase = 0;
             walkTicks = 0;
         };
-        mgEnv.startItemDrop = startItemDrop;
+        // the engine system "minigame.prize": what a minigame hands out (game: "swift_pick", "three_in_a_row" or "memory_match"; items: item ids joined by commas, one per prize, repeats
+        // for more of one; change the list, or cancel / replace and nothing drops). An unknown id is dropped from the list.
+        mgEnv.startItemDrop = [&](std::vector<int> items)
+        {
+            std::string list;
+            for (int n : items)
+                if (n >= 0 && n < int(itemDefs.size()))
+                    list += (list.empty() ? "" : ",") + itemDefs[size_t(n)].id;
+            gp::SystemCtx c;
+            c.set("game", mgEnv.game).set("items", list);
+            scripts.system("minigame.prize", c, [&]
+                           {
+                std::vector<int> out;
+                std::string rest = c.str("items");
+                for (size_t at = 0; at <= rest.size();)
+                {
+                    size_t end = rest.find(',', at);
+                    if (end == std::string::npos)
+                        end = rest.size();
+                    std::string id = rest.substr(at, end - at);
+                    at = end + 1;
+                    while (!id.empty() && id.front() == ' ')
+                        id.erase(id.begin());
+                    if (const gp::ItemDef *d = id.empty() ? nullptr : db.item(id))
+                        out.push_back(d->index);
+                }
+                if (!out.empty())
+                    startItemDrop(std::move(out)); });
+        };
+        // the engine system "minigame.start": a minigame is about to open (game: "swift_pick", "three_in_a_row", "memory_match" or "trick_guess"); cancel or replace and it does not
+        mgEnv.begin = [&](const char *game, std::function<void()> go)
+        {
+            gp::SystemCtx c;
+            c.set("game", game);
+            scripts.system("minigame.start", c, [&]
+                           { go(); });
+        };
         // A friend's gift and random game: both target the pet's position, 10 px lower (PlayRandomMinigame and
         // ReceiveCureGiftFromFriend pass GetCameraScrollX() and GetCameraScrollY() + 10, which is the pet).
         svc.dropGift = [&](int item)
@@ -6685,8 +6721,17 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
             renderAlpha = smoothCam ? float(std::min(acc * tickHz(), 1.0)) : 1.f;
             const float petFX = smoothAt(prevPos.x, pos.x), petFY = smoothAt(prevPos.y, pos.y); // pet's drawn position
-            const float camX = clampCamF(petFX - W / 2, cur->img.w, W);
-            const float camY = clampCamF(petFY - gp::tuning().camY - shakeDy, cur->img.h, H); // the belly flop moves the camera's lead
+            float camX = clampCamF(petFX - W / 2, cur->img.w, W);
+            float camY = clampCamF(petFY - gp::tuning().camY - shakeDy, cur->img.h, H); // the belly flop moves the camera's lead
+            {
+                // the engine system "camera.view" (every frame): the top left corner of the view in the area, as the game worked it out (x, y: the pet's drawn place). A mod changes
+                // camX / camY (follow something else, pan, zoom is not here), or replaces it and sets them itself; w, h = the area's size, W, H the view's
+                gp::SystemCtx cc;
+                cc.set("x", petFX).set("y", petFY).set("camX", camX).set("camY", camY).set("w", cur->img.w).set("h", cur->img.h).set("viewW", W).set("viewH", H);
+                scripts.system("camera.view", cc, [] {});
+                camX = float(cc.num("camX"));
+                camY = float(cc.num("camY"));
+            }
             cur->runtime->updateVisible(int(std::floor(camX)), int(std::floor(camY)), W, H);
 
             // ---- DRAW ----

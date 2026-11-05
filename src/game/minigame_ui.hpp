@@ -57,6 +57,9 @@ struct MinigameEnv
     std::function<void(std::function<void()>)> requestScreen;  // run something while the screen is black
     std::function<void(gp::DialogueBox)> showBox;              // dialogue.show(...)
     std::function<void(std::vector<int>)> startItemDrop;       // the pet drops prizes at (petX, petY)
+    // A minigame is about to open (game: "swift_pick", "three_in_a_row", "memory_match" or "trick_guess"): the host calls `go` to open it, or does not (a mod cancelled it). Unset = go.
+    std::function<void(const char *game, std::function<void()> go)> begin;
+    std::string game; // the game whose prizes are being handed out (set just before startItemDrop)
 };
 
 // One frame of input for the minigame that is open. `live` is false during the fade-in, so presses are ignored.
@@ -99,10 +102,19 @@ public:
     bool active() const { return swiftShown_ || threeShown_ || memoryShown_ || trickShown_; }
 
     // ---- entry points (called from interactions) ----
+    void begin(const char *game, std::function<void()> go)
+    {
+        if (e_.begin)
+            e_.begin(game, std::move(go));
+        else
+            go();
+    }
+
     void requestSwiftPick()
     {
-        e_.requestScreen([this]
-                         { startSwiftPick(); swiftShown_ = true; });
+        begin("swift_pick", [this]
+              { e_.requestScreen([this]
+                                 { startSwiftPick(); swiftShown_ = true; }); });
     }
 
     void openWell(const Well &w)
@@ -121,8 +133,9 @@ public:
         gp::DialogueBox b = gp::messageBox(e_.db.textOr(w.askText)); // "Would you like to throw N Bucks into the well?"
         b.kind = gp::BoxKind::Confirm;
         b.onYes = [this, w]
-        { e_.requestScreen([this, w]
-                           { startThreeInARow(w); threeShown_ = true; }); };
+        { begin("three_in_a_row", [this, w]
+                { e_.requestScreen([this, w]
+                                   { startThreeInARow(w); threeShown_ = true; }); }); };
         b.onNo = [] {};
         e_.showBox(std::move(b));
     }
@@ -142,8 +155,9 @@ public:
         {
             petX = t.x;
             petY = t.y;
-            e_.requestScreen([this]
-                             { startMemoryMatch(); memoryShown_ = true; });
+            begin("memory_match", [this]
+                  { e_.requestScreen([this]
+                                     { startMemoryMatch(); memoryShown_ = true; }); });
         };
         b.onNo = [] {};
         e_.showBox(std::move(b));
@@ -157,24 +171,25 @@ public:
         const int pick = e_.randIn(1, 3);
         petX = x;
         petY = y;
-        e_.requestScreen([this, pick, x, y]
-                         {
-                             if (pick == 1)
-                             {
-                                 startSwiftPick(true);
-                                 swiftShown_ = true;
-                             }
-                             else if (pick == 2)
-                             {
-                                 startThreeInARow(Well{0, 0, 0, x, y, "", ""});
-                                 threeShown_ = true;
-                             }
-                             else
-                             {
-                                 startMemoryMatch(true);
-                                 memoryShown_ = true;
-                             }
-                         });
+        begin(pick == 1 ? "swift_pick" : pick == 2 ? "three_in_a_row" : "memory_match", [this, pick, x, y]
+              { e_.requestScreen([this, pick, x, y]
+                                 {
+                                     if (pick == 1)
+                                     {
+                                         startSwiftPick(true);
+                                         swiftShown_ = true;
+                                     }
+                                     else if (pick == 2)
+                                     {
+                                         startThreeInARow(Well{0, 0, 0, x, y, "", ""});
+                                         threeShown_ = true;
+                                     }
+                                     else
+                                     {
+                                         startMemoryMatch(true);
+                                         memoryShown_ = true;
+                                     }
+                                 }); });
     }
 
     // Trick Teacher: fade to the code game. done(won) runs while the screen is black on the way back, so it may
@@ -182,8 +197,9 @@ public:
     void openTrick(TrickLesson lesson, std::function<void(bool)> done)
     {
         trickDone_ = std::move(done);
-        e_.requestScreen([this, l = std::move(lesson)]
-                         { startTrick(l); trickShown_ = true; });
+        begin("trick_guess", [this, l = std::move(lesson)]
+              { e_.requestScreen([this, l]
+                                 { startTrick(l); trickShown_ = true; }); });
     }
 
     // ---- once per game tick while active() ----
@@ -197,7 +213,10 @@ public:
             if (ev == gp::SwiftPick::Event::GotAway)
                 e_.sfx(1);
             else if (ev == gp::SwiftPick::Event::Caught)
+            {
+                e_.game = "swift_pick";
                 e_.startItemDrop({swift_.result()});
+            }
             if (!swift_.open()) // caught, got away or cancelled: fade back to the world
                 e_.requestScreen([this]
                                  { swiftShown_ = false; });
@@ -209,7 +228,10 @@ public:
             if (three_.justStopped())
                 e_.sfx(three_.improved() ? 0x15 : 0x59);
             if (ev == gp::ThreeInARow::Event::Finished)
+            {
+                e_.game = "three_in_a_row";
                 e_.startItemDrop(three_.rewards());
+            }
             if (!three_.open()) // finished or cancelled: fade back to the world
                 e_.requestScreen([this]
                                  { threeShown_ = false; });
@@ -227,7 +249,10 @@ public:
             if (memory_.justMatched())
                 e_.sfx(gp::MemoryMatch::kSfxMatch);
             if (ev == gp::MemoryMatch::Event::Finished && !memory_.rewards().empty())
+            {
+                e_.game = "memory_match";
                 e_.startItemDrop(memory_.rewards()); // ROM: StartPetActivity(0x24, x, y, 6, 0) only if >= 1 pair matched
+            }
             if (!memory_.open())
                 e_.requestScreen([this]
                                  { memoryShown_ = false; });
