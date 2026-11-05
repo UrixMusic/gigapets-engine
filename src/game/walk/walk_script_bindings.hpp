@@ -26,6 +26,9 @@ inline void showNextSay(WalkServices &svc)
     auto item = std::move(q.front());
     q.pop_front();
     gp::DialogueBox b = gp::messageBox(std::move(item.text));
+    if (!item.portrait.empty())
+        if (const gp::NpcDef *pn = svc.db.npc(item.portrait))
+            b.portrait = gp::uiSpriteId(pn->portraitSprite, pn->portraitPalette);
     if (item.answer) // ask(): Yes / No, then the script goes on (it may queue more), then whatever is next is shown
     {
         b.kind = gp::BoxKind::Confirm;
@@ -84,7 +87,14 @@ inline void bindScripts(WalkServices &svc)
             return false;
         // Only queued here: the main loop shows it on the next tick, after any dialogue the game opens right after
         // the hook (a hook that does not take over), so a script's text never gets overwritten.
-        q.push_back({gp::fillTemplateVars(gp::fmtAll(svc.db.textOr(id), svc.player.name), vars), nullptr});
+        q.push_back({gp::fillTemplateVars(gp::fmtAll(svc.db.textOr(id), svc.player.name), vars), nullptr, svc.scripts.takeSayPortrait()});
+        return true;
+    };
+    api.textGet = [&svc](const std::string &id, const gp::ScriptApi::SayVars &vars, std::string &out)
+    {
+        if (!svc.db.hasText(id))
+            return false;
+        out = gp::fillTemplateVars(gp::fmtAll(svc.db.textOr(id), svc.player.name), vars);
         return true;
     };
     // ask(textId, vars): the same, as a yes/no question; the script waits for the reply (see ScriptHost::answerRoutine).
@@ -100,7 +110,7 @@ inline void bindScripts(WalkServices &svc)
         auto &q = svc.S.script.sayQueue;
         if (q.size() >= 16)
             return false;
-        q.push_back({gp::fillTemplateVars(gp::fmtAll(svc.db.textOr(id), svc.player.name), vars), std::move(answer)});
+        q.push_back({gp::fillTemplateVars(gp::fmtAll(svc.db.textOr(id), svc.player.name), vars), std::move(answer), svc.scripts.takeSayPortrait()});
         return true;
     };
 

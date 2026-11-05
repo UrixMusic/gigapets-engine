@@ -76,6 +76,8 @@ namespace gp
         // `vars` are the {name} placeholders for fillTemplate: names are [A-Za-z0-9_], values are strings or numbers.
         using SayVars = std::vector<std::pair<std::string, std::string>>;
         std::function<bool(const std::string &textId, const SayVars &vars)> say;
+        // text.get(textId, vars): the text as a string, with {names} filled and the pet's name in; false for an unknown text id
+        std::function<bool(const std::string &textId, const SayVars &vars, std::string &out)> textGet;
         // ask(textId, vars): queue a yes/no question after any queued say() boxes. Returns false for a text id the db doesn't know
         // (nothing is shown). `answer(true)` for Yes, `answer(false)` for No is called when the player chooses; the host then
         // carries the waiting script on.
@@ -278,6 +280,7 @@ namespace gp
             bind("player", "hasFlag", l_pHasFlag);
             bind("player", "setFlag", l_pSetFlag);
             bind("tutorial", "once", l_tutorialOnce);
+            bind("text", "get", l_textGet);
             bind("player", "care", l_pCare);
             bind("player", "adjustCare", l_pAdjustCare);
             bind("player", "personality", l_pPersonality);
@@ -727,6 +730,13 @@ namespace gp
             return systemHooks_.count(name) || (it != systemHooks_.end() && it->first.compare(0, prefix.size(), prefix) == 0);
         }
 
+        // The portrait (an npc id) the say() / ask() that is being handled asked for, or "". The host's say / ask callback takes it (and clears it).
+        std::string takeSayPortrait()
+        {
+            std::string s = std::move(sayPortrait_);
+            sayPortrait_.clear();
+            return s;
+        }
         // Runs an engine system (see systems.hpp). `ctx` carries the values in and out; `defaultFn` is the engine's own version, called here when no mod replaces it. Returns
         // true if the default ran. With no mod hooking `name` it just runs the default.
         template <class Default>
@@ -3104,13 +3114,64 @@ namespace gp
             return vars;
         }
 
+        // The third argument of say / ask: { portrait = "mymod:npc/baker" } shows that npc's portrait in the box. (Checked before anything with a destructor is alive.)
+        static void checkSayOpts(lua_State *L, int idx, const char *who)
+        {
+            if (lua_isnoneornil(L, idx))
+                return;
+            luaL_checktype(L, idx, LUA_TTABLE);
+            lua_getfield(L, idx, "portrait");
+            const bool ok = lua_isnil(L, -1) || (lua_type(L, -1) == LUA_TSTRING && idCharsOk(lua_tostring(L, -1)));
+            lua_pop(L, 1);
+            if (!ok)
+                luaL_error(L, "%s: 'portrait' must be an npc id", who);
+        }
+        static std::string sayOptPortrait(lua_State *L, int idx)
+        {
+            std::string p;
+            if (!lua_isnoneornil(L, idx))
+            {
+                lua_getfield(L, idx, "portrait");
+                if (lua_type(L, -1) == LUA_TSTRING)
+                    p = lua_tostring(L, -1);
+                lua_pop(L, 1);
+            }
+            return p;
+        }
         static int l_say(lua_State *L)
         {
             ScriptHost &h = self(L);
             const char *id = luaL_checkstring(L, 1);
             const int nvars = checkVars(L, 2, "say");
-            const ScriptApi::SayVars vars = readVars(L, 2, nvars);
-            lua_pushboolean(L, h.api_.say && h.api_.say(id, vars));
+            checkSayOpts(L, 3, "say");
+            bool shown = false;
+            {
+                const ScriptApi::SayVars vars = readVars(L, 2, nvars);
+                h.sayPortrait_ = sayOptPortrait(L, 3);
+                shown = h.api_.say && h.api_.say(id, vars);
+                h.sayPortrait_.clear();
+            }
+            lua_pushboolean(L, shown);
+            return 1;
+        }
+        // text.get(textId [, vars]) -> the text as a string ({names} filled, the pet's name in), or nil for an unknown id
+        static int l_textGet(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            const int nvars = checkVars(L, 2, "text.get");
+            std::string out;
+            bool ok = false;
+            {
+                const ScriptApi::SayVars vars = readVars(L, 2, nvars);
+                ok = h.api_.textGet && h.api_.textGet(id, vars, out);
+            }
+            if (!ok)
+            {
+                lua_pushnil(L);
+                return 1;
+            }
+            lua_pushlstring(L, out.data(), out.size());
             return 1;
         }
 
@@ -3121,14 +3182,21 @@ namespace gp
         {
             const char *id = lua_tostring(L, 1);
             const int nvars = checkVars(L, 2, "ask");
+            checkSayOpts(L, 3, "ask");
             const ScriptApi::SayVars vars = readVars(L, 2, nvars);
+            h.sayPortrait_ = sayOptPortrait(L, 3);
             Routine *r = h.routineFor(L);
             if (!r || !h.api_.ask)
+            {
+                h.sayPortrait_.clear();
                 return false;
+            }
             const int rid = r->id;
             ScriptHost *hp = &h;
-            if (!h.api_.ask(id, vars, [hp, rid](bool yes)
-                            { hp->answerRoutine(rid, yes); }))
+            const bool queued = h.api_.ask(id, vars, [hp, rid](bool yes)
+                                           { hp->answerRoutine(rid, yes); });
+            h.sayPortrait_.clear();
+            if (!queued)
                 return false;
             r->wait = Wait::Asking; // (the answer cannot come before this function returns: the box is only queued)
             return true;
@@ -3255,6 +3323,7 @@ namespace gp
         std::map<std::string, Hook> sceneHooks_;
         std::map<std::string, Hook> itemHooks_;
         std::map<std::string, Hook> gameHooks_; // one table, under the id ""
+        std::string sayPortrait_; // the npc id a say() / ask() asked a portrait of, until the host has taken it (takeSayPortrait)
         std::map<std::string, Hook> systemHooks_; // System.hooks(name): before / replace / after of an engine system
         int sharedCtx_ = LUA_NOREF; // while a system's stage runs: the one ctx table all its hooks share (so changes carry from hook to hook and back to the engine)
         std::set<std::string> disabled_;

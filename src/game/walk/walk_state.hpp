@@ -157,6 +157,7 @@ struct ScriptState
     {
         std::string text;
         std::function<void(bool)> answer;
+        std::string portrait; // an npc id whose portrait the box shows (say / ask with { portrait = ... }), or empty
     };
     std::deque<SayItem> sayQueue;
     std::vector<std::string> sideComplete; // side quests a script asked to finish (quest.complete): ended on the next tick, once no dialogue is open

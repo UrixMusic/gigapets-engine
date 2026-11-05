@@ -97,6 +97,22 @@ int main()
         y.set("npc", "x").set("kind", "yawn").set("count", 1);
         CHECK(!h.system("npc.sequence", y, [] {}));
     }
+    { // say with a portrait, and text.get
+        gp::ScriptHost h;
+        std::vector<std::string> portraits;
+        h.api().say = [&](const std::string &, const gp::ScriptApi::SayVars &) { portraits.push_back(h.takeSayPortrait()); return true; };
+        h.api().textGet = [&](const std::string &id, const gp::ScriptApi::SayVars &v, std::string &out) {
+            if (id == "m:str/none") return false;
+            out = id + ":" + (v.empty() ? "" : v[0].second);
+            return true;
+        };
+        CHECK(h.runString("m", "say('m:str/a'); say('m:str/b', {}, { portrait = 'm:npc/baker' }); say('m:str/c', nil, {})"));
+        CHECK(portraits.size() == 3 && portraits[0].empty() && portraits[1] == "m:npc/baker" && portraits[2].empty());
+        CHECK(h.takeSayPortrait().empty()); // never left behind for the next say
+        CHECK(!h.runString("m", "say('m:str/a', {}, { portrait = 5 })")); // a bad portrait is a script error
+        CHECK(!h.runString("m", "say('m:str/a', {}, 'baker')"));
+        CHECK(h.runString("m", "assert(text.get('m:str/x', { name = 'Pip' }) == 'm:str/x:Pip'); assert(text.get('m:str/none') == nil)"));
+    }
     { // player.tricks / setTricks: the mask of known tricks, in any order
         gp::ScriptHost h;
         int mask = 1;
