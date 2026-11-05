@@ -571,6 +571,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         }
 
         const gp::TrickLayout trickLay = gp::TrickLayout::from(db.minigameOr("base:minigame/trick_panel")); // the tricks panel's numbers (data: a mod's minigame patch changes them)
+        // The pictures the walking world draws that are not part of an area: bubbles, icons, shadows, tilesets of the rooms, the bar cursor (imported once, up front)
+        auto importWalkArt = [&]
+        {
         for (int a : {0xe, 0x10, 0x11, 0x12, 0x16, 0x17, 0x18, gp::kTabAnimIn, gp::kTabAnimOut, gp::kBlastAnim, gp::kStinkAnim, gp::kExclaimIntroAnim, gp::kExclaimOutroAnim, trickLay.questionBubble, trickLay.answerBubble, gp::kHaloBubble, gp::kPitchforkBubble, gp::kStarBubble}) // 0xe: the wash bubble; arrow, dig bubble; 0x17/0x18: the thought bubble
             try
             {
@@ -718,6 +721,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                             idx, rom.u16(r), rom.u16(r + 1), rom.u16(r + 2), rom.u16(r + 3), gp::slotLayer(idx));
             }
         }
+        };
+        importWalkArt();
+
         player.questsCompleted = 1; // g_totalQuestsCompleted starts at 1
         if (haveSave)
             gp::loadPlayer(sd, player);
