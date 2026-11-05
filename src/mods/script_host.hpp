@@ -89,6 +89,7 @@ namespace gp
         // or mod area id) landing at x, y with a fade, like a door: false for an unknown area. shake is the camera shake of a belly flop.
         std::function<bool(int &x, int &y)> getPetPos;
         std::function<bool(int x, int y)> setPetPos;
+        std::function<bool(const std::string &kind, int arg)> startActivity; // player.startActivity: "feed", "wash", "potion", "bark", "question", "trick" (arg = level 1..3), "colour"; false if the pet is busy or the kind is unknown
         std::function<bool(const std::string &kind)> think; // a thought bubble over the pet: "hungry", "sick", "tired" or "mood"; false if one is up, or the kind is unknown
         std::function<void(int what)> lockPet;
         std::function<void()> unlockPet;
@@ -343,6 +344,7 @@ namespace gp
             bind("player", "pos", l_petPos);
             bind("player", "setPos", l_petSetPos);
             bind("player", "think", l_petThink);
+            bind("player", "startActivity", l_petStartActivity);
             bind("player", "lock", l_petLock);
             bind("player", "unlock", l_petUnlock);
             bind("player", "react", l_petReact);
@@ -2833,6 +2835,17 @@ namespace gp
         }
 
         // ---- the pet in the walking world ----
+        // player.startActivity(kind [, level]) -> true if it started. kind: "feed" (the pet eats), "wash", "potion" (the colour potion's startled reaction), "bark" (its call), "question"
+        // (the "?" bubble), "trick" (level 1..3: the pet performs it), "colour" (the colour machine). false while the pet is busy with something else, or in a room. System "pet.activity" then
+        // sees each step of it.
+        static int l_petStartActivity(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const std::string kind = luaL_checkstring(L, 1);
+            const lua_Integer level = luaL_optinteger(L, 2, 1);
+            lua_pushboolean(L, h.api_.startActivity && h.api_.startActivity(kind, int(level)));
+            return 1;
+        }
         // player.think(kind) -> true if the bubble went up ("hungry", "sick", "tired" or "mood"); false if one is already up, or in a room, or the kind is unknown
         static int l_petThink(lua_State *L)
         {

@@ -182,6 +182,16 @@ int main()
         CHECK(ticks == 0 && step == 0); // replaced: the game's step is skipped, and the mod ended it
         CHECK(h.errors().empty());
     }
+    { // player.startActivity reaches the host with the kind and the level
+        gp::ScriptHost h;
+        std::string kind;
+        int arg = 0;
+        h.api().startActivity = [&](const std::string &k, int a) { kind = k; arg = a; return k != "nope"; };
+        CHECK(h.runString("m", "assert(player.startActivity('trick', 3) == true); assert(player.startActivity('nope') == false)"));
+        CHECK(kind == "nope" && arg == 1); // the level defaults to 1
+        CHECK(h.runString("m", "player.startActivity('trick', 3)"));
+        CHECK(kind == "trick" && arg == 3);
+    }
     { // player.tricks / setTricks: the mask of known tricks, in any order
         gp::ScriptHost h;
         int mask = 1;

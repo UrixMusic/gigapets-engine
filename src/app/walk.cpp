@@ -2056,6 +2056,29 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         std::unique_ptr<ScriptWorldBindings> scriptWorldBindingsCtl; // built below, once everything it takes is declared (walk_script_world_bindings.hpp)
         wapi.getPetPos = [&](int &x, int &y) { return (*scriptWorldBindingsCtl).wapi_getPetPosRun(x, y); };
         wapi.tutorialsOn = [&] { return settings.tutorials; };
+        wapi.startActivity = [&](const std::string &kind, int arg) // player.startActivity(kind [, level]): one of the pet's activities, if it is free
+        {
+            if (room || pendingExit || pendingScreen || dialogue.open() || im.open || statsOpen || enc || showNpc || barBusy != 0 || host.pet.busy() ||
+                feedStep || digStep || washStep || swiftDropStep || potionStep || barkStep || trickStep || questionStep || colorStep || tutStep || holdTicks > 0)
+                return false;
+            if (kind == "feed")
+                startFeed();
+            else if (kind == "wash")
+                startWash();
+            else if (kind == "potion")
+                startPotionReaction();
+            else if (kind == "bark")
+                barkStep = 0, pressCancelInWorld();
+            else if (kind == "question")
+                startQuestion();
+            else if (kind == "trick")
+                startTrick(std::clamp(arg, 1, 3));
+            else if (kind == "colour")
+                svc.startColorMachine();
+            else
+                return false;
+            return true;
+        };
         wapi.think = [&](const std::string &kind)
         { return scriptThink && scriptThink(kind); };
         wapi.setPetPos = [&](int x, int y) { return (*scriptWorldBindingsCtl).wapi_setPetPosRun(x, y); };
