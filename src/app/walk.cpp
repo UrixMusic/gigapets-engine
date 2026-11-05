@@ -2574,15 +2574,22 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             const bool calm = tutStep == 0 && !enc && !dialogue.open();
             ++stinkTicks;
             // the stats wear down (conditions 1 and 2)
+            // (the engine system "care.decay": a mod may change the amount, cancel it or do it its own way; see systems.hpp)
             if (gp::decayStep(tiredDecayAccum, gp::romToSim(gp::tuning().tiredDecayRomTicks), player.questsCompleted))
             {
-                player.adjustCare(gp::Tiredness, -gp::tiredDecayAmount(sp));
+                gp::SystemCtx c;
+                c.set("stat", "tiredness").set("amount", gp::tiredDecayAmount(sp));
+                scripts.system("care.decay", c, [&]
+                               { player.adjustCare(gp::Tiredness, -int(c.num("amount"))); });
                 tiredTimer.accum = tiredTimer.limit - gp::kThoughtRetryTicks;
             }
             if (gp::decayStep(hungerDecayAccum, gp::romToSim(gp::tuning().hungerDecayRomTicks), player.questsCompleted))
             {
                 const int before = player.care[gp::Hunger];
-                player.adjustCare(gp::Hunger, -gp::hungerDecayAmount(sp));
+                gp::SystemCtx c;
+                c.set("stat", "hunger").set("amount", gp::hungerDecayAmount(sp));
+                scripts.system("care.decay", c, [&]
+                               { player.adjustCare(gp::Hunger, -int(c.num("amount"))); });
                 if (gp::crossedHungry(before, player.care[gp::Hunger]))
                     hungerTimer.accum = hungerTimer.limit - gp::kThoughtRetryTicks;
             }

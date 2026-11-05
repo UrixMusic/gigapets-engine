@@ -35,9 +35,9 @@ namespace gp
             static const std::function<bool(const std::string &)> noTarget; // Game.hooks() has no id to check
             const auto &exists = h.kind == 'N'   ? targets.npcExists
                                  : h.kind == 'I' ? targets.itemExists
-                                 : h.kind == 'G' || h.kind == 'S' ? noTarget // a scene is defined by its hook table: any id
+                                 : h.kind == 'G' || h.kind == 'S' || h.kind == 'Y' ? noTarget // a scene is defined by its hook table: any id
                                                  : targets.areaExists;
-            const std::string api = h.kind == 'N' ? "Npc.hooks" : h.kind == 'I' ? "Item.hooks" : h.kind == 'G' ? "Game.hooks" : h.kind == 'S' ? "Scene.hooks" : "Area.hooks";
+            const std::string api = h.kind == 'N' ? "Npc.hooks" : h.kind == 'I' ? "Item.hooks" : h.kind == 'G' ? "Game.hooks" : h.kind == 'S' ? "Scene.hooks" : h.kind == 'Y' ? "System.hooks" : "Area.hooks";
             const char *noun = h.kind == 'N' ? "NPC" : h.kind == 'I' ? "item" : "area";
             const std::string call = h.kind == 'G' ? api + "()" : api + "(\"" + h.id + "\")";
             if (exists && !exists(h.id))

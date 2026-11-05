@@ -24,6 +24,7 @@ extern "C"
 #include <vector>
 #include "../engine/audio_registry.hpp" // a mod's sound and music ids
 #include "../engine/registry.hpp"
+#include "../engine/systems.hpp" // the engine's named systems a mod can wrap or replace
 
 namespace gp
 {
@@ -260,6 +261,8 @@ namespace gp
             bind("Area", "hooks", l_areaHooks);
             bind("Item", "hooks", l_itemHooks);
             bind("Game", "hooks", l_gameHooks);
+            bind("System", "hooks", l_systemHooks);
+            bind("System", "list", l_systemList);
             bind("world", "drop", l_drop);
             bind("rand", "int", l_randInt);
             bind("rand", "pick", l_randPick);
@@ -447,7 +450,7 @@ namespace gp
             std::vector<HookInfo> out;
             if (!L_)
                 return out;
-            const std::pair<char, std::map<std::string, Hook> *> tables[] = {{'N', &npcHooks_}, {'A', &areaHooks_}, {'I', &itemHooks_}, {'G', &gameHooks_}, {'S', &sceneHooks_}};
+            const std::pair<char, std::map<std::string, Hook> *> tables[] = {{'N', &npcHooks_}, {'A', &areaHooks_}, {'I', &itemHooks_}, {'G', &gameHooks_}, {'S', &sceneHooks_}, {'Y', &systemHooks_}};
             for (const auto &[kind, table] : tables)
                 for (const auto &[id, hook] : *table)
                 {
@@ -517,6 +520,8 @@ namespace gp
                 return {"onItemUse"};
             case 'S':
                 return {"onOpen", "onTick", "onDraw"};
+            case 'Y':
+                return {"before", "replace", "after"};
             case 'G':
                 return {"onQuestComplete", "onEnterArea", "onLoad", "onSave", "onBeforeDig", "onAfterDig", "onBeforePickup", "onAfterPickup",
                         "onBeforeBuy", "onAfterBuy", "onBeforeExit", "onStatChange", "onBefriend", "onQuestAccept", "onQuestDecline", "onQuestFail", "onBeforeItemUse", "onSceneClose", "onHud"};
@@ -700,6 +705,66 @@ namespace gp
         void fireQuestFail(const QuestCompleteInfo &q)
         {
             runHook(gameHooks_, 'G', "", "onQuestFail", [&] { fillQuestCtx(q); }, nullptr);
+        }
+
+        // Runs an engine system (see systems.hpp). `ctx` carries the values in and out; `defaultFn` is the engine's own version, called here when no mod replaces it. Returns
+        // true if the default ran. With no mod hooking `name` it just runs the default.
+        template <class Default>
+        bool system(const std::string &name, SystemCtx &ctx, Default &&defaultFn)
+        {
+            const bool hooked = L_ && [&]
+            {
+                const std::string prefix = name + '\x1e';
+                return systemHooks_.count(name) || systemHooks_.lower_bound(prefix) != systemHooks_.end() && systemHooks_.lower_bound(prefix)->first.compare(0, prefix.size(), prefix) == 0;
+            }();
+            if (!hooked)
+            {
+                defaultFn();
+                return true;
+            }
+            lua_newtable(L_);
+            for (const SystemCtx::Value &v : ctx.values)
+            {
+                if (v.isString)
+                    lua_pushstring(L_, v.str.c_str());
+                else if (v.num == std::floor(v.num) && std::fabs(v.num) < 1e15)
+                    lua_pushinteger(L_, lua_Integer(v.num)); // a whole number is an integer in Lua ("7", not "7.0")
+                else
+                    lua_pushnumber(L_, v.num);
+                lua_setfield(L_, -2, v.name.c_str());
+            }
+            const int ref = luaL_ref(L_, LUA_REGISTRYINDEX);
+            const auto stage = [&](const char *which, bool *cancel, bool firstOnly)
+            {
+                sharedCtx_ = ref;
+                const bool ran = runHook(systemHooks_, 'Y', name, which, [] {}, cancel, false, firstOnly);
+                sharedCtx_ = LUA_NOREF;
+                lua_rawgeti(L_, LUA_REGISTRYINDEX, ref); // the engine reads back what the hooks left in ctx
+                for (SystemCtx::Value &v : ctx.values)
+                {
+                    lua_getfield(L_, -1, v.name.c_str());
+                    if (v.isString && lua_type(L_, -1) == LUA_TSTRING)
+                        v.str = lua_tostring(L_, -1);
+                    else if (!v.isString && lua_isnumber(L_, -1))
+                        v.num = lua_tonumber(L_, -1);
+                    lua_pop(L_, 1);
+                }
+                lua_pop(L_, 1);
+                return ran;
+            };
+            bool cancelled = false, ranDefault = false;
+            stage("before", &cancelled, false);
+            if (!cancelled)
+            {
+                if (!stage("replace", nullptr, true))
+                {
+                    defaultFn();
+                    ranDefault = true;
+                }
+                stage("after", nullptr, false);
+            }
+            luaL_unref(L_, LUA_REGISTRYINDEX, ref);
+            return ranDefault;
         }
 
         // onBeforeItemUse(ctx): the player chose "use" on ANY item, before the item's own Item.hooks(id).onItemUse and the game's handling.
@@ -1030,7 +1095,7 @@ namespace gp
         // still waiting (wait / ask) is not started again.
         template <class FillCtx>
         bool runHook(std::map<std::string, Hook> &hooks, char kind, const std::string &id, const char *hook,
-                     FillCtx fillCtx, bool *suppress, bool skipIfBusy = false)
+                     FillCtx fillCtx, bool *suppress, bool skipIfBusy = false, bool firstOnly = false)
         {
             if (!L_)
                 return false;
@@ -1051,6 +1116,8 @@ namespace gp
                     *suppress = true;
                     break;
                 }
+                if (firstOnly && ran)
+                    break;
             }
             return ran;
         }
@@ -1071,7 +1138,10 @@ namespace gp
                 return false;
             }
             lua_pushvalue(L_, -2); // self = the hook table, so `function T:onTalk(ctx)` works
-            lua_newtable(L_);      // ctx
+            if (sharedCtx_ != LUA_NOREF)
+                lua_rawgeti(L_, LUA_REGISTRYINDEX, sharedCtx_); // a system's ctx: shared by its hooks and read back by the engine
+            else
+                lua_newtable(L_); // ctx
             fillCtx();
             pushPlayerCtx(); // ctx.player
             lua_setfield(L_, -2, "player");
@@ -1427,6 +1497,32 @@ namespace gp
         static int l_sceneHooks(lua_State *L) { return hooksFor(L, self(L).sceneHooks_, false); }
         static int l_itemHooks(lua_State *L) { return hooksFor(L, self(L).itemHooks_); }
         // Game.hooks() -> the one global hook table (no id): function G:onQuestComplete(ctx)
+        // System.hooks("care.decay") -> the calling mod's table for an engine system: function S:before(ctx) / S:replace(ctx) / S:after(ctx). An unknown name is an error.
+        static int l_systemHooks(lua_State *L)
+        {
+            const char *name = luaL_checkstring(L, 1);
+            if (!systemKnown(name))
+                return luaL_argerror(L, 1, lua_pushfstring(L, "no such system '%s' (System.list() shows the ones there are)", name));
+            return hooksFor(L, self(L).systemHooks_);
+        }
+        // System.list() -> { { name, what, fields }, ... }
+        static int l_systemList(lua_State *L)
+        {
+            const auto &defs = systemDefs();
+            lua_createtable(L, int(defs.size()), 0);
+            for (size_t i = 0; i < defs.size(); ++i)
+            {
+                lua_newtable(L);
+                lua_pushstring(L, defs[i].name);
+                lua_setfield(L, -2, "name");
+                lua_pushstring(L, defs[i].what);
+                lua_setfield(L, -2, "what");
+                lua_pushstring(L, defs[i].fields);
+                lua_setfield(L, -2, "fields");
+                lua_rawseti(L, -2, lua_Integer(i + 1));
+            }
+            return 1;
+        }
         static int l_gameHooks(lua_State *L) { return hooksTable(L, self(L).gameHooks_, "", true); }
         // world.drop(itemId, x, y) -> true if the item exists
         static int l_drop(lua_State *L)
@@ -3005,6 +3101,8 @@ namespace gp
         std::map<std::string, Hook> sceneHooks_;
         std::map<std::string, Hook> itemHooks_;
         std::map<std::string, Hook> gameHooks_; // one table, under the id ""
+        std::map<std::string, Hook> systemHooks_; // System.hooks(name): before / replace / after of an engine system
+        int sharedCtx_ = LUA_NOREF; // while a system's stage runs: the one ctx table all its hooks share (so changes carry from hook to hook and back to the engine)
         std::set<std::string> disabled_;
         std::string curMod_;
         std::vector<std::string> errors_;
