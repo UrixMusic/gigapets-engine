@@ -46,6 +46,24 @@ namespace gp
         return img;
     }
 
+    // A mod's picture as a layer (1152 x 256, its own see-through pixels).
+    inline Image roomArtLayer(const RoomArt &a)
+    {
+        Image img(a.w, a.h);
+        img.rgba = a.rgba;
+        return img;
+    }
+    // The same, with a mod's picture for the wall and / or the floor where there is one (null = the game's theme).
+    inline Image renderRoom(const Rom &rom, const ContentDB &db, const RoomTheme &t, const RoomArt *wallArt, const RoomArt *floorArt)
+    {
+        Image img = wallArt ? roomArtLayer(*wallArt) : renderRoomLayer(rom, db, t.wall);
+        for (size_t i = 3; i < img.rgba.size(); i += 4) // the wall is the back of the room: no holes in it
+            img.rgba[i] = 255;
+        const Image floor = floorArt ? roomArtLayer(*floorArt) : renderRoomLayer(rom, db, t.floor);
+        blit(img, floor.rgba.data(), floor.w, floor.h, 0, 0);
+        return img;
+    }
+
     // Wall behind, floor in front (blit skips transparent pixels).
     inline Image renderRoom(const Rom &rom, const ContentDB &db, const RoomTheme &t)
     {

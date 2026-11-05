@@ -376,7 +376,9 @@ namespace gp
             static const std::map<std::string, ItemType> t{{"food", ItemType::Food},
                                                            {"dish", ItemType::FoodDish},
                                                            {"medicine", ItemType::Medicine},
-                                                           {"quest", ItemType::GenericQuestItem}};
+                                                           {"quest", ItemType::GenericQuestItem},
+                                                           {"wall", ItemType::Wall},
+                                                           {"floor", ItemType::Floor}};
             auto i = t.find(s);
             if (i == t.end())
                 return false;
@@ -384,7 +386,8 @@ namespace gp
             return true;
         }
 
-        // Fields: category ("food" | "dish" | "medicine" | "quest"), name / plural (text ids), maxQty (1..99),
+        inline bool loadRoomArt(ContentDB &db, const ModManifest &m, const std::string &item, const std::string &rel, std::string &why);
+        // Fields: category ("food" | "dish" | "medicine" | "quest" | "wall" | "floor"; a wall or floor needs room_art: a 1152 x 256 picture of one layer of the room), name / plural (text ids), maxQty (1..99),
         // price (0..9999), icon / world (anim ids), use {action, num{}, str{}}.
         // icon is drawn at (x - anchorX + dx, y - anchorY + dy) from the inventory cell's corner, so give it anchor
         // 0,0. world is drawn from the item's spot on the ground; the default (bottom centre) usually fits.
@@ -392,7 +395,7 @@ namespace gp
         inline void applyItem(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
         {
             static const std::set<std::string> allowed{"type", "mode", "id", "name", "plural", "category",
-                                                       "maxQty", "price", "icon", "world", "use"};
+                                                       "maxQty", "price", "icon", "world", "use", "room_art"};
             for (auto it = rec.begin(); it != rec.end(); ++it)
                 if (!allowed.count(it.key()))
                     return err(rep, file, m.id, "unknown field '" + it.key() + "' in item record");
@@ -474,7 +477,7 @@ namespace gp
             if (rec.contains("category"))
             {
                 if (!rec["category"].is_string() || !itemCategory(rec["category"].get<std::string>(), d.type))
-                    return err(rep, file, m.id, "'" + id + "': 'category' must be food, dish, medicine or quest");
+                    return err(rep, file, m.id, "'" + id + "': 'category' must be food, dish, medicine, quest, wall or floor");
             }
             else if (mode == "add")
                 return err(rep, file, m.id, "add '" + id + "': missing 'category'");
@@ -531,8 +534,8 @@ namespace gp
             }
             else if (mode == "add")
             {
-                if (d.type != int(ItemType::GenericQuestItem))
-                    return err(rep, file, m.id, "add '" + id + "': missing 'use' (only quest items default to doing nothing)");
+                if (d.type != int(ItemType::GenericQuestItem) && d.type != int(ItemType::Wall) && d.type != int(ItemType::Floor))
+                    return err(rep, file, m.id, "add '" + id + "': missing 'use' (only quest items, walls and floors default to doing nothing)");
                 d.use.action = "none";
             }
 
@@ -562,6 +565,20 @@ namespace gp
                 return;
             if (mode == "add" && !hasIcon)
                 return err(rep, file, m.id, "add '" + id + "': missing 'icon'");
+            // A wall or floor of a mod: its picture is one layer of a room (the room is 36 x 8 tiles of 32 px = 1152 x 256). A floor's see-through pixels show the wall behind.
+            const bool layer = d.type == int(ItemType::Wall) || d.type == int(ItemType::Floor);
+            if (rec.contains("room_art") && !layer)
+                return err(rep, file, m.id, "'" + id + "': 'room_art' only goes with category wall or floor");
+            if (layer && mode == "add" && !rec.contains("room_art"))
+                return err(rep, file, m.id, "add '" + id + "': a wall or floor needs 'room_art', a 1152 x 256 picture");
+            if (rec.contains("room_art"))
+            {
+                std::string why2;
+                if (!rec["room_art"].is_string())
+                    return err(rep, file, m.id, "'" + id + "': 'room_art' must be a picture path");
+                if (!loadRoomArt(db, m, id, rec["room_art"].get<std::string>(), why2))
+                    return err(rep, file, m.id, "'" + id + "': " + why2);
+            }
             if (mode == "add" && !hasWorld)
                 d.worldSprite = d.iconSprite;
 
@@ -624,6 +641,25 @@ namespace gp
             png.h = h;
             png.rgba.assign(px, px + size_t(w) * h * 4);
             stbi_image_free(px);
+            return true;
+        }
+
+        // A wall or floor's room picture: 1152 x 256 (36 x 8 tiles of 32 pixels).
+        inline bool loadRoomArt(ContentDB &db, const ModManifest &m, const std::string &item, const std::string &rel, std::string &why)
+        {
+            PngData png;
+            if (!readModPng(m, rel, 4096, png, why))
+                return false;
+            if (png.w != 1152 || png.h != 256)
+            {
+                why = "'room_art' must be 1152 x 256 (36 x 8 tiles of 32 pixels), not " + std::to_string(png.w) + " x " + std::to_string(png.h);
+                return false;
+            }
+            RoomArt ra;
+            ra.w = png.w;
+            ra.h = png.h;
+            ra.rgba = std::move(png.rgba);
+            db.putRoomArt(item, std::move(ra));
             return true;
         }
 
@@ -2014,6 +2050,105 @@ namespace gp
                     return err(rep, file, m.id, "'" + id + "': 'roll_hi' must not be below 'roll_lo'");
             }
             db.put(std::move(t));
+            rep.lastWriter[id] = m.id;
+        }
+
+        // room: change a home or hotel the game has. Only mode "patch". Ids are "base:room/N": N = 0, 1, 2 (the player homes, one per save slot) or 4, 5, 6, 7 (the hotels).
+        //   { type: "room", mode: "patch", id: "base:room/4",
+        //     return: { x: 476, y: 813 }           (where the door puts the pet back in the area: pixels),
+        //     slots: { "2": "mymod:item/rug", "5": "" }   (a hotel's preset furnishing: slot number 0..31 -> an item id, "" = empty; wall is slot 0, floor slot 1),
+        //     decorations: [ { index: 3, x: 520, y: 173, sprite: 2397, palette: 652, type: 0, flag: 0 } ]   (the room's table of 9 pieces: 0 the door, 1 the bed, 3 the food in the
+        //                   bowl, 4 the bowl ...; only the fields you give change; sprite and palette are the game's numbers; type 0 door, 1 bed, 4 bowl, 0xffff plain) }
+        inline void applyRoom(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
+        {
+            static const std::set<std::string> allowed{"type", "mode", "id", "return", "slots", "decorations"};
+            for (auto it = rec.begin(); it != rec.end(); ++it)
+                if (!allowed.count(it.key()))
+                    return err(rep, file, m.id, "unknown field '" + it.key() + "' in room record");
+            if (!rec.contains("id") || !rec["id"].is_string())
+                return err(rep, file, m.id, "record has no string 'id'");
+            const std::string id = rec["id"].get<std::string>();
+            if (!rec.contains("mode") || !rec["mode"].is_string() || rec["mode"].get<std::string>() != "patch")
+                return err(rep, file, m.id, "'" + id + "': room records only support mode 'patch'");
+            int loc = -1;
+            if (id.rfind("base:room/", 0) == 0 && id.size() > 10 && id.size() < 12 && std::isdigit(static_cast<unsigned char>(id[10])))
+                loc = id[10] - '0';
+            if (loc < 0 || loc > 7 || loc == 3)
+                return err(rep, file, m.id, "patch '" + id + "': no such room (base:room/0, 1, 2 = the homes; 4, 5, 6, 7 = the hotels)");
+            if (!rec.contains("return") && !rec.contains("slots") && !rec.contains("decorations"))
+                return err(rep, file, m.id, "patch '" + id + "': nothing to change (return, slots, decorations)");
+            RoomDef d;
+            if (const RoomDef *old = db.room(loc))
+                d = *old;
+            d.location = loc;
+            std::string why;
+            if (rec.contains("return"))
+            {
+                const json &r = rec["return"];
+                if (!r.is_object() || !r.contains("x") || !r.contains("y"))
+                    return err(rep, file, m.id, "'" + id + "': 'return' must be { \"x\": .., \"y\": .. }");
+                for (auto it = r.begin(); it != r.end(); ++it)
+                    if (it.key() != "x" && it.key() != "y")
+                        return err(rep, file, m.id, "'" + id + "': unknown field '" + it.key() + "' in 'return'");
+                int x = 0, y = 0;
+                if (!optInt(r, "x", x, 0, 20000, why) || !optInt(r, "y", y, 0, 20000, why))
+                    return err(rep, file, m.id, "'" + id + "': " + why);
+                d.hasReturn = true;
+                d.returnX = x;
+                d.returnY = y;
+            }
+            if (rec.contains("slots"))
+            {
+                if (loc < 4)
+                    return err(rep, file, m.id, "'" + id + "': 'slots' is for hotels (a home shows what the player equipped)");
+                if (!rec["slots"].is_object())
+                    return err(rep, file, m.id, "'" + id + "': 'slots' must be an object like { \"2\": \"mymod:item/rug\" }");
+                for (auto it = rec["slots"].begin(); it != rec["slots"].end(); ++it)
+                {
+                    const std::string k = it.key();
+                    const bool digits = !k.empty() && k.size() <= 2 && std::all_of(k.begin(), k.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)); });
+                    const int slot = digits ? std::atoi(k.c_str()) : -1;
+                    if (slot < 0 || slot > 31)
+                        return err(rep, file, m.id, "'" + id + "': a slot is a number 0..31, not '" + k + "'");
+                    if (!it.value().is_string() || (!it.value().get<std::string>().empty() && !db.item(it.value().get<std::string>())))
+                        return err(rep, file, m.id, "'" + id + "': slot " + k + " must be the id of an item that exists, or \"\" for empty");
+                    d.slots[slot] = it.value().get<std::string>();
+                }
+            }
+            if (rec.contains("decorations"))
+            {
+                if (!rec["decorations"].is_array() || rec["decorations"].empty() || rec["decorations"].size() > 9)
+                    return err(rep, file, m.id, "'" + id + "': 'decorations' must be a list of 1 to 9 entries");
+                for (const json &e : rec["decorations"])
+                {
+                    if (!e.is_object() || !e.contains("index"))
+                        return err(rep, file, m.id, "'" + id + "': every decoration needs an 'index' (0..8)");
+                    static const char *names[6] = {"x", "y", "sprite", "palette", "type", "flag"};
+                    for (auto it = e.begin(); it != e.end(); ++it)
+                    {
+                        bool ok = it.key() == "index";
+                        for (const char *n : names)
+                            ok = ok || it.key() == n;
+                        if (!ok)
+                            return err(rep, file, m.id, "'" + id + "': unknown field '" + it.key() + "' in a decoration");
+                    }
+                    int index = 0;
+                    if (!optInt(e, "index", index, 0, 8, why))
+                        return err(rep, file, m.id, "'" + id + "': " + why);
+                    RoomDef::Decor &dc = d.decor[index];
+                    for (int k = 0; k < 6; ++k)
+                    {
+                        if (!e.contains(names[k]))
+                            continue;
+                        int v = 0;
+                        if (!optInt(e, names[k], v, 0, 65535, why))
+                            return err(rep, file, m.id, "'" + id + "': " + why);
+                        dc.v[k] = v;
+                        dc.has |= 1u << k;
+                    }
+                }
+            }
+            db.roomMutable(loc) = std::move(d);
             rep.lastWriter[id] = m.id;
         }
 
@@ -3490,7 +3625,7 @@ namespace gp
                 return 1;
             if (t == "shop_stock")
                 return 4; // names shops, which are made in pass 3
-            return t == "spot" || t == "find" || t == "quest_spawn" || t == "gate" || t == "minigame" || t == "species" || t == "shop" || t == "side_quest" || t == "quest_type" ? 3 : 2; // they name areas and items, so they come last
+            return t == "spot" || t == "find" || t == "quest_spawn" || t == "gate" || t == "minigame" || t == "species" || t == "shop" || t == "side_quest" || t == "quest_type" || t == "room" ? 3 : 2; // they name areas and items, so they come last
         }
         inline constexpr int kPasses = 5;
 
@@ -3575,6 +3710,8 @@ namespace gp
                     applySideQuest(db, m, file, r, rep);
                 else if (type == "quest_type")
                     applyQuestType(db, m, file, r, rep);
+                else if (type == "room")
+                    applyRoom(db, m, file, r, rep);
                 else if (type == "species")
                     applySpecies(db, m, file, r, rep);
                 else

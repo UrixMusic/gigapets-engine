@@ -465,6 +465,25 @@ namespace gp
             auto i = minigames_.find(id);
             return i == minigames_.end() ? nullptr : &i->second;
         }
+        // A mod's wall or floor item's room picture (item id -> picture); null = the item uses the game's theme (its w9 number).
+        void putRoomArt(const Id &item, RoomArt a) { roomArt_[item] = std::move(a); }
+        const RoomArt *roomArt(const Id &item) const
+        {
+            auto i = roomArt_.find(item);
+            return i == roomArt_.end() ? nullptr : &i->second;
+        }
+        // The homes and hotels a mod changed (location 0..7); null = as the game has it.
+        const RoomDef *room(int location) const
+        {
+            auto i = rooms_.find(location);
+            return i == rooms_.end() ? nullptr : &i->second;
+        }
+        RoomDef &roomMutable(int location)
+        {
+            RoomDef &r = rooms_[location];
+            r.location = location;
+            return r;
+        }
         MinigameDef *minigameMutable(const Id &id)
         {
             auto i = minigames_.find(id);
@@ -649,6 +668,8 @@ namespace gp
         QuestRomTables questTables_;
         BefriendRules befriend_;
         std::map<Id, MinigameDef> minigames_;
+        std::map<int, RoomDef> rooms_;
+        std::map<Id, RoomArt> roomArt_;
         std::vector<ShopDef> shops_;
         std::vector<SideQuestDef> sideQuests_; // load order
         std::vector<StockRuleDef> stockRules_;

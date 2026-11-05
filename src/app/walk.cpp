@@ -648,6 +648,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             for (int loc : {0, 4})
                 for (const gp::RoomDecoration &d : gp::roomDecorations(rom, loc))
                     importDecor(d.sprite, d.palette);
+            for (int loc = 0; loc <= 7; ++loc) // what a mod's `room` patch put in the tables
+                if (db.room(loc))
+                    for (const gp::RoomDecoration &d : gp::roomDecorations(rom, loc, db.room(loc)))
+                        importDecor(d.sprite, d.palette);
             for (int marker : {0x33d, 0x3b0, 0x319}) // the "put it here" markers while placing a furnishing
                 importDecor(marker, 0x28c);
             for (int bowl : {0x95d, 0x95e, 0x963, 0x961}) // the food in the bowl, full to empty
@@ -3020,7 +3024,13 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         {
             gp::SlotItems slots{};
             if (gp::isHotel(location))
+            {
                 slots = gp::hotelSlotItems(rom, location);
+                if (const gp::RoomDef *rd = db.room(location)) // a mod's preset changes
+                    for (const auto &[s, id] : rd->slots)
+                        if (s >= 0 && s < gp::kInventorySlots)
+                            slots[size_t(s)] = id.empty() ? 0 : db.item(id) ? db.item(id)->index : 0;
+            }
             else
             {
                 std::map<int, int> equip;
@@ -3043,20 +3053,25 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 return item > 0 && item < int(itemDefs.size()) ? itemDefs[size_t(item)].w9 : 0;
             };
             const gp::RoomTheme th = gp::roomTheme(rom, themeOf(gp::kInventoryWallSlot), themeOf(gp::kInventoryFloorSlot));
-            const gp::Image img = gp::renderRoom(rom, db, th);
+            auto artOf = [&](int s) -> const gp::RoomArt *
+            {
+                const int item = r.slots[size_t(s)];
+                return item > 0 && item < int(itemDefs.size()) ? db.roomArt(itemDefs[size_t(item)].id) : nullptr; // a mod's wall or floor picture
+            };
+            const gp::Image img = gp::renderRoom(rom, db, th, artOf(gp::kInventoryWallSlot), artOf(gp::kInventoryFloorSlot));
             if (r.tex)
                 SDL_DestroyTexture(r.tex);
             r.tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, img.w, img.h);
             SDL_UpdateTexture(r.tex, nullptr, img.rgba.data(), img.w * 4);
             SDL_SetTextureBlendMode(r.tex, SDL_BLENDMODE_BLEND);
-            r.sprites = gp::roomSprites(rom, gp::roomDecorations(rom, r.location), r.slots, itemDefs);
+            r.sprites = gp::roomSprites(rom, gp::roomDecorations(rom, r.location, db.room(r.location)), r.slots, itemDefs);
         };
         auto beginRoom = [&](int location)
         {
             auto r = std::make_unique<RoomView>();
             r->location = location;
             r->slots = roomSlots(location);
-            r->table = gp::roomDecorations(rom, location);
+            r->table = gp::roomDecorations(rom, location, db.room(location));
             // Entering a home that isn't yours: its pet, in the colour saved there, or "FOR RENT" when the slot is unused.
             if (location >= 0 && location <= 2 && location != slot)
             {
@@ -3104,7 +3119,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
         auto leaveRoom = [&]
         {
-            const gp::RoomExitPoint p = gp::roomReturnPoint(room->location); // back at the door, by return state
+            const gp::RoomExitPoint p = gp::roomReturnPoint(room->location, db.room(room->location)); // back at the door, by return state
             // the engine system "room.leave": where the pet comes out in the area (change x, y: it cannot be cancelled, the room is already over)
             gp::SystemCtx lc;
             lc.set("location", room->location).set("x", p.x).set("y", p.y);
@@ -4534,7 +4549,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         {
             requestScreen([&, location]
                           {
-                const gp::RoomExitPoint p = gp::roomReturnPoint(location);
+                const gp::RoomExitPoint p = gp::roomReturnPoint(location, db.room(location));
                 enc.reset();
                 encNpc = nullptr;
                 if (cur->def->legacyId != 0)

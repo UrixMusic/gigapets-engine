@@ -244,6 +244,29 @@ namespace gp
         int distance[10][10] = {};                   // word 0xe339, [from][to]
     };
 
+    // The picture of a mod's wall or floor item: one layer of a room, 1152 x 256 (the room is 36 x 8 tiles of 32 px). A floor's see-through pixels show the wall.
+    struct RoomArt
+    {
+        int w = 0, h = 0;
+        std::vector<uint8_t> rgba;
+    };
+
+    // A home or hotel (location 0..2 the player homes, 4..7 the hotels) as the game has it, for a mod's `room` patch: where the door puts the pet back in the area, a hotel's furnishing
+    // and the pieces of the room (the door, bed, bowl, hooks ...). Only what a mod changed is set.
+    struct RoomDef
+    {
+        int location = 0;
+        bool hasReturn = false;
+        int returnX = 0, returnY = 0;
+        std::map<int, Id> slots; // a hotel's preset furnishing: slot 0..31 -> item id ("" = empty); only the slots listed change
+        struct Decor
+        {
+            int v[6] = {0, 0, 0, 0, 0, 0}; // x, y, sprite, palette, type, flag
+            unsigned has = 0;              // bit k: v[k] was set
+        };
+        std::map<int, Decor> decor; // table entry 0..8 -> its changed fields
+    };
+
     // One quest type: how generic quests of this type are rolled, what they ask for, how they behave.
     // A mod adds a type with a new record. Any field left empty/unset inherits from the base type (mode 0).
     struct QuestPoolEntry

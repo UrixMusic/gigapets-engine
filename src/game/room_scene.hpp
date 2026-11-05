@@ -127,6 +127,15 @@ namespace gp
         }
     }
 
+    // With what a mod changed (a `room` patch): the exit point, and the table's entries.
+    inline RoomExitPoint roomReturnPoint(int location, const RoomDef *def)
+    {
+        RoomExitPoint p = roomReturnPoint(location);
+        if (def && def->hasReturn)
+            p = {def->returnX, def->returnY};
+        return p;
+    }
+
     // ---- the decorations: the door, the bed, furniture and wall pieces ----
     // The scene table at 0xc43d has one 9-word record per location 0..7; the last word is the RAM address of that room's
     // decoration table: homes 0..2 -> 0x1eff, hotels 4..7 -> 0x1f35 (location 3 is not a room). Boot (BootInitVars2) copies
@@ -156,6 +165,21 @@ namespace gp
             out.push_back({int(rom.u16(e)), int(rom.u16(e + 1)), int(rom.u16(e + 2)), int(rom.u16(e + 3)), int(rom.u16(e + 4)),
                            int(rom.u16(e + 5))});
         }
+        return out;
+    }
+
+    inline std::vector<RoomDecoration> roomDecorations(const Rom &rom, int location, const RoomDef *def)
+    {
+        std::vector<RoomDecoration> out = roomDecorations(rom, location);
+        if (def)
+            for (const auto &[i, d] : def->decor)
+                if (i >= 0 && i < int(out.size()))
+                {
+                    int *f[6] = {&out[size_t(i)].x, &out[size_t(i)].y, &out[size_t(i)].sprite, &out[size_t(i)].palette, &out[size_t(i)].type, &out[size_t(i)].flag};
+                    for (int k = 0; k < 6; ++k)
+                        if (d.has >> k & 1)
+                            *f[k] = d.v[k];
+                }
         return out;
     }
 
