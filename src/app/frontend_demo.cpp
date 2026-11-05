@@ -1517,6 +1517,8 @@ inline void drawButtonTest(Gfx &g, const gp::testmode::ButtonTest &t)
 // Returns the save slot (0..2) to play, or -1 if the window was closed.
 // launchGame = false keeps the old demo behaviour (after New/Load it just returns to the menu).
 // skipBoot   = true starts at the main menu (used when coming back from gameplay).
+namespace tmn = gp::testmode; // (the test mode's rules, under the short name the screens use)
+
 // The keys the front end's scripts see: pressed since their last tick, or held now (Z, X, the arrows)
 struct FeKeys
 {
@@ -1677,7 +1679,6 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         bool optPressed = false;
 
         // The ROM's test mode (game/test_mode.hpp): the sequence on the logo, and the screens.
-        namespace tmn = gp::testmode;
         tmn::EntrySequence testEntry;
         TmScreen tmScreen = TmScreen::Menu;
         tmn::MenuList tmMenu;
