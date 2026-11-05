@@ -86,13 +86,15 @@ public:
         GP_GL(glUniform3f, PFNGLUNIFORM3FPROC)
         GP_GL(glUniform4f, PFNGLUNIFORM4FPROC)
         GP_GL(glUniform1i, PFNGLUNIFORM1IPROC)
+        GP_GL(glActiveTexture, PFNGLACTIVETEXTUREPROC)
 #undef GP_GL
         ok_ = true;
         return true;
     }
 
     // Runs `source` (the mod's fragment shader body) over the frame. `logical` is the screen's logical size (what `resolution` is).
-    void apply(SDL_Renderer *ren, const std::string &id, const std::string &source, const Uniforms &uniforms, float seconds, int logicalW, int logicalH)
+    void apply(SDL_Renderer *ren, const std::string &id, const std::string &source, const Uniforms &uniforms, float seconds, int logicalW, int logicalH,
+               const std::vector<std::pair<std::string, SDL_Texture *>> &textures = {})
     {
         if (!available(ren))
             return;
@@ -144,6 +146,19 @@ public:
         glEnable(GL_TEXTURE_2D);
         glUseProgram_(p.program);
         glUniform1i_(loc(p, "tex"), 0);
+        // extra textures (canvases of the script): each on its own unit; the shader reads them with canvas(sampler, uv), the same orientation as uv
+        std::vector<SDL_Texture *> bound;
+        for (size_t i = 0; i < textures.size() && i < 4; ++i)
+        {
+            glActiveTexture_(GL_TEXTURE1 + GLenum(i));
+            float tw = 0.f, th = 0.f;
+            if (SDL_GL_BindTexture(textures[i].second, &tw, &th) == 0)
+            {
+                bound.push_back(textures[i].second);
+                glUniform1i_(loc(p, textures[i].first), GLint(i + 1));
+            }
+        }
+        glActiveTexture_(GL_TEXTURE0);
         glUniform2f_(loc(p, "resolution"), float(logicalW), float(logicalH));
         glUniform1f_(loc(p, "time"), seconds);
         for (const auto &[name, v] : uniforms)
@@ -170,6 +185,12 @@ public:
         glTexCoord2f(1.f, 1.f);
         glVertex2f(1.f, 1.f);
         glEnd();
+        for (size_t i = 0; i < bound.size(); ++i)
+        {
+            glActiveTexture_(GL_TEXTURE1 + GLenum(i));
+            SDL_GL_UnbindTexture(bound[i]);
+        }
+        glActiveTexture_(GL_TEXTURE0);
         glUseProgram_(0);
         glPopAttrib();
     }
@@ -205,6 +226,7 @@ private:
     PFNGLUNIFORM3FPROC glUniform3f_ = nullptr;
     PFNGLUNIFORM4FPROC glUniform4f_ = nullptr;
     PFNGLUNIFORM1IPROC glUniform1i_ = nullptr;
+    PFNGLACTIVETEXTUREPROC glActiveTexture_ = nullptr;
 
     GLint loc(Program &p, const std::string &name)
     {
@@ -252,6 +274,7 @@ private:
             "uniform float time;\n"
             "varying vec2 uv;\n"
             "vec4 frame(vec2 p) { return texture2D(tex, vec2(p.x, 1.0 - p.y)); }\n"
+            "vec4 canvas(sampler2D t, vec2 p) { return texture2D(t, p); }\n"
             "#line 1\n";
         const GLuint vs = compile(GL_VERTEX_SHADER, vertex, id + " (vertex)");
         const GLuint fs = vs ? compile(GL_FRAGMENT_SHADER, prelude + body, id) : 0;

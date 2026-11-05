@@ -557,6 +557,11 @@ public:
             SDL_SetTextureBlendMode(worldTarget_, SDL_BLENDMODE_NONE);
             SDL_RenderCopyExF(ren, worldTarget_, nullptr, &dstW, double(angle), nullptr, SDL_FLIP_NONE);
         }
+        // Game.hooks().onPostWorld: the world is drawn and nothing of the screens, dialogue or HUD is yet: a shader here shades the world only
+        {
+            gp::useWholeScreen(ren);
+            drawScriptCmds(scripts.drawPostWorld(gp::logicalW()));
+        }
         if (W > 320) // 16:9: the 320 x 240 screens (and the HUD, dialogue and bar) sit in the middle of the wide world
         {
             if (room) // a house is a 1152 px room: it fills the whole wide screen and scrolls with the pet

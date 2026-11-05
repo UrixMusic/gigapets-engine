@@ -534,10 +534,10 @@ public:
                 }
                 (c.font == 3 ? swiftTitle : text).draw(str, bx, c.y, bw, al);
             };
-            drawer_.shader = [this](const gp::DrawCmd &c)
+            drawer_.shader = [this](const gp::DrawCmd &c, const std::vector<std::pair<std::string, SDL_Texture *>> &texs)
             {
                 if (const std::string *src = db.shader(c.str))
-                    glPass_.apply(ren, c.str, *src, c.uniforms, float(SDL_GetTicks()) / 1000.f, gp::logicalW(), 240);
+                    glPass_.apply(ren, c.str, *src, c.uniforms, float(SDL_GetTicks()) / 1000.f, gp::logicalW(), 240, texs);
                 else
                 {
                     static std::set<gp::Id> warned;

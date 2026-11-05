@@ -31,7 +31,8 @@ public:
 
     std::function<AnimRef(const std::string &id)> sprite; // a picture id -> its frames (empty AnimRef = unknown)
     std::function<void(const gp::DrawCmd &c)> text;       // writes a Text or Num command
-    std::function<void(const gp::DrawCmd &c)> shader;     // runs a Shader command over the picture so far (needs OpenGL; unset = ignored)
+    // runs a Shader command over the picture so far (needs OpenGL; unset = ignored); the second argument is the extra textures it names (sampler name, the canvas's texture)
+    std::function<void(const gp::DrawCmd &c, const std::vector<std::pair<std::string, SDL_Texture *>> &textures)> shader;
     int clearW = 320, clearH = 240;                        // what g.clear fills
     int frameDrawW = 320, frameDrawH = 240;                // the size "@frame" is drawn at by default (the logical screen now)
 
@@ -148,7 +149,28 @@ public:
                 break;
             case gp::DrawCmd::Kind::Shader:
                 if (shader && !inCanvas)
-                    shader(c);
+                {
+                    std::vector<std::pair<std::string, SDL_Texture *>> texs;
+                    for (const auto &[sampler, canvasName] : c.shaderTex)
+                    {
+                        const auto it = canvases_.find(canvasName);
+                        if (it != canvases_.end() && it->second.tex)
+                            texs.emplace_back(sampler, it->second.tex);
+                    }
+                    shader(c, texs);
+                }
+                break;
+            case gp::DrawCmd::Kind::Keep:
+                if (!inCanvas && captureFrame() && beginCanvas(c.str, frameW_, frameH_)) // (every pixel of it: a shader can compare it with the screen exactly)
+                {
+                    SDL_SetTextureBlendMode(frameTex_, SDL_BLENDMODE_NONE);
+                    SDL_RenderCopy(ren, frameTex_, nullptr, nullptr);
+                    SDL_RenderFlush(ren); // (the copy is only queued: done now, before frameTex_ is written again)
+                    SDL_SetRenderTarget(ren, nullptr);
+                    Canvas &kc = canvases_[c.str];
+                    kc.dw = frameDrawW;
+                    kc.dh = frameDrawH;
+                }
                 break;
             }
         }
@@ -161,7 +183,8 @@ private:
     struct Canvas
     {
         SDL_Texture *tex = nullptr;
-        int w = 0, h = 0;
+        int w = 0, h = 0;   // its pixels
+        int dw = 0, dh = 0; // the size it is drawn at by default (a kept frame has more pixels than the logical screen has units)
         long used = 0;
     };
     SDL_Renderer *ren_;
@@ -298,8 +321,8 @@ private:
         const auto it = canvases_.find(name);
         if (it == canvases_.end() || !it->second.tex)
             return nullptr;
-        w = it->second.w;
-        h = it->second.h;
+        w = it->second.dw ? it->second.dw : it->second.w;
+        h = it->second.dh ? it->second.dh : it->second.h;
         return it->second.tex;
     }
     // Starts a canvas: its texture (made if there is none of that size) becomes the target, cleared to nothing
@@ -316,6 +339,7 @@ private:
             if (c.tex)
                 SDL_SetTextureBlendMode(c.tex, SDL_BLENDMODE_BLEND);
         }
+        c.dw = c.dh = 0;
         if (!c.tex)
             return false;
         c.used = ++canvasClock_;

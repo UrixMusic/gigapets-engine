@@ -230,7 +230,8 @@ namespace gp
             CanvasBegin, // str = name, w, h: what follows (to CanvasEnd) is drawn into that canvas, in its own pixels
             CanvasEnd,
             Blit,         // str = a canvas (or "@frame": the picture as it is so far); x, y, w, h = its place (0 = its own size)
-            Shader       // str = a shader id (the shader record's); uniforms; runs over the picture so far
+            Shader,       // str = a shader id (the shader record's); uniforms; runs over the picture so far
+            Keep         // str = a canvas name: the picture drawn so far is saved in it (logical screen size)
         };
         Kind kind = Kind::Clear;
         int x = 0, y = 0, w = 0, h = 0;
@@ -245,6 +246,7 @@ namespace gp
         std::vector<float> pts;           // Poly, Mesh
         std::vector<int> idx;             // Mesh
         std::vector<std::pair<std::string, std::vector<float>>> uniforms; // Shader
+        std::vector<std::pair<std::string, std::string>> shaderTex;       // Shader: sampler name -> canvas name, up to 4
         std::string str;                  // Sprite: the picture's id; Text: the text id
         double num = 0;                   // Num: the number
         int frame = 0;                    // Sprite: frame number from 0
@@ -635,7 +637,7 @@ namespace gp
                 return {"before", "replace", "after"};
             case 'G':
                 return {"onQuestComplete", "onEnterArea", "onLoad", "onSave", "onBeforeDig", "onAfterDig", "onBeforePickup", "onAfterPickup",
-                        "onBeforeBuy", "onAfterBuy", "onBeforeExit", "onStatChange", "onBefriend", "onQuestAccept", "onQuestDecline", "onQuestFail", "onBeforeItemUse", "onSceneClose", "onHud", "onTickStart", "onTickEnd", "onPostDraw"};
+                        "onBeforeBuy", "onAfterBuy", "onBeforeExit", "onStatChange", "onBefriend", "onQuestAccept", "onQuestDecline", "onQuestFail", "onBeforeItemUse", "onSceneClose", "onHud", "onTickStart", "onTickEnd", "onPostWorld", "onPostDraw"};
             default:
                 return {"onInteract", "onEnter", "onLeave", "onTick", "onHud"};
             }
@@ -996,7 +998,7 @@ namespace gp
             drawing_ = true;
             runHook(sceneHooks_, 'S', sceneId_, "onDraw", [&]
                     {
-                        const std::pair<const char *, lua_CFunction> fns[] = {{"clear", l_gClear}, {"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}, {"shader", l_gShader}};
+                        const std::pair<const char *, lua_CFunction> fns[] = {{"clear", l_gClear}, {"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}, {"shader", l_gShader}, {"keep", l_gKeep}};
                         for (const auto &[name, f] : fns)
                         {
                             lua_pushlightuserdata(L_, this);
@@ -1017,7 +1019,7 @@ namespace gp
                 return sceneCmds_;
             auto fns = [&]
             {
-                const std::pair<const char *, lua_CFunction> list[] = {{"clear", l_gClear}, {"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}, {"shader", l_gShader}};
+                const std::pair<const char *, lua_CFunction> list[] = {{"clear", l_gClear}, {"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}, {"shader", l_gShader}, {"keep", l_gKeep}};
                 for (const auto &[name, f] : list)
                 {
                     lua_pushlightuserdata(L_, this);
@@ -1033,14 +1035,17 @@ namespace gp
         }
         // The last thing drawn each frame: Game.hooks().onPostDraw(g), over everything (world, menus, dialogue, scenes). Same drawing calls as onHud, and g.rect's blend modes make
         // tints, darkening, vignettes and scanlines. g.w / g.h are the whole screen's size: 320 x 240, or 426 x 240 in 16:9 (the filter covers the side bands too).
-        const std::vector<DrawCmd> &drawPost(int screenW = 320)
+        // Game.hooks().onPostWorld(g): right after the world is drawn (zoomed / turned too) and before the screens, dialogue and HUD: what g.shader does here affects the world only, and a
+        // g.keep("world") here saves the picture for later (a shader in onPostDraw can then tell the screens from the world).
+        const std::vector<DrawCmd> &drawPostWorld(int screenW = 320) { return drawPost(screenW, "onPostWorld"); }
+        const std::vector<DrawCmd> &drawPost(int screenW = 320, const char *hook = "onPostDraw")
         {
             sceneCmds_.clear();
             if (!L_ || gameHooks_.empty())
                 return sceneCmds_;
             auto fns = [&]
             {
-                const std::pair<const char *, lua_CFunction> list[] = {{"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}, {"shader", l_gShader}};
+                const std::pair<const char *, lua_CFunction> list[] = {{"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}, {"shader", l_gShader}, {"keep", l_gKeep}};
                 for (const auto &[name, f] : list)
                 {
                     lua_pushlightuserdata(L_, this);
@@ -1053,7 +1058,7 @@ namespace gp
                 lua_setfield(L_, -2, "h");
             };
             drawing_ = hud_ = true;
-            runHook(gameHooks_, 'G', "", "onPostDraw", fns, nullptr);
+            runHook(gameHooks_, 'G', "", hook, fns, nullptr);
             drawing_ = hud_ = false;
             return sceneCmds_;
         }
@@ -2609,7 +2614,7 @@ namespace gp
             self(L).sceneCmds_.push_back(std::move(d));
             return 0;
         }
-        // g.shader(id [, uniforms]): run a fragment shader (a `shader` record of a mod) over the picture drawn so far: the screen, in onPostDraw. uniforms = { name = number | { 2..4 numbers }, ... }
+        // g.shader(id [, uniforms [, { textures = { sampler = "canvas" } }]]): run a fragment shader (a `shader` record of a mod) over the picture drawn so far: the screen, in onPostDraw. uniforms = { name = number | { 2..4 numbers }, ... }
         // (up to 16; the names are the shader's `uniform float / vec2 / vec3 / vec4`). It needs the "opengl" render driver (the game picks it when a mod has a shaders folder); without it,
         // or if the shader does not compile, the call does nothing (the log says why). Meant for onPostDraw: that is where the finished frame is.
         static int l_gShader(lua_State *L)
@@ -2659,6 +2664,45 @@ namespace gp
                     lua_pop(L, 1);
                 }
             }
+            if (!lua_isnoneornil(L, 3))
+            {
+                luaL_checktype(L, 3, LUA_TTABLE);
+                lua_getfield(L, 3, "textures");
+                if (!lua_isnil(L, -1))
+                {
+                    luaL_checktype(L, -1, LUA_TTABLE);
+                    lua_pushnil(L);
+                    while (lua_next(L, -2))
+                    {
+                        if (lua_type(L, -2) != LUA_TSTRING || lua_type(L, -1) != LUA_TSTRING)
+                            luaL_error(L, "g.shader: textures = { samplerName = \"canvas name\" }");
+                        const std::string sampler = lua_tostring(L, -2), canvas = lua_tostring(L, -1);
+                        bool nameOk = !sampler.empty() && sampler.size() <= 40 && !std::isdigit(static_cast<unsigned char>(sampler[0]));
+                        for (char c : sampler)
+                            nameOk = nameOk && (std::isalnum(static_cast<unsigned char>(c)) || c == '_');
+                        if (!nameOk || !canvasNameOk(canvas.c_str()) || canvas == "@frame")
+                            luaL_error(L, "g.shader: a sampler is a name (letters, digits, _) and a canvas a canvas name (the frame itself is `tex` / frame())");
+                        if (d.shaderTex.size() >= 4)
+                            luaL_error(L, "g.shader: at most 4 extra textures");
+                        d.shaderTex.emplace_back(sampler, canvas);
+                        lua_pop(L, 1);
+                    }
+                }
+                lua_pop(L, 1);
+            }
+            self(L).sceneCmds_.push_back(std::move(d));
+            return 0;
+        }
+        // g.keep(name): the picture drawn so far is saved in a canvas of that name (the logical screen's size), to blit, mesh or give a shader as a texture later in the frame. In onPostWorld
+        // g.keep("world") saves the world without the screens, dialogue and HUD.
+        static int l_gKeep(lua_State *L)
+        {
+            drawGuard(L);
+            const char *name = luaL_checkstring(L, 1);
+            luaL_argcheck(L, canvasNameOk(name) && name[0] != '@', 1, "a canvas name (letters, digits, _ - : /)");
+            DrawCmd d;
+            d.kind = DrawCmd::Kind::Keep;
+            d.str = name;
             self(L).sceneCmds_.push_back(std::move(d));
             return 0;
         }

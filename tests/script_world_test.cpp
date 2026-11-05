@@ -272,6 +272,25 @@ int main()
             CHECK(!bh.errors().empty());
         }
     }
+    { // onPostWorld, g.keep and the textures of g.shader
+        gp::ScriptHost hh;
+        CHECK(hh.runString("m", R"(
+            local G = Game.hooks()
+            function G:onPostWorld(g) g.shader('m:shader/a', {}, { textures = { world = 'world', other = 'o2' } }); g.keep('world') end
+            )"));
+        const std::vector<gp::DrawCmd> &c = hh.drawPostWorld();
+        CHECK(c.size() == 2 && c[0].kind == gp::DrawCmd::Kind::Shader && c[0].shaderTex.size() == 2 && c[1].kind == gp::DrawCmd::Kind::Keep && c[1].str == "world");
+        CHECK(hh.drawPost().empty()); // the two hooks are separate
+        const char *bad[] = {"g.keep('@frame')", "g.keep('bad name!')", "g.shader('m:s', {}, { textures = { a = 5 } })", "g.shader('m:s', {}, { textures = { ['9x'] = 'w' } })",
+                             "g.shader('m:s', {}, { textures = { a = '@frame' } })", "g.shader('m:s', {}, { textures = { a = 'w', b = 'w', c = 'w', d = 'w', e = 'w' } })"};
+        for (const char *b : bad)
+        {
+            gp::ScriptHost bh;
+            CHECK(bh.runString("m", std::string("local G = Game.hooks(); function G:onPostWorld(g) ") + b + " end"));
+            bh.drawPostWorld();
+            CHECK(!bh.errors().empty());
+        }
+    }
     { // with nothing wired the calls are harmless
         gp::ScriptHost h2;
         CHECK(h2.runString("m", "assert(player.pos() == nil and player.setPos(1, 2) == false and player.react('happy') == false and area.go('a:b', 1, 2) == false and area.current() == '')"));
