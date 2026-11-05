@@ -1519,6 +1519,13 @@ inline void drawButtonTest(Gfx &g, const gp::testmode::ButtonTest &t)
 // skipBoot   = true starts at the main menu (used when coming back from gameplay).
 namespace tmn = gp::testmode; // (the test mode's rules, under the short name the screens use)
 
+// A pet being picked at the starter room (the one chosen, to be created)
+struct Pet
+{
+    int species, colour, stat[4];
+    bool sick; // candidate +0x1d = DAT_0021f9 = GetDefaultStatValue(4): CreateNewPet rolls an illness if set
+};
+
 // The keys the front end's scripts see: pressed since their last tick, or held now (Z, X, the arrows)
 struct FeKeys
 {
@@ -1661,11 +1668,6 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         };
         refreshSlots();
 
-        struct Pet
-        {
-            int species, colour, stat[4];
-            bool sick; // candidate +0x1d = DAT_0021f9 = GetDefaultStatValue(4): CreateNewPet rolls an illness if set
-        };
         StarterScene starter;
 
         Pet chosen{};
