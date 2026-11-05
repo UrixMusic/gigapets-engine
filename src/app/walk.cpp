@@ -5318,6 +5318,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     if (!db.item(o.item))
                         continue;
                     line = std::to_string(std::min(player.itemCount(o.item), o.need)) + "/" + std::to_string(o.need) + "  ";
+                    if (o.text.empty()) // an item with no text of its own (a side quest's): the item's name
+                        line += gp::fmtAll(db.textOr(db.item(o.item)->name, "?"), player.name);
                 }
                 if (!o.text.empty())
                 {

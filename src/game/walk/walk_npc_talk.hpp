@@ -6,6 +6,7 @@
 #pragma once
 #include "walk_services.hpp"
 #include "../sale.hpp"
+#include "../side_quest.hpp"
 #include <cstdio>
 #include <memory>
 
@@ -201,6 +202,69 @@ inline bool tryTrickTeacher(WalkServices &svc, gp::NpcActor &n)
     return true;
 }
 
+// A mod's side quests (record side_quest) for the NPC the pet talked to: hand-in first, then an offer, then a reminder. True = it took the talk.
+inline bool sideQuestTalk(WalkServices &svc, const gp::NpcDef &d)
+{
+    auto &db = svc.db;
+    auto &player = svc.player;
+    const auto &all = db.sideQuests();
+    if (all.empty())
+        return false;
+    auto show = [&svc, &d](const gp::Id &text, bool confirm) -> gp::DialogueBox
+    {
+        gp::DialogueBox b = gp::messageBox(gp::fmtAll(svc.db.textOr(text, "..."), svc.player.name));
+        if (confirm)
+            b.kind = gp::BoxKind::Confirm;
+        b.portrait = gp::uiSpriteId(d.portraitSprite, d.portraitPalette);
+        return b;
+    };
+    auto info = [&](const gp::SideQuestDef &q)
+    {
+        gp::QuestCompleteInfo i;
+        i.questId = q.id;
+        i.number = player.questsCompleted;
+        i.giverId = q.giver;
+        i.receiverId = q.receiver;
+        return i;
+    };
+    for (const gp::SideQuestDef &q : all) // handing in
+        if (q.receiver == d.id && gp::sideState(player, q) == gp::SideState::Active && gp::sideHasAll(player, q))
+        {
+            gp::sideFinish(player, q);
+            if (!svc.scripts.fireQuestComplete(info(q)).suppress) // a script may take the payment over (return false)
+                gp::sideReward(player, q, [&](const gp::Id &it)
+                               { const gp::ItemDef *def = db.item(it); return def ? def->maxQty : 0; });
+            svc.dialogue.show(show(q.completeText, false));
+            svc.saveGame();
+            return true;
+        }
+    for (const gp::SideQuestDef &q : all) // an offer
+        if (q.giver == d.id && gp::sideOfferable(player, q))
+        {
+            gp::DialogueBox b = show(q.offerText, true);
+            const gp::SideQuestDef *qp = &q;
+            b.onYes = [&svc, qp, show, info]() mutable
+            {
+                gp::sideStart(svc.player, *qp);
+                svc.scripts.fireQuestAnswer(true, info(*qp));
+                if (!qp->acceptText.empty())
+                    svc.dialogue.show(show(qp->acceptText, false));
+                svc.saveGame();
+            };
+            b.onNo = [&svc, qp, info]
+            { svc.scripts.fireQuestAnswer(false, info(*qp)); };
+            svc.dialogue.show(std::move(b));
+            return true;
+        }
+    for (const gp::SideQuestDef &q : all) // a reminder, from whoever is waiting for it
+        if (!q.remindText.empty() && gp::sideState(player, q) == gp::SideState::Active && (q.receiver == d.id || q.giver == d.id))
+        {
+            svc.dialogue.show(show(q.remindText, false));
+            return true;
+        }
+    return false;
+}
+
 // TryBefriendNPC, first meeting only: resolve instantly (the real game walks up and plays reactions first).
 // Friended NPCs and NPCs already met just open the stats panel for now.
 inline void talkToNpc(WalkServices &svc, gp::NpcActor &n)
@@ -218,6 +282,8 @@ inline void talkToNpc(WalkServices &svc, gp::NpcActor &n)
     if (fireTalkStartHook(svc, d)) // a script returned false from onTalkStart: it handles this talk itself
         return;
     if (quests.talk(d.index))
+        return;
+    if (sideQuestTalk(svc, d)) // a mod side quest: hand-in, offer or reminder
         return;
     if (const gp::OfferSetDef *s = db.offerSetForNpc(d.id))
     {

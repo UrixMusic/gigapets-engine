@@ -489,6 +489,25 @@ namespace gp
                 }
             shops_.push_back(std::move(s));
         }
+        // Mod side quests (record `side_quest`): same id replaces in place, a new id appends.
+        void put(SideQuestDef q)
+        {
+            for (SideQuestDef &e : sideQuests_)
+                if (e.id == q.id)
+                {
+                    e = std::move(q);
+                    return;
+                }
+            sideQuests_.push_back(std::move(q));
+        }
+        const std::vector<SideQuestDef> &sideQuests() const { return sideQuests_; }
+        const SideQuestDef *sideQuest(const Id &id) const
+        {
+            for (const SideQuestDef &e : sideQuests_)
+                if (e.id == id)
+                    return &e;
+            return nullptr;
+        }
         const std::vector<ShopDef> &shops() const { return shops_; }
         const ShopDef *shop(const Id &id) const
         {
@@ -631,6 +650,7 @@ namespace gp
         BefriendRules befriend_;
         std::map<Id, MinigameDef> minigames_;
         std::vector<ShopDef> shops_;
+        std::vector<SideQuestDef> sideQuests_; // load order
         std::vector<StockRuleDef> stockRules_;
         std::vector<QuestTypeDef> questTypes_;
         std::map<Id, OfferSetDef> offerSets_;

@@ -407,6 +407,22 @@ namespace gp
         int weight = 1;
         int cap = 5;
     };
+    // A quest of a mod that runs beside the story chain (record `side_quest`): the giver offers it (yes / no), the pet brings the items to the receiver (the giver
+    // again if none is named), who pays the reward. Its progress is two flags on the player ("sq:<id>:active", "sq:<id>:done"), so several can be going at once.
+    struct SideQuestDef
+    {
+        Id id;
+        Id giver, receiver;
+        std::vector<QuestEntry> objectives;  // the items to bring (item, count); none = just go and talk to the receiver
+        Id offerText, acceptText, remindText, completeText; // acceptText and remindText are optional
+        int rewardMoney = 0;
+        std::vector<QuestEntry> rewardItems;
+        int questMin = 0, questMax = 0x7fffffff; // offered while questMin <= quests completed < questMax
+        std::string requires_;                   // a player flag that must be set before it is offered (empty = none)
+        bool repeatable = false;                 // offered again once handed in
+        bool availableAt(int quests) const { return quests >= questMin && quests < questMax; }
+    };
+
     struct ShopDef
     {
         Id id;   // "base:shop/<area number>" or "mymod:shop/x"

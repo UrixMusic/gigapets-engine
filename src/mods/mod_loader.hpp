@@ -1654,6 +1654,93 @@ namespace gp
             rep.lastWriter[id] = m.id;
         }
 
+        // side_quest: a quest beside the story chain. Only mode "add".
+        //   { type: "side_quest", mode: "add", id: "mymod:sidequest/pies", giver: "mymod:npc/baker", receiver: "mymod:npc/mayor" (default: the giver),
+        //     objectives: [ { item: "mymod:item/pie", count: 3 } ] (0 to 4; none = just go and talk to the receiver),
+        //     offer_text, complete_text: text ids (required), accept_text, remind_text: text ids (optional),
+        //     reward_money: 0..99999, reward_items: [ { item, count } ] (up to 4), quest_min / quest_max: offered while quest_min <= quests done < quest_max,
+        //     requires: a player flag that must be set first, repeatable: true = offered again after it is handed in }
+        // The giver offers it when the pet talks to them (a yes / no question); the objectives show on the HUD; the receiver takes the items, says complete_text and pays.
+        inline void applySideQuest(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
+        {
+            static const std::set<std::string> allowed{"type", "mode", "id", "giver", "receiver", "objectives", "offer_text", "accept_text", "remind_text", "complete_text",
+                                                       "reward_money", "reward_items", "quest_min", "quest_max", "requires", "repeatable"};
+            std::string id, why;
+            if (!beginAdd(m, file, rec, rep, "side_quest", allowed, [&](const std::string &i)
+                          { return db.sideQuest(i) != nullptr; }, id))
+                return;
+            SideQuestDef q;
+            q.id = id;
+            auto npcField = [&](const char *key, Id &out, bool required) -> bool
+            {
+                if (!rec.contains(key))
+                {
+                    if (required)
+                        return err(rep, file, m.id, "'" + id + "': '" + key + "' is required (an npc id)"), false;
+                    return true;
+                }
+                if (!rec[key].is_string() || !db.hasNpc(rec[key].get<std::string>()))
+                    return err(rep, file, m.id, "'" + id + "': '" + key + "' must be the id of an npc that exists"), false;
+                out = rec[key].get<std::string>();
+                return true;
+            };
+            auto textField = [&](const char *key, Id &out, bool required) -> bool
+            {
+                if (!rec.contains(key))
+                {
+                    if (required)
+                        return err(rep, file, m.id, "'" + id + "': '" + key + "' is required (a text id)"), false;
+                    return true;
+                }
+                if (!rec[key].is_string() || !db.hasText(rec[key].get<std::string>()))
+                    return err(rep, file, m.id, "'" + id + "': '" + key + "' must be the id of a text that exists"), false;
+                out = rec[key].get<std::string>();
+                return true;
+            };
+            auto entries = [&](const char *key, size_t most, std::vector<QuestEntry> &out) -> bool
+            {
+                if (!rec.contains(key))
+                    return true;
+                if (!rec[key].is_array() || rec[key].size() > most)
+                    return err(rep, file, m.id, "'" + id + "': '" + key + "' must be a list of up to " + std::to_string(most) + " like { \"item\": \"mymod:item/pie\", \"count\": 3 }"), false;
+                for (const json &e : rec[key])
+                {
+                    if (!e.is_object() || !e.contains("item") || !e["item"].is_string() || !db.item(e["item"].get<std::string>()))
+                        return err(rep, file, m.id, "'" + id + "': every entry in '" + key + "' needs an 'item' that exists"), false;
+                    for (auto it = e.begin(); it != e.end(); ++it)
+                        if (it.key() != "item" && it.key() != "count")
+                            return err(rep, file, m.id, "'" + id + "': unknown field '" + it.key() + "' in '" + key + "'"), false;
+                    QuestEntry q2;
+                    q2.item = e["item"].get<std::string>();
+                    q2.count = 1;
+                    if (!optInt(e, "count", q2.count, 1, 99, why))
+                        return err(rep, file, m.id, "'" + id + "': " + why), false;
+                    out.push_back(std::move(q2));
+                }
+                return true;
+            };
+            if (!npcField("giver", q.giver, true) || !npcField("receiver", q.receiver, false) || !textField("offer_text", q.offerText, true) ||
+                !textField("complete_text", q.completeText, true) || !textField("accept_text", q.acceptText, false) || !textField("remind_text", q.remindText, false) ||
+                !entries("objectives", 4, q.objectives) || !entries("reward_items", 4, q.rewardItems))
+                return;
+            if (q.receiver.empty())
+                q.receiver = q.giver;
+            if (!optInt(rec, "reward_money", q.rewardMoney, 0, 99999, why) || !optInt(rec, "quest_min", q.questMin, 0, 100000, why) ||
+                !optInt(rec, "quest_max", q.questMax, 0, 0x7fffffff, why) || !optBool(rec, "repeatable", q.repeatable, why) || !optStr(rec, "requires", q.requires_, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            if (q.questMax <= q.questMin)
+                return err(rep, file, m.id, "'" + id + "': 'quest_max' must be greater than 'quest_min'");
+            for (const char c : q.requires_)
+                if (std::isspace(static_cast<unsigned char>(c)))
+                    return err(rep, file, m.id, "'" + id + "': 'requires' is a flag name and cannot contain spaces");
+            std::set<Id> seen;
+            for (const QuestEntry &o : q.objectives)
+                if (!seen.insert(o.item).second)
+                    return err(rep, file, m.id, "'" + id + "': item '" + o.item + "' is listed twice in 'objectives'");
+            db.put(std::move(q));
+            rep.lastWriter[id] = m.id;
+        }
+
         // shop: what a shop can stock, and where. The stock is rolled from this table (see ShopDef): `rolls` weighted picks when the game starts, then one more
         // every restock. { type: "shop", mode: "add", id: "mymod:shop/store", area: "mymod:area/store", rolls: 10,
         //   items: [ { item: "mymod:item/pie", weight: 20, cap: 5 } ] }   // weight: 0..10000 (default 10), cap: the most offered at once, 1..99 (default 5)
@@ -3127,7 +3214,7 @@ namespace gp
                 return 1;
             if (t == "shop_stock")
                 return 4; // names shops, which are made in pass 3
-            return t == "spot" || t == "find" || t == "quest_spawn" || t == "gate" || t == "minigame" || t == "species" || t == "shop" ? 3 : 2; // they name areas and items, so they come last
+            return t == "spot" || t == "find" || t == "quest_spawn" || t == "gate" || t == "minigame" || t == "species" || t == "shop" || t == "side_quest" ? 3 : 2; // they name areas and items, so they come last
         }
         inline constexpr int kPasses = 5;
 
@@ -3208,6 +3295,8 @@ namespace gp
                     applyShop(db, m, file, r, rep);
                 else if (type == "shop_stock")
                     applyShopStock(db, m, file, r, rep);
+                else if (type == "side_quest")
+                    applySideQuest(db, m, file, r, rep);
                 else if (type == "species")
                     applySpecies(db, m, file, r, rep);
                 else
