@@ -200,8 +200,10 @@ inline void drawLoad(Gfx &g, int cur, bool picked, const std::string (&names)[3]
 // tutorials, interpolation, scale, scale mode, window mode, Done (settings.hpp). The logo stays put and kOptVisible rows show
 // under it; the list scrolls as the selection goes past the ends. Music, master volume, tutorials and Done keep the ROM's
 // 3-state button art (normal, highlighted, pressed); the others are drawn as text, since there is no art for them.
-inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, int scroll, int capture, int rowCount = gp::kOptRows)
+inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, int scroll, int capture, int rowCount = gp::kOptRows,
+                        const std::vector<std::pair<std::string, std::string>> &modRows = {})
 {
+    const int nMod = int(modRows.size()); // rows a mod added (options.add): (name, value) each, above Done
     constexpr int L = 0x3000, BP = 0x4b8, kTop = 0x6f, kPitch = 24, kLabelX = 0x1e, kLabelW = 0x8c, kValueX = 0xaa, kValueW = 0x7c; // the value ends at x 0x126
     // The long words don't fit beside each other in the big font ("Window Mode" 190 px, "Borderless" 158 px of 320), so the rows
     // with no art use the small one (style 2: 94 px and 65 px). "SFX" keeps the big font and the position it was tuned to.
@@ -245,19 +247,29 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
     for (int i = scroll; i < last; ++i)
     {
         const int y = kTop + (i - scroll) * kPitch;
-        if (rows[i].s[0] >= 0)
-            g.drawTile(rows[i].s[i == sel ? (pressed ? 2 : 1) : 0], BP, rows[i].x, y, L, 999);
-        else if (i == gp::kOptSfx) // the big-font label, centred where it was tuned
-            g.drawTextBox(sel == i ? 5 : 4, 0x4c7, rows[i].x - 11, y + 2, rows[i].label, 0x50, 1, L);
+        const int r = gp::baseRow(i, nMod); // the game's own row this one is (Done and the debug row move down by the mods' rows), -1 for a mod's
+        if (r < 0)
+        {
+            const auto &mr = modRows[size_t(gp::modRowIndex(i))];
+            g.drawTextBox(2, 0x28c, kLabelX, y + 4, mr.first, kLabelW, 0, L);
+            if (sel == i)
+                g.drawTextBox(2, 0x28c, kLabelX - 12, y + 4, ">", 0x10, 0, L);
+            value(i, y, mr.second, true);
+            continue;
+        }
+        if (rows[r].s[0] >= 0)
+            g.drawTile(rows[r].s[i == sel ? (pressed ? 2 : 1) : 0], BP, rows[r].x, y, L, 999);
+        else if (r == gp::kOptSfx) // the big-font label, centred where it was tuned
+            g.drawTextBox(sel == i ? 5 : 4, 0x4c7, rows[r].x - 11, y + 2, rows[r].label, 0x50, 1, L);
         else // the small-font names, left-aligned where the buttons' art starts; the value is right-aligned (below)
         {
-            const std::string name = gp::isKeyRow(i) ? std::string("Key: ") + gp::kActionNames[gp::keyRowAction(i)] : std::string(rows[i].label);
+            const std::string name = gp::isKeyRow(r) ? std::string("Key: ") + gp::kActionNames[gp::keyRowAction(r)] : std::string(rows[r].label);
             g.drawTextBox(2, 0x28c, kLabelX, y + 4, name, kLabelW, 0, L);
             if (sel == i) // the small font has no highlight colour, so the selected row gets a marker
                 g.drawTextBox(2, 0x28c, kLabelX - 12, y + 4, ">", 0x10, 0, L);
         }
         char buf[16];
-        switch (i)
+        switch (r)
         {
         case gp::kOptMusic:
             std::snprintf(buf, sizeof buf, "%3d", o.musicVolume);
@@ -297,8 +309,8 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
             value(i, y, kWindowNames[std::clamp(o.windowMode, 0, gp::kWindowModeCount - 1)], true);
             break;
         default:
-            if (gp::isKeyRow(i)) // a key binding: the key's name, or the prompt while it waits for one
-                value(i, y, capture == gp::keyRowAction(i) ? std::string("Press a key") : gp::keys().name(gp::keyRowAction(i)), true);
+            if (gp::isKeyRow(r)) // a key binding: the key's name, or the prompt while it waits for one
+                value(i, y, capture == gp::keyRowAction(r) ? std::string("Press a key") : gp::keys().name(gp::keyRowAction(r)), true);
             break;
         }
     }
@@ -1622,6 +1634,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         bool feSceneActive = false;
         long feTick = 0;
         FeKeys fePressed, feHeld; // pressed since the last script tick / held now
+        feScripts.loadProfile(gp::loadProfileFile()); // what the mods kept for the whole game (their Options rows read it)
         gp::DebugCode debugCode;
         bool showOutlines = false; // F8: the old white debug boxes
 
@@ -1949,7 +1962,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         std::unique_ptr<FrontFrame> frontFrameCtl; // built below, once everything it takes is declared (front_frame.hpp)
         auto stepAndDraw = [&]() -> decltype(auto) { return (*frontFrameCtl).stepAndDraw(); };
         {
-            FrontFrameEnv env{anyShot, app, bootPhase, bootT0, browseA, browsePal, chosen, dlg, drawConfirm, fadeOutTick, fadeSkip, fadeTick, feDrawer, feHeld, fePressed, feSceneActive, feScripts, feTick, fontFor, frame, gfx, goMenu, hasPending, houseCur, kFade, kLogoMs, lastMs, lastTitle, launchGame, leaving, loadCur, loadPicked, loadPickedAt, menu, name, optCapture, optPressed, optScroll, optSel, opts, outTick, pendingScreen, pendingSlide, pressedUntil, randBelow, ren, resetSlide, run, screen, setScreen, shotFrame, showOutlines, slotColour, slotFull, slotName, slotSpecies, smoothMenu, startFade, startGame, starter, stepSlide, testEntry, tickAcc, tmButton, tmChecksum, tmMenu, tmPlay, tmPress, tmScreen, tmSongTicks, tmSound, win};
+            FrontFrameEnv env{anyShot, app, bootPhase, bootT0, browseA, browsePal, chosen, dlg, drawConfirm, fadeOutTick, fadeSkip, fadeTick, feDrawer, feHeld, fePressed, feSceneActive, feScripts, feTick, fontFor, frame, gfx, goMenu, hasPending, houseCur, kFade, kLogoMs, lastMs, lastTitle, launchGame, leaving, loadCur, loadPicked, loadPickedAt, menu, name, optCapture, optPressed, optScroll, optSel, opts, outTick, pendingScreen, pendingSlide, pressedUntil, randBelow, ren, resetSlide, run, screen, setScreen, shotFrame, showOutlines, slotColour, slotFull, slotName, slotSpecies, smoothMenu, startFade, startGame, starter, stepSlide, testEntry, tickAcc, tmButton, tmChecksum, tmMenu, tmPlay, tmPress, tmScreen, tmSongTicks, tmSound, uiDb, win};
             frontFrameCtl = std::make_unique<FrontFrame>(std::move(env));
         }
         for (; run && (maxFrames < 0 || frame < maxFrames); ++frame)

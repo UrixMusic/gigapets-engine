@@ -113,6 +113,11 @@ int main()
     check("each once", idleTutorial(true, markShown(0, 11), false, true, true) == -1 && idleTutorial(true, markShown(0, 10), false, false, true) == -1);
     check("happiness below 0x1a is low, cleanliness 0x19 or less is dirty", kUnhappyBelow == 0x1a && kDirtyAtMost == 0x19);
 
+    check("mod rows sit above Done: with 3 the Done row is 21 and the list has 22 rows (23 with the debug row)",
+          optDone(3) == 21 && optRowCount(3, false) == 22 && optRowCount(3, true) == 23 && optTestMode(3) == 22 && optDone(0) == kOptDone && optRowCount(0, false) == kOptRows);
+    check("which rows are a mod's, and which of the game's table the others stand for",
+          !isModRow(17, 3) && isModRow(18, 3) && isModRow(20, 3) && !isModRow(21, 3) && modRowIndex(19) == 1 &&
+              baseRow(5, 3) == 5 && baseRow(18, 3) == -1 && baseRow(21, 3) == kOptDone && baseRow(22, 3) == kOptTestMode && baseRow(18, 0) == kOptDone);
     std::printf(fails ? "settings_test: %d failure(s)\n" : "settings_test: all passed\n", fails);
     return fails ? 1 : 0;
 }

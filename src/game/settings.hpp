@@ -125,6 +125,14 @@ namespace gp
     // One more row after Done, only with debug mode on (game/debug_mode.hpp): the ROM's test mode (game/test_mode.hpp).
     constexpr int kOptTestMode = 19, kOptRowsDebug = 20;
     constexpr int kOptVisible = 5;
+    // Rows a mod added (options.add) sit between the last key row and Done, so Done and the debug row move down by their number `n`.
+    constexpr int optDone(int n) { return kOptDone + n; }
+    constexpr int optTestMode(int n) { return kOptTestMode + n; }
+    constexpr int optRowCount(int n, bool debug) { return (debug ? kOptRowsDebug : kOptRows) + n; }
+    constexpr bool isModRow(int row, int n) { return row >= kOptDone && row < kOptDone + n; }
+    constexpr int modRowIndex(int row) { return row - kOptDone; }
+    // The row of the game's own table (kOpt...) a screen row stands for, or -1 for one of a mod's
+    constexpr int baseRow(int row, int n) { return row < kOptDone ? row : row < kOptDone + n ? -1 : row - n; }
     constexpr bool isKeyRow(int row) { return row >= kOptKeyFirst && row <= kOptKeyLast; }
     constexpr int keyRowAction(int row) { return row - kOptKeyFirst; }
     constexpr bool isSliderRow(int row) { return row == kOptMusic || row == kOptVolume || row == kOptSfx; }

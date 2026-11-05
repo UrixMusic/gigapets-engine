@@ -140,6 +140,8 @@ namespace gp
              "cursor (which pet: 0..11, two to a column)"},
             {"frontend.name", "the player finished the pet's name (OK); the game goes on to the slot screen. cancel or replace and it stays on the name screen",
              "name (the name, up to 9 characters: change it)"},
+            {"frontend.options", "the player changed a row of the Options screen (Left / Right / Z), the game's own or a mod's (options.add); cancel or replace and the change is not made",
+             "row (\"music\", \"sfx\", \"volume\", \"tutorials\", \"interpolate\", \"scale\", \"scale_mode\", \"window_mode\", \"aspect\", \"retro\", \"live\", a mod row's id, or \"\" for a key row), forward (1 = Right / Z, 0 = Left), by_z (1 = Z)"},
             {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
              "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };

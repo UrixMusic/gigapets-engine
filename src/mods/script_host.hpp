@@ -296,6 +296,7 @@ namespace gp
             bind("System", "hooks", l_systemHooks);
             bind("System", "list", l_systemList);
             bind("world", "drop", l_drop);
+            bind("options", "add", l_optionsAdd);
             bind("world", "shade", l_worldShade);
             bind("rand", "int", l_randInt);
             bind("rand", "pick", l_randPick);
@@ -471,6 +472,7 @@ namespace gp
                     files.push_back(f.path());
             std::sort(files.begin(), files.end());
             curMod_ = modId;
+            loadingScripts_ = true;
             const int env = trusted ? trustedEnvFor(dir) : LUA_NOREF;
             for (const fs::path &f : files)
             {
@@ -486,6 +488,7 @@ namespace gp
                 }
                 call(0, f.string());
             }
+            loadingScripts_ = false;
             curMod_.clear();
         }
 
@@ -2615,6 +2618,159 @@ namespace gp
             self(L).sceneCmds_.push_back(std::move(d));
             return 0;
         }
+        // ---- rows of the options screen (the title's Options): options.add(id, { label, kind, ... }) while the scripts load ----
+    public:
+        struct OptionRow
+        {
+            std::string id, mod, label;        // label: a text id
+            std::string kind;                  // "toggle" (value 0 / 1), "choice" (0-based index of `choices`), "slider" (a number from min to max)
+            std::vector<std::string> choices;  // text ids (choice)
+            double min = 0, max = 100, step = 10;
+            int getRef = LUA_NOREF, setRef = LUA_NOREF;
+            bool broken = false;
+        };
+        size_t optionRowCount() const
+        {
+            size_t n = 0;
+            for (const OptionRow &r : optionRows_)
+                n += r.broken ? 0 : 1;
+            return n;
+        }
+        // the i-th row that works (0 based), or null
+        const OptionRow *optionRow(size_t i) const
+        {
+            for (const OptionRow &r : optionRows_)
+                if (!r.broken && i-- == 0)
+                    return &r;
+            return nullptr;
+        }
+        // The row's value now (calls its get function); toggle 0 / 1, choice an index, slider a number. A script that fails is logged and the row drops out.
+        double optionGet(size_t i)
+        {
+            OptionRow *r = optionRowMut(i);
+            if (!r || !L_)
+                return 0;
+            const std::string saveMod = curMod_;
+            curMod_ = r->mod;
+            double v = 0;
+            lua_rawgeti(L_, LUA_REGISTRYINDEX, r->getRef);
+            if (call(0, "options get " + r->id, 1))
+            {
+                v = lua_isnumber(L_, -1) ? lua_tonumber(L_, -1) : (lua_isboolean(L_, -1) ? (lua_toboolean(L_, -1) ? 1.0 : 0.0) : 0.0);
+                lua_pop(L_, 1);
+            }
+            else
+                r->broken = true;
+            curMod_ = saveMod;
+            return v;
+        }
+        // The player changed the row (Left / Right / Z): the new value is worked out here (a switch flips, a choice cycles, a slider steps) and given to the row's set function.
+        void optionStep(size_t i, bool forward)
+        {
+            OptionRow *r = optionRowMut(i);
+            if (!r || !L_)
+                return;
+            const double now = optionGet(i);
+            if (r->broken)
+                return;
+            double next = now;
+            if (r->kind == "toggle")
+                next = now != 0 ? 0 : 1;
+            else if (r->kind == "choice")
+            {
+                const int n = int(r->choices.size());
+                next = n > 0 ? double((int(now) + (forward ? 1 : n - 1)) % n) : 0;
+            }
+            else
+                next = std::clamp(now + (forward ? r->step : -r->step), r->min, r->max);
+            const std::string saveMod = curMod_;
+            curMod_ = r->mod;
+            lua_rawgeti(L_, LUA_REGISTRYINDEX, r->setRef);
+            lua_pushnumber(L_, next);
+            if (!call(1, "options set " + r->id))
+                r->broken = true;
+            curMod_ = saveMod;
+        }
+
+    private:
+        std::vector<OptionRow> optionRows_;
+        bool loadingScripts_ = false;
+        OptionRow *optionRowMut(size_t i)
+        {
+            for (OptionRow &r : optionRows_)
+                if (!r.broken && i-- == 0)
+                    return &r;
+            return nullptr;
+        }
+        // options.add(id, { label = textId, kind = "toggle" | "choice" | "slider", choices = { textId, ... }, min, max, step, get = function() return value end, set = function(value) end })
+        // Adds a row to the title's Options screen, above Done. Only while the mod's scripts load (the top level of a script). get returns the value now (a switch: true / false or 1 / 0,
+        // a choice: the index from 0, a slider: the number); set is called with the new one when the player changes the row. Keep the value with profile.get / profile.set so it lasts.
+        // At most 8 rows in all. The id must start with the mod's prefix.
+        static int l_optionsAdd(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            luaL_checktype(L, 2, LUA_TTABLE);
+            if (!h.loadingScripts_ || h.curMod_.empty())
+                return luaL_error(L, "options.add only works while the scripts load (at the top level of a script)");
+            const std::string prefix = h.curMod_ + ":";
+            luaL_argcheck(L, std::strncmp(id, prefix.c_str(), prefix.size()) == 0 && idCharsOk(id) && std::strlen(id) <= 100, 1, "an id with the mod's own prefix (mymod:option/glow)");
+            if (h.optionRows_.size() >= 8)
+                return luaL_error(L, "options.add: at most 8 rows in all");
+            for (const OptionRow &r : h.optionRows_)
+                if (r.id == id)
+                    return luaL_error(L, "options.add: '%s' is already a row", id);
+            OptionRow row;
+            row.id = id;
+            row.mod = h.curMod_;
+            lua_getfield(L, 2, "label");
+            if (lua_type(L, -1) != LUA_TSTRING || !idCharsOk(lua_tostring(L, -1)))
+                return luaL_error(L, "options.add: 'label' is the id of a text");
+            row.label = lua_tostring(L, -1);
+            lua_pop(L, 1);
+            lua_getfield(L, 2, "kind");
+            row.kind = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "";
+            lua_pop(L, 1);
+            if (row.kind != "toggle" && row.kind != "choice" && row.kind != "slider")
+                return luaL_error(L, "options.add: 'kind' is \"toggle\", \"choice\" or \"slider\"");
+            if (row.kind == "choice")
+            {
+                lua_getfield(L, 2, "choices");
+                if (!lua_istable(L, -1))
+                    return luaL_error(L, "options.add: a choice needs 'choices', a list of 2 to 8 text ids");
+                const lua_Integer n = lua_rawlen(L, -1);
+                if (n < 2 || n > 8)
+                    return luaL_error(L, "options.add: a choice needs 2 to 8 'choices'");
+                for (lua_Integer i = 1; i <= n; ++i)
+                {
+                    lua_rawgeti(L, -1, i);
+                    if (lua_type(L, -1) != LUA_TSTRING || !idCharsOk(lua_tostring(L, -1)))
+                        return luaL_error(L, "options.add: every choice is the id of a text");
+                    row.choices.push_back(lua_tostring(L, -1));
+                    lua_pop(L, 1);
+                }
+                lua_pop(L, 1);
+            }
+            if (row.kind == "slider")
+            {
+                row.min = optNum(L, 2, "min", 0.f);
+                row.max = optNum(L, 2, "max", 100.f);
+                row.step = optNum(L, 2, "step", 10.f);
+                if (!(row.max > row.min) || !(row.step > 0))
+                    return luaL_error(L, "options.add: a slider needs max above min and a step above 0");
+            }
+            lua_getfield(L, 2, "get");
+            if (!lua_isfunction(L, -1))
+                return luaL_error(L, "options.add: 'get' is a function returning the value now");
+            row.getRef = luaL_ref(L, LUA_REGISTRYINDEX);
+            lua_getfield(L, 2, "set");
+            if (!lua_isfunction(L, -1))
+                return luaL_error(L, "options.add: 'set' is a function taking the new value");
+            row.setRef = luaL_ref(L, LUA_REGISTRYINDEX);
+            h.optionRows_.push_back(std::move(row));
+            return 0;
+        }
+
         // world.shade(target, shaderId | nil [, uniforms]): a fragment shader on one thing of the world, whenever it is drawn: target "player" (the pet), an npc id, or an object type id.
         // nil clears it. The shader gets the thing's own picture (`frame(uv)`, with its alpha) and draws it again over the same place, so it can recolour, outline, glow or distort that
         // thing only. Needs the opengl renderer (see g.shader); not applied while the camera is zoomed or turned. Lasts until cleared (it is not saved).

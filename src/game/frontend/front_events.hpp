@@ -327,6 +327,9 @@ public:
             }
             else if (screen == Screen::Options && down && !optPressed)
             {
+                // rows a mod added (options.add) sit above Done, so Done and the debug row move down by their number
+                const int nMod = int(feScripts.optionRowCount());
+                const int rowsTotal = gp::optRowCount(nMod, gp::debugMode());
                 // Up and down move (wrapping, and the list scrolls to follow); left and right step a volume, a choice or a
                 // switch; Z flips a switch, cycles a choice and presses Done; X leaves. The settings are saved on the way out
                 // (SaveSettingsToSlot). The sound and the window follow the choices at once.
@@ -334,6 +337,11 @@ public:
                 {
                     opts.keys = gp::keys().key;
                     gp::saveSettings(opts);
+                    if (feScripts.profileDirty()) // what the mods' rows kept (profile.set)
+                    {
+                        gp::saveProfileFile(feScripts.profileKv());
+                        feScripts.profileSaved();
+                    }
                     optPressed = pressed;
                     goMenu();
                 };
@@ -349,8 +357,13 @@ public:
                     gp::applyDisplay(win, ren, gp::DisplaySettings{opts.scale, opts.perfectScale, opts.windowMode, opts.aspect});
                 };
                 // true = Z/Right (forward), false = Left
-                auto change = [&](bool forward, bool byZ)
+                auto changeRow = [&](bool forward, bool byZ)
                 {
+                    if (gp::isModRow(optSel, nMod)) // a mod's row: its script gets the new value
+                    {
+                        feScripts.optionStep(size_t(gp::modRowIndex(optSel)), forward);
+                        return;
+                    }
                     switch (optSel)
                     {
                     case gp::kOptTutorials:
@@ -389,13 +402,29 @@ public:
                         break;
                     }
                 };
+                // the engine system "frontend.options": the player changed a row (Left / Right / Z). row: "music", "sfx", "volume", "tutorials", "interpolate", "scale", "scale_mode",
+                // "window_mode", "aspect", "retro", "live", a mod row's id, or "" (a key row); cancel or replace and the game's own change is not made
+                auto change = [&](bool forward, bool byZ)
+                {
+                    static const char *const names[] = {"music", "sfx", "volume", "tutorials", "interpolate", "scale", "scale_mode", "window_mode", "aspect", "retro", "live"};
+                    std::string rowName;
+                    if (optSel >= 0 && optSel <= gp::kOptLive)
+                        rowName = names[optSel];
+                    else if (gp::isModRow(optSel, nMod))
+                        if (const auto *mr = feScripts.optionRow(size_t(gp::modRowIndex(optSel))))
+                            rowName = mr->id;
+                    gp::SystemCtx oc;
+                    oc.set("row", rowName).set("forward", forward ? 1 : 0).set("by_z", byZ ? 1 : 0);
+                    feScripts.system("frontend.options", oc, [&]
+                                     { changeRow(forward, byZ); });
+                };
                 int *slider = optSel == gp::kOptMusic ? &opts.musicVolume : optSel == gp::kOptVolume ? &opts.volume
                                                                         : optSel == gp::kOptSfx      ? &opts.sfxVolume
                                                                                                      : nullptr;
                 if (k == SDLK_UP && !rep)
-                    optSel = gp::optionsMove(optSel, false, gp::debugMode() ? gp::kOptRowsDebug : gp::kOptRows), feSound(gp::fe::kSfxMove, 0x7f);
+                    optSel = gp::optionsMove(optSel, false, rowsTotal), feSound(gp::fe::kSfxMove, 0x7f);
                 else if (k == SDLK_DOWN && !rep)
-                    optSel = gp::optionsMove(optSel, true, gp::debugMode() ? gp::kOptRowsDebug : gp::kOptRows), feSound(gp::fe::kSfxMove, 0x7f);
+                    optSel = gp::optionsMove(optSel, true, rowsTotal), feSound(gp::fe::kSfxMove, 0x7f);
                 else if (k == SDLK_x && !rep)
                     leave(false);
                 else if ((k == SDLK_LEFT || k == SDLK_RIGHT) && slider)
@@ -416,9 +445,9 @@ public:
                 else if (k == SDLK_z && !rep)
                 {
                     feSound(gp::fe::kSfxConfirm, 0x7f); // ShowOptionsMenuScreen
-                    if (optSel == gp::kOptDone)
+                    if (optSel == gp::optDone(nMod))
                         leave(true);
-                    else if (optSel == gp::kOptTestMode && gp::debugMode()) // the ROM's test mode, from the debug unlock
+                    else if (optSel == gp::optTestMode(nMod) && gp::debugMode()) // the ROM's test mode, from the debug unlock
                     {
                         opts.keys = gp::keys().key;
                         gp::saveSettings(opts);
@@ -430,7 +459,7 @@ public:
                     else
                         change(true, true);
                 }
-                optScroll = gp::optionsScroll(optSel, optScroll, gp::debugMode() ? gp::kOptRowsDebug : gp::kOptRows);
+                optScroll = gp::optionsScroll(optSel, optScroll, rowsTotal);
                 applyAudio();
             }
             else if (screen == Screen::TestMode && down && !rep)

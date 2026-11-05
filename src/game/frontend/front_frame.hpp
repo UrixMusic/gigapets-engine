@@ -79,6 +79,7 @@ struct FrontFrameEnv
     TmScreen &tmScreen;
     int &tmSongTicks;
     gp::testmode::SoundTest &tmSound;
+    std::unique_ptr<gp::ContentDB> &uiDb;
     SDL_Window* &win;
 };
 
@@ -285,7 +286,30 @@ public:
             break;
         case Screen::Options:
             app.drawBackground(2, 0x5c5);
-            drawOptions(gfx, optSel, optPressed, opts, optScroll, optCapture, gp::debugMode() ? gp::kOptRowsDebug : gp::kOptRows);
+            {
+                // the rows of the mods (options.add): their name and the value as text
+                std::vector<std::pair<std::string, std::string>> modRows;
+                for (size_t mi = 0; mi < feScripts.optionRowCount(); ++mi)
+                {
+                    const auto *mr = feScripts.optionRow(mi);
+                    if (!mr)
+                        break;
+                    const double v = feScripts.optionGet(mi);
+                    std::string value;
+                    if (mr->kind == "toggle")
+                        value = v != 0 ? "On" : "Off";
+                    else if (mr->kind == "choice")
+                        value = uiDb->textOr(mr->choices[size_t(std::clamp(int(v), 0, int(mr->choices.size()) - 1))], "?");
+                    else
+                    {
+                        char b[32];
+                        std::snprintf(b, sizeof b, "%g", v);
+                        value = b;
+                    }
+                    modRows.emplace_back(uiDb->textOr(mr->label, mr->id), value);
+                }
+                drawOptions(gfx, optSel, optPressed, opts, optScroll, optCapture, gp::optRowCount(int(modRows.size()), gp::debugMode()), modRows);
+            }
             break;
         case Screen::TestMode:
         {

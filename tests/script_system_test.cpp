@@ -114,6 +114,52 @@ int main()
         CHECK(!h.runString("m", "say('m:str/a', {}, 'baker')"));
         CHECK(h.runString("m", "assert(text.get('m:str/x', { name = 'Pip' }) == 'm:str/x:Pip'); assert(text.get('m:str/none') == nil)"));
     }
+    { // options.add: rows of the Options screen, kept by the mod's scripts
+        namespace fs = std::filesystem;
+        const fs::path root = fs::temp_directory_path() / "gp_options_test";
+        std::error_code rmEc;
+        fs::remove_all(root, rmEc);
+        fs::create_directories(root / "m" / "scripts");
+        std::ofstream(root / "m" / "scripts" / "a.lua") << R"(
+            val = { t = 0, c = 1, s = 50 }
+            options.add('m:option/t', { label = 'm:str/t', kind = 'toggle', get = function() return val.t end, set = function(v) val.t = v end })
+            options.add('m:option/c', { label = 'm:str/c', kind = 'choice', choices = { 'm:str/a', 'm:str/b', 'm:str/c' }, get = function() return val.c end, set = function(v) val.c = v end })
+            options.add('m:option/s', { label = 'm:str/s', kind = 'slider', min = 0, max = 100, step = 25, get = function() return val.s end, set = function(v) val.s = v end })
+            options.add('m:option/bad', { label = 'm:str/b', kind = 'toggle', get = function() error('nope') end, set = function() end })
+        )";
+        gp::ScriptHost h;
+        h.loadMod("m", root / "m");
+        CHECK(h.errors().empty());
+        CHECK(h.optionRowCount() == 4 && h.optionRow(0)->kind == "toggle" && h.optionRow(1)->choices.size() == 3 && h.optionRow(2)->step == 25);
+        CHECK(h.optionGet(0) == 0 && h.optionGet(1) == 1 && h.optionGet(2) == 50);
+        h.optionStep(0, true);                       // a switch flips
+        CHECK(h.optionGet(0) == 1);
+        h.optionStep(1, true); h.optionStep(1, true); // a choice cycles round: 1 -> 2 -> 0
+        CHECK(h.optionGet(1) == 0);
+        h.optionStep(1, false);                      // and back: 0 -> 2
+        CHECK(h.optionGet(1) == 2);
+        h.optionStep(2, true); h.optionStep(2, true); h.optionStep(2, true); // a slider steps and stops at its end
+        CHECK(h.optionGet(2) == 100);
+        h.optionStep(2, false);
+        CHECK(h.optionGet(2) == 75);
+        h.optionGet(3);                              // a row whose script fails is logged and drops out
+        CHECK(h.optionRowCount() == 3 && !h.errors().empty());
+        CHECK(!h.runString("m", "options.add('m:option/late', { label = 'x', kind = 'toggle', get = function() end, set = function() end })")); // only while the scripts load
+        fs::remove_all(root, rmEc);
+        for (const char *bad : {"options.add('other:option/x', { label = 'm:str/t', kind = 'toggle', get = function() end, set = function() end })",
+                                "options.add('m:option/x', { label = 'm:str/t', kind = 'dial', get = function() end, set = function() end })",
+                                "options.add('m:option/x', { label = 'm:str/t', kind = 'choice', choices = { 'm:str/a' }, get = function() end, set = function() end })",
+                                "options.add('m:option/x', { label = 'm:str/t', kind = 'slider', min = 5, max = 5, get = function() end, set = function() end })",
+                                "options.add('m:option/x', { label = 'm:str/t', kind = 'toggle', set = function() end })"})
+        {
+            fs::create_directories(root / "b" / "scripts");
+            std::ofstream(root / "b" / "scripts" / "a.lua") << bad;
+            gp::ScriptHost bh;
+            bh.loadMod("b", root / "b");
+            CHECK(!bh.errors().empty() && bh.optionRowCount() == 0);
+            fs::remove_all(root, rmEc);
+        }
+    }
     { // the front end's screens: name can be changed; the others exist
         gp::ScriptHost h;
         CHECK(h.runString("a", "System.hooks('frontend.intro'); System.hooks('frontend.starter'); local N = System.hooks('frontend.name'); function N:before(ctx) ctx.name = string.upper(ctx.name) .. '!' end"));
