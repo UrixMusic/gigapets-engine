@@ -128,6 +128,10 @@ namespace gp
              "choice (\"new\", \"load\" or \"options\")"},
             {"frontend.start", "a save slot is about to be played (a new pet's, or a loaded one); cancel or replace and the front end stays",
              "slot (0..2: change it to play another)"},
+            {"pet.wash", "the player washes the pet (the bar's wash button); cancel or replace and it is not washed",
+             "cleanliness (the pet's cleanliness now)"},
+            {"pet.sit", "the idle pet is about to sit down after a few seconds of standing; cancel or replace and it keeps standing",
+             "idle (seconds it has stood)"},
             {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
              "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };

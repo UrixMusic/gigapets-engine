@@ -2958,7 +2958,13 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         std::unique_ptr<gp::ReactionSeq> washSeq;
 
         auto startWash = [&]
-        { washStep = 1; };
+        {
+            // the engine system "pet.wash": the pet is washed (bar button 4); cancel or replace and it is not (a mod may do its own: player.adjustCare ...)
+            gp::SystemCtx c;
+            c.set("cleanliness", player.care[gp::Cleanliness]);
+            scripts.system("pet.wash", c, [&]
+                           { washStep = 1; });
+        };
 
         auto tickWash = [&]
         {
@@ -6591,8 +6597,16 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
                 // ---- idle timer: after 3-6 s of base idle the pet sits (action 7: 46 once, then 45 looping) ----
                 if (pose == Pose::Idle && isRestIdle(animId) && !enc && !digStep && !washStep && ++idleTicks >= idleThreshold)
-                    playAnim(gp::artOf(sp).sitDown, false, 14, Pose::Special,
-                             {{gp::artOf(sp).settled, true, gp::artOf(sp).settledRate}});
+                {
+                    // the engine system "pet.sit": the idle pet is about to sit down; cancel or replace and it keeps standing (the timer starts over)
+                    gp::SystemCtx c;
+                    c.set("idle", idleTicks / 30.0);
+                    const bool ran = scripts.system("pet.sit", c, [&]
+                                                    { playAnim(gp::artOf(sp).sitDown, false, 14, Pose::Special,
+                                                               {{gp::artOf(sp).settled, true, gp::artOf(sp).settledRate}}); });
+                    if (!ran)
+                        idleTicks = 0;
+                }
 
                 // ---- advance the current animation (rate = frames per second, same rule as walking) ----
                 if (pose != Pose::Move && pose != Pose::Wait)
