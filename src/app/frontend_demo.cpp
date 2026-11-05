@@ -1529,6 +1529,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         // Fonts come from the ContentDB. Built once (static) and reused when we come back from gameplay.
         // Species 0 is arbitrary: nothing the front end needs depends on it.
         static std::unique_ptr<gp::ContentDB> uiDb;
+        static gp::ScriptHost feScripts; // the mods' scripts in the front end: Game.hooks().onHud draws over its screens, the systems frontend.menu / frontend.start (systems.hpp)
         if (!uiDb)
         {
             std::printf("front end: loading fonts (importRom)...\n");
@@ -1536,7 +1537,9 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             gp::importRom(rom, *uiDb, 0);
             // A pet that wears a mod's colour needs that palette to be drawn in the slot list: load the mods (their palette records are what
             // matter here) and fill the palette registry the sprite code looks mod colours up in. The game does the same when it starts.
-            gp::importMods(*uiDb, "mods");
+            gp::ModReport feRep = gp::importMods(*uiDb, "mods");
+            for (const std::string &p : gp::checkModScripts(*uiDb, feRep, feScripts, "mods")) // (a script that does not load is reported by the game itself, once it starts)
+                std::printf("front end: script: %s\n", p.c_str());
             gp::resolveModPalettes(rom, *uiDb);
             // Every (font style, palette) pair the front end draws with, imported up front so the db never
             // changes once a TextDrawer holds a pointer into it. drawTextBox's first two arguments are
@@ -1767,9 +1770,14 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         {
             if (hasPending || leaving)
                 return;
-            chosenSlot = slot;
-            leaving = true;
-            fadeOutTick = 0;
+            // the engine system "frontend.start": a save slot is about to be played (a new pet's, or a loaded one); cancel or replace and the front end stays; a mod may change `slot`
+            gp::SystemCtx sc;
+            sc.set("slot", slot);
+            feScripts.system("frontend.start", sc, [&]
+                             {
+                chosenSlot = std::clamp(int(sc.num("slot")), 0, 2);
+                leaving = true;
+                fadeOutTick = 0; });
         };
 
         auto create = [&](int slot)
@@ -2013,17 +2021,23 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                         menu.pressed = false;
                         static const char *names[3] = {"New -> state 6 (intro), demo jumps to name entry", "Load -> state 8", "Options -> state 5"};
                         std::printf("%s\n", names[menu.cursor]);
-                        if (menu.cursor == 0)
+                        // the engine system "frontend.menu": the player chose on the title menu (choice "new", "load" or "options"); cancel or replace and nothing happens
+                        gp::SystemCtx mc;
+                        mc.set("choice", menu.cursor == 0 ? "new" : menu.cursor == 1 ? "load" : "options");
+                        const int cursor = menu.cursor;
+                        feScripts.system("frontend.menu", mc, [&]
+                                         {
+                        if (cursor == 0)
                         {
                             name = NameEntry();
                             setScreen(Screen::Intro);
                         }
-                        else if (menu.cursor == 1)
+                        else if (cursor == 1)
                         {
                             loadStart();
                             setScreenNoFade(Screen::Load);
                         }
-                        else if (menu.cursor == 2)
+                        else if (cursor == 2)
                         {
                             opts = gp::loadSettings();
                             optSel = 0;
@@ -2032,7 +2046,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                             opts.keys = gp::keys().key;
                             optPressed = false;
                             setScreenNoFade(Screen::Options);
-                        }
+                        } });
                     }
                 }
                 else if (screen == Screen::Intro && down && !rep && fadeTick >= 16)
@@ -2628,6 +2642,27 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                                      : t.mode == 2 ? gp::Align::Right
                                                    : gp::Align::Left;
                 fontFor(t.style, t.pal).draw(t.s, t.x, t.y, t.w, al);
+            }
+            // Game.hooks().onHud(g) draws over the front end's screens too (rect, text and num; pictures are not drawn here)
+            for (const gp::DrawCmd &c : feScripts.drawHud(""))
+            {
+                if (c.kind == gp::DrawCmd::Kind::Rect)
+                {
+                    SDL_SetRenderDrawBlendMode(ren, c.blend == 1 ? SDL_BLENDMODE_ADD : c.blend == 2 ? SDL_BLENDMODE_MOD : c.a < 255 ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE);
+                    SDL_SetRenderDrawColor(ren, Uint8(c.r), Uint8(c.g), Uint8(c.b), Uint8(c.a));
+                    const SDL_Rect r{c.x, c.y, c.w, c.h};
+                    c.fill ? SDL_RenderFillRect(ren, &r) : SDL_RenderDrawRect(ren, &r);
+                    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+                }
+                else if (c.kind == gp::DrawCmd::Kind::Text || c.kind == gp::DrawCmd::Kind::Num)
+                {
+                    std::string str;
+                    if (c.kind == gp::DrawCmd::Kind::Num)
+                        str = c.num == std::floor(c.num) && std::fabs(c.num) < 1e15 ? std::to_string(static_cast<long long>(c.num)) : std::to_string(c.num);
+                    else
+                        str = gp::fillTemplateVars(uiDb->textOr(c.str, ""), c.vars);
+                    fontFor(c.font == 3 ? 3 : 0, c.font == 3 ? 0x104 : 0x28c).draw(str, c.x, c.y, c.width > 0 ? c.width : 320, c.align == 1 ? gp::Align::Center : c.align == 2 ? gp::Align::Right : gp::Align::Left);
+                }
             }
             if (showOutlines)
             {

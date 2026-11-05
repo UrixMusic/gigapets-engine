@@ -113,6 +113,15 @@ int main()
         CHECK(!h.runString("m", "say('m:str/a', {}, 'baker')"));
         CHECK(h.runString("m", "assert(text.get('m:str/x', { name = 'Pip' }) == 'm:str/x:Pip'); assert(text.get('m:str/none') == nil)"));
     }
+    { // the front end systems exist; frontend.start can change the slot
+        gp::ScriptHost h;
+        CHECK(h.runString("a", "System.hooks('frontend.menu'); local S = System.hooks('frontend.start'); function S:before(ctx) ctx.slot = 2 end"));
+        gp::SystemCtx c;
+        c.set("slot", 0);
+        int got = -1;
+        h.system("frontend.start", c, [&] { got = int(c.num("slot")); });
+        CHECK(got == 2 && h.errors().empty());
+    }
     { // player.tricks / setTricks: the mask of known tricks, in any order
         gp::ScriptHost h;
         int mask = 1;
