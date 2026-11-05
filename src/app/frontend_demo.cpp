@@ -1598,6 +1598,14 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             }
             fontFor(c.font == 3 ? 3 : 0, c.font == 3 ? 0x104 : 0x28c).draw(str, bx, c.y, bw, al);
         };
+        // The scripts in the front end: game-wide ticks (Game.hooks onTickStart / onTickEnd) with the keys, and scenes (a script's own screens: scene.open from a hook or from the
+        // frontend.menu system), which take the keys and the whole screen while they are up.
+        bool feSceneActive = false;
+        long feTick = 0;
+        struct FeKeys
+        {
+            bool z = false, x = false, left = false, right = false, up = false, down = false;
+        } fePressed, feHeld; // pressed since the last script tick / held now
         gp::DebugCode debugCode;
         bool showOutlines = false; // F8: the old white debug boxes
 
@@ -1908,6 +1916,17 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                 const SDL_Keycode k = gp::keys().canonical(e.key.keysym.scancode, e.key.keysym.sym); // a rebound key acts as its action's default
                 const bool down = e.type == SDL_KEYDOWN, rep = e.key.repeat != 0;
                 const bool shift = (e.key.keysym.mod & KMOD_SHIFT) != 0;
+                {
+                    // what the scripts see of the keys (Z, X and the arrows, by their action: a rebound key counts as its default)
+                    bool *h = k == SDLK_z ? &feHeld.z : k == SDLK_x ? &feHeld.x : k == SDLK_LEFT ? &feHeld.left : k == SDLK_RIGHT ? &feHeld.right : k == SDLK_UP ? &feHeld.up : k == SDLK_DOWN ? &feHeld.down : nullptr;
+                    bool *pr = k == SDLK_z ? &fePressed.z : k == SDLK_x ? &fePressed.x : k == SDLK_LEFT ? &fePressed.left : k == SDLK_RIGHT ? &fePressed.right : k == SDLK_UP ? &fePressed.up : k == SDLK_DOWN ? &fePressed.down : nullptr;
+                    if (h)
+                        *h = down;
+                    if (pr && down && !rep)
+                        *pr = true;
+                }
+                if (feSceneActive) // a script's scene has the keys
+                    continue;
                 if (screen == Screen::Options && optCapture >= 0) // waiting for the new key of a binding: Escape gives up
                 {
                     if (down && !rep)
@@ -2451,6 +2470,51 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             if (hitch)
                 --fadeSkip;
             const int gt = hitch ? 0 : std::min(ticks, 3); // ticks for fades and the menu slide
+            for (int ti = 0; ti < std::min(ticks, 4); ++ti) // the scripts' ticks (30 a second)
+            {
+                const auto keysOf = [&]
+                {
+                    gp::SceneInput in;
+                    in.z = ti == 0 && fePressed.z;
+                    in.x = ti == 0 && fePressed.x;
+                    in.left = ti == 0 && fePressed.left;
+                    in.right = ti == 0 && fePressed.right;
+                    in.up = ti == 0 && fePressed.up;
+                    in.down = ti == 0 && fePressed.down;
+                    in.heldZ = feHeld.z;
+                    in.heldX = feHeld.x;
+                    in.heldLeft = feHeld.left;
+                    in.heldRight = feHeld.right;
+                    in.heldUp = feHeld.up;
+                    in.heldDown = feHeld.down;
+                    return in;
+                };
+                gp::ScriptHost::TickInfo ti_;
+                ti_.tick = feTick;
+                ti_.menu = true; // (what is open: the front end's own screens)
+                ti_.scene = feSceneActive;
+                ti_.keys = keysOf();
+                feScripts.fireGameTick(false, ti_);
+                if (!feSceneActive)
+                    if (std::string sceneId; feScripts.takeSceneOpen(sceneId))
+                    {
+                        feScripts.beginScene(sceneId);
+                        feSceneActive = true;
+                    }
+                if (feSceneActive)
+                {
+                    feScripts.tickScene(keysOf());
+                    if (feScripts.sceneCloseRequested())
+                    {
+                        feScripts.endScene();
+                        feSceneActive = false;
+                    }
+                }
+                feScripts.tick(); // wait(n) in the scripts
+                feScripts.fireGameTick(true, ti_);
+                ++feTick;
+                fePressed = FeKeys();
+            }
             if (hasPending)
             {
                 fadeOutTick = std::min(kFade, fadeOutTick + gt);
@@ -2675,6 +2739,12 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                                      : t.mode == 2 ? gp::Align::Right
                                                    : gp::Align::Left;
                 fontFor(t.style, t.pal).draw(t.s, t.x, t.y, t.w, al);
+            }
+            if (feSceneActive) // a script's scene: the whole screen is its own (as in the world), the front end's screen is behind it unseen
+            {
+                gp::useUiScreen(ren);
+                gp::clearFrame(ren);
+                feDrawer.run(feScripts.drawScene());
             }
             // Game.hooks().onHud(g) and onPostDraw(g) draw over the front end's screens too, with everything a script can draw (script_draw.hpp: shapes, canvases, blits, meshes, "@frame",
             // sprites of mods and the game's pictures, text)
