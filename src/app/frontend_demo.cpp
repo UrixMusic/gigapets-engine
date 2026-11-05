@@ -1540,6 +1540,8 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             // A pet that wears a mod's colour needs that palette to be drawn in the slot list: load the mods (their palette records are what
             // matter here) and fill the palette registry the sprite code looks mod colours up in. The game does the same when it starts.
             gp::ModReport feRep = gp::importMods(*uiDb, "mods");
+            for (const std::string &w : feRep.errors) // (a mod that did not load: its folder name must be its id, and so on)
+                std::fprintf(stderr, "front end: mod error: %s\n", w.c_str());
             for (const std::string &p : gp::checkModScripts(*uiDb, feRep, feScripts, "mods")) // (a script that does not load is reported by the game itself, once it starts)
                 std::printf("front end: script: %s\n", p.c_str());
             gp::resolveModPalettes(rom, *uiDb);
@@ -2500,6 +2502,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                     {
                         feScripts.beginScene(sceneId);
                         feSceneActive = true;
+                        std::printf("front end: scene %s opened\n", sceneId.c_str());
                     }
                 if (feSceneActive)
                 {
