@@ -378,6 +378,7 @@ def probe(spec_path, names):
             m = re.search(r"slice_show<(.*)> probe_%s" % re.escape(n), err)
             if m:
                 result[n] = 'fn:%s(%s)' % (m.group(1).strip(), ', '.join(types))
+    result = {k: v for k, v in result.items() if not v.startswith('decltype(')}   # (not a variable of runWalk(): a local of the moved code that only looked missing because of an earlier error)
     cache_file = 'build/slice_env_%s.json' % spec['class']
     env = json.load(open(cache_file)) if os.path.exists(cache_file) else {}
     env.update(result)
