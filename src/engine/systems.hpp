@@ -90,6 +90,8 @@ namespace gp
              "npc, outcome (\"friend\" or \"other\"), chance (the roll's number, 0..100+), friend (1 = they become friends: set it to decide; the default rolls only after a friendly outcome)"},
             {"friend.gift", "a new friend is made: the gift that drops where the pet stands, and on the 10th, 20th, 30th, 35th and 40th friend an extra one",
              "npc, friends (how many, counting this one), drop and milestone (item ids, \"\" = nothing): change them. An unknown id gives nothing"},
+            {"quest.reward", "a story or generated quest runs one of its reward activities (when it is accepted or handed in); cancel or replace it and the dialogue just carries on",
+             "code (the activity: -2 scatters the bonus items and may add a random find, -7 drops the quest's spawn table, -8 / -10 are the story rocks; change it to run another), quest (id, \"\" for a generated one), number, generic, type, giver, receiver"},
             {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
              "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };

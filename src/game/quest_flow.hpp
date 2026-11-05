@@ -36,6 +36,9 @@ namespace gp
         // Returns true to skip the quest's built-in bonus rewards (the -2 / -7 activities); the thank-you text and
         // moving on to the next quest still happen. Unset = false.
         std::function<bool()> onComplete;
+        // Offered every reward activity (the code: -2 the bonus scatter, -7 the spawn drop, -8 / -10 the story blasts, ...) before it runs; the host may change `code` (another
+        // native reward) and returns whether the activity should run at all (false: a mod cancelled or replaced it; the dialogue just carries on). Unset = run it.
+        std::function<bool(int &code)> rewardSystem;
         RandFn rnd;
     };
 
@@ -133,6 +136,11 @@ namespace gp
         void reward(int code, std::function<void()> done)
         {
             if (skipRewards_) // a script's onQuestComplete took the rewards over
+            {
+                done();
+                return;
+            }
+            if (h.rewardSystem && !h.rewardSystem(code)) // system "quest.reward": a mod changed the reward, took it over or cancelled it
             {
                 done();
                 return;

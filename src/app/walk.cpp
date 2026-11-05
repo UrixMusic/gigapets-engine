@@ -5111,6 +5111,16 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             refreshBits();
             saveGame();
         };
+        // the engine system "quest.reward" (systems.hpp): every reward activity of a quest goes through it
+        qh.rewardSystem = [&](int &code)
+        {
+            gp::SystemCtx c;
+            const gp::QuestCompleteInfo info = questInfo();
+            c.set("code", code).set("quest", info.questId).set("number", info.number).set("generic", info.generic ? 1 : 0).set("type", info.type).set("giver", info.giverId).set("receiver", info.receiverId);
+            const bool run = scripts.system("quest.reward", c, [] {});
+            code = int(c.num("code"));
+            return run;
+        };
         // Game.hooks().onQuestComplete: true = the script took the bonus rewards over (see QuestHooks::onComplete).
         qh.onComplete = [&]
         {

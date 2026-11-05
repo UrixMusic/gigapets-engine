@@ -161,6 +161,15 @@ int main()
         CHECK(f.num("friend") == 1);
         CHECK(h.runString("m", "assert(seen_ == 1, tostring(seen_))"));
     }
+    { // quest.reward: a mod can switch the reward activity
+        gp::ScriptHost h;
+        CHECK(h.runString("a", "local S = System.hooks('quest.reward'); function S:before(ctx) if ctx.code == -2 then ctx.code = -7 end; seen_ = ctx.quest .. ':' .. ctx.generic end"));
+        gp::SystemCtx c;
+        c.set("code", -2).set("quest", "base:quest/4").set("number", 4).set("generic", 0).set("type", "").set("giver", "").set("receiver", "");
+        const bool run = h.system("quest.reward", c, [] {});
+        CHECK(run && c.num("code") == -7);
+        CHECK(h.runString("m", "assert(seen_ == 'base:quest/4:0', seen_)"));
+    }
     { // unknown system names are an error at registration; System.list shows the real ones
         gp::ScriptHost h;
         CHECK(!h.runString("a", "System.hooks('care.decya')"));

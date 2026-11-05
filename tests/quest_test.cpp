@@ -190,6 +190,38 @@ int main()
         CHECK(placed2 == (skip ? 0 : 1) && sfxes == (skip ? 0 : 1)); // bonus items scattered only when not taken over
         CHECK(r2.counter == 2 && r2.q.phase == 0);                   // the chain moved on either way
     }
+    // ---- rewardSystem: sees every reward activity's code; false cancels it, the dialogue and the chain carry on
+    for (int mode = 0; mode < 2; ++mode)
+    {
+        Dialogue d4;
+        QuestRuntime r4;
+        r4.dlg = &d4;
+        r4.table = tbl;
+        int held6 = 2, placed4 = 0, sfx4 = 0;
+        std::vector<int> codes;
+        auto &k = r4.h;
+        k.text = [](int id) { return "t" + std::to_string(id); };
+        k.held = [&](const Id &it) { return it == legacyItemId(5) ? held6 : 0; };
+        k.remove = [&](const Id &it, int n) { if (it == legacyItemId(5)) held6 -= n; };
+        k.spawn = [](int, const Id &, int, bool) {};
+        k.place = [&](const Id &, int, int, bool) { ++placed4; };
+        k.randomEvent = [] {};
+        k.clearFlagged = [] {};
+        k.sfx = [&](int) { ++sfx4; };
+        k.camX = [] { return 100; };
+        k.camY = [] { return 200; };
+        k.receiverY = [] { return 150; };
+        k.nowTick = [] { return 5; };
+        k.rnd = rnd;
+        k.rewardSystem = [&](int &code) { codes.push_back(code); return mode == 0; };
+        r4.load(1);
+        r4.talk(0x42); d4.choose(1); d4.choose(1);
+        r4.talk(0x42);
+        d4.choose(1);
+        CHECK(!codes.empty() && codes.back() == -2);
+        CHECK(placed4 == (mode == 0 ? 1 : 0) && sfx4 == (mode == 0 ? 1 : 0));
+        CHECK(r4.counter == 2 && r4.q.phase == 0);
+    }
     // no onComplete wired: rewards as before
     {
         Dialogue d3;
