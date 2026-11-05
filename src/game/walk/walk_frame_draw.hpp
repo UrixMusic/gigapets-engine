@@ -1,6 +1,7 @@
 // walk_frame_draw.hpp - sliced out of runWalk() by tools/slice_walk.py: the lambdas of walk.cpp listed in the tool's spec are the methods of FrameDraw.
 // What they need from the rest of the walk session comes in through FrameDrawEnv, under the names they had, so the bodies read as before.
 #pragma once
+#include "../../engine/gl_shader.hpp" // shaders on things of the world (world.shade)
 #include <functional>
 #include <map>
 #include <memory>
@@ -132,9 +133,14 @@ public:
     {
         if (worldTex_)
             SDL_DestroyTexture(worldTex_);
+        if (entityTex_)
+            SDL_DestroyTexture(entityTex_);
     }
     // The world is drawn into this picture (the size of the logical screen) when the camera is zoomed or turned, and then shown scaled / rotated (see "camera.view": zoom, angle)
     SDL_Texture *worldTex_ = nullptr;
+    GlShaderPass entityGl_;            // world.shade: a shader on one thing of the world
+    SDL_Texture *entityTex_ = nullptr; // that thing, drawn alone on a transparent picture of kEntityPic pixels, feet at (middle, three quarters down)
+    static constexpr int kEntityPic = 384;
     int worldTexW_ = 0, worldTexH_ = 0;
     SDL_Texture *worldTarget(int w, int h)
     {
@@ -408,12 +414,60 @@ public:
                 }
             }
         };
+        // A thing of the world drawn through its shader, if a script gave it one (world.shade): it is drawn alone onto a transparent picture with its feet at a fixed place, and the picture
+        // is drawn again over that place through the shader. Not while the world itself is drawn into a picture (a zoomed / turned camera), or without OpenGL: then it is drawn plainly.
+        const auto shaded = [&](const std::string &key, float wx, float wy, const std::function<void()> &plain)
+        {
+            const gp::ScriptHost::EntityShade *es = scripts.anyEntityShade() ? scripts.entityShade(key) : nullptr;
+            const std::string *src = es ? db.shader(es->shader) : nullptr;
+            if (es && !src)
+            {
+                static std::set<gp::Id> warned;
+                if (warned.insert(es->shader).second)
+                    std::fprintf(stderr, "world.shade: no shader '%s'\n", es->shader.c_str());
+            }
+            if (!src || SDL_GetRenderTarget(ren) != nullptr || !entityGl_.available(ren))
+            {
+                plain();
+                return;
+            }
+            if (!entityTex_)
+            {
+                entityTex_ = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, kEntityPic, kEntityPic);
+                if (entityTex_)
+                    SDL_SetTextureBlendMode(entityTex_, SDL_BLENDMODE_BLEND);
+            }
+            if (!entityTex_)
+            {
+                plain();
+                return;
+            }
+            const float sx = camX, sy = camY;
+            camX = wx - float(kEntityPic) * 0.5f;
+            camY = wy - float(kEntityPic) * 0.75f;
+            SDL_SetRenderTarget(ren, entityTex_);
+            SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+            SDL_SetRenderDrawColor(ren, 0, 0, 0, 0);
+            SDL_RenderClear(ren);
+            plain();
+            SDL_SetRenderTarget(ren, nullptr);
+            camX = sx;
+            camY = sy;
+            const SDL_FRect dst{wx - sx - float(kEntityPic) * 0.5f, wy - sy - float(kEntityPic) * 0.75f, float(kEntityPic), float(kEntityPic)};
+            entityGl_.applyEntity(ren, es->shader, *src, es->uniforms, float(SDL_GetTicks()) / 1000.f, entityTex_, dst, kEntityPic, kEntityPic);
+        };
         for (const Item &it : items)
         {
             if (it.kind == 0)
-                drawObject(*static_cast<const gp::ObjectDef *>(it.p), camX, camY);
+            {
+                const gp::ObjectDef &o = *static_cast<const gp::ObjectDef *>(it.p);
+                shaded(o.type, float(o.x), float(o.y), [&] { drawObject(o, camX, camY); });
+            }
             else if (it.kind == 1)
-                drawNpc(*static_cast<const gp::NpcActor *>(it.p), camX, camY);
+            {
+                const gp::NpcActor &n = *static_cast<const gp::NpcActor *>(it.p);
+                shaded(n.def->id, float(n.x()), float(n.y()), [&] { drawNpc(n, camX, camY); });
+            }
 
             else if (it.kind == 3)
             {
@@ -443,7 +497,7 @@ public:
             }
             else
             {
-                drawPet();
+                shaded("player", petFX, petFY, [&] { drawPet(); });
                 drawPetBubbles();
             }
         }

@@ -296,6 +296,7 @@ namespace gp
             bind("System", "hooks", l_systemHooks);
             bind("System", "list", l_systemList);
             bind("world", "drop", l_drop);
+            bind("world", "shade", l_worldShade);
             bind("rand", "int", l_randInt);
             bind("rand", "pick", l_randPick);
             bind("player", "give", l_pGive);
@@ -2612,6 +2613,83 @@ namespace gp
                 d.blend = blendOf(L, 4);
             }
             self(L).sceneCmds_.push_back(std::move(d));
+            return 0;
+        }
+        // world.shade(target, shaderId | nil [, uniforms]): a fragment shader on one thing of the world, whenever it is drawn: target "player" (the pet), an npc id, or an object type id.
+        // nil clears it. The shader gets the thing's own picture (`frame(uv)`, with its alpha) and draws it again over the same place, so it can recolour, outline, glow or distort that
+        // thing only. Needs the opengl renderer (see g.shader); not applied while the camera is zoomed or turned. Lasts until cleared (it is not saved).
+    public:
+        struct EntityShade
+        {
+            std::string shader;
+            std::vector<std::pair<std::string, std::vector<float>>> uniforms;
+        };
+        std::map<std::string, EntityShade> entityShades_;
+        const EntityShade *entityShade(const std::string &id) const
+        {
+            const auto it = entityShades_.find(id);
+            return it == entityShades_.end() ? nullptr : &it->second;
+        }
+        bool anyEntityShade() const { return !entityShades_.empty(); }
+
+    private:
+        static int l_worldShade(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *target = luaL_checkstring(L, 1);
+            luaL_argcheck(L, idCharsOk(target) && std::strlen(target) <= 100 && *target, 1, "\"player\", an npc id or an object type id");
+            if (lua_isnoneornil(L, 2))
+            {
+                h.entityShades_.erase(target);
+                return 0;
+            }
+            luaL_checktype(L, 2, LUA_TSTRING);
+            const char *shaderId = lua_tostring(L, 2);
+            luaL_argcheck(L, idCharsOk(shaderId) && std::strlen(shaderId) <= 100, 2, "a shader id");
+            if (h.entityShades_.size() >= 64 && !h.entityShades_.count(target))
+                return luaL_error(L, "world.shade: at most 64 things at once");
+            EntityShade e;
+            e.shader = shaderId;
+            if (!lua_isnoneornil(L, 3))
+            {
+                luaL_checktype(L, 3, LUA_TTABLE);
+                lua_pushnil(L);
+                while (lua_next(L, 3))
+                {
+                    if (lua_type(L, -2) != LUA_TSTRING)
+                        luaL_error(L, "world.shade: uniform names are strings");
+                    const std::string name = lua_tostring(L, -2);
+                    bool nameOk = !name.empty() && name.size() <= 40 && !std::isdigit(static_cast<unsigned char>(name[0]));
+                    for (char c : name)
+                        nameOk = nameOk && (std::isalnum(static_cast<unsigned char>(c)) || c == '_');
+                    if (!nameOk)
+                        luaL_error(L, "world.shade: '%s' is not a uniform name (letters, digits, _)", name.c_str());
+                    if (e.uniforms.size() >= 16)
+                        luaL_error(L, "world.shade: at most 16 uniforms");
+                    std::vector<float> v;
+                    if (lua_isnumber(L, -1))
+                        v.push_back(float(lua_tonumber(L, -1)));
+                    else if (lua_istable(L, -1))
+                    {
+                        const lua_Integer n = lua_rawlen(L, -1);
+                        if (n < 1 || n > 4)
+                            luaL_error(L, "world.shade: '%s' must be a number or a list of 2 to 4 numbers", name.c_str());
+                        for (lua_Integer i = 1; i <= n; ++i)
+                        {
+                            lua_rawgeti(L, -1, i);
+                            if (!lua_isnumber(L, -1))
+                                luaL_error(L, "world.shade: '%s' holds numbers", name.c_str());
+                            v.push_back(float(lua_tonumber(L, -1)));
+                            lua_pop(L, 1);
+                        }
+                    }
+                    else
+                        luaL_error(L, "world.shade: '%s' must be a number or a list of numbers", name.c_str());
+                    e.uniforms.emplace_back(name, std::move(v));
+                    lua_pop(L, 1);
+                }
+            }
+            h.entityShades_[target] = std::move(e);
             return 0;
         }
         // g.shader(id [, uniforms [, { textures = { sampler = "canvas" } }]]): run a fragment shader (a `shader` record of a mod) over the picture drawn so far: the screen, in onPostDraw. uniforms = { name = number | { 2..4 numbers }, ... }

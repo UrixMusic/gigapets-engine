@@ -291,6 +291,23 @@ int main()
             CHECK(!bh.errors().empty());
         }
     }
+    { // world.shade: a shader on one thing of the world, with uniforms; nil clears it; mistakes are errors
+        gp::ScriptHost hh;
+        CHECK(!hh.anyEntityShade());
+        CHECK(hh.runString("m", "world.shade('player', 'm:shader/glow', { width = 2, color = { 1, 0.5, 0 } }); world.shade('m:npc/baker', 'm:shader/x')"));
+        const gp::ScriptHost::EntityShade *e = hh.entityShade("player");
+        CHECK(e && e->shader == "m:shader/glow" && e->uniforms.size() == 2 && hh.entityShade("m:npc/baker") && hh.anyEntityShade() && !hh.entityShade("nobody"));
+        CHECK(hh.runString("m", "world.shade('player', nil)"));
+        CHECK(!hh.entityShade("player") && hh.entityShade("m:npc/baker"));
+        const char *bad[] = {"world.shade('bad id!', 'm:s')", "world.shade('player', 5)", "world.shade('player', 'm:s', { a = 'x' })", "world.shade('player', 'm:s', { ['1x'] = 1 })",
+                             "world.shade('player', 'm:s', { a = { 1, 2, 3, 4, 5 } })"};
+        for (const char *b : bad)
+        {
+            gp::ScriptHost bh;
+            CHECK(!bh.runString("m", b));
+            CHECK(!bh.anyEntityShade());
+        }
+    }
     { // with nothing wired the calls are harmless
         gp::ScriptHost h2;
         CHECK(h2.runString("m", "assert(player.pos() == nil and player.setPos(1, 2) == false and player.react('happy') == false and area.go('a:b', 1, 2) == false and area.current() == '')"));

@@ -195,6 +195,78 @@ public:
         glPopAttrib();
     }
 
+    // One thing of the world (`entity`: its own picture on a transparent SDL texture) drawn again through the shader over `dst` (logical coordinates), blended over what is there.
+    // Here `frame(p)` is that picture (same orientation as `uv`), `resolution` is the picture's size in the logical screen.
+    void applyEntity(SDL_Renderer *ren, const std::string &id, const std::string &source, const Uniforms &uniforms, float seconds, SDL_Texture *entity, const SDL_FRect &dst, int picW, int picH)
+    {
+        if (!available(ren))
+            return;
+        Program &p = program(id + "#entity", source, true);
+        if (!p.program)
+            return;
+        SDL_RenderFlush(ren);
+        int ow = 0, oh = 0;
+        SDL_GetRendererOutputSize(ren, &ow, &oh);
+        int lw = 0, lh = 0;
+        SDL_RenderGetLogicalSize(ren, &lw, &lh);
+        int x0 = 0, y0 = 0, x1 = ow, y1 = oh, xa = 0, ya = 0, xb = ow, yb = oh;
+        if (lw > 0 && lh > 0)
+        {
+            SDL_RenderLogicalToWindow(ren, dst.x, dst.y, &xa, &ya);
+            SDL_RenderLogicalToWindow(ren, dst.x + dst.w, dst.y + dst.h, &xb, &yb);
+            x0 = xa;
+            y0 = ya;
+            x1 = xb;
+            y1 = yb;
+        }
+        const int w = x1 - x0, h = y1 - y0;
+        if (w < 1 || h < 1)
+            return;
+        glPushAttrib(GL_ALL_ATTRIB_BITS);
+        glViewport(x0, oh - y1, w, h);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glActiveTexture_(GL_TEXTURE0);
+        float tw = 0.f, th = 0.f;
+        if (SDL_GL_BindTexture(entity, &tw, &th) == 0)
+        {
+            glUseProgram_(p.program);
+            glUniform1i_(loc(p, "tex"), 0);
+            glUniform2f_(loc(p, "resolution"), float(picW), float(picH));
+            glUniform1f_(loc(p, "time"), seconds);
+            for (const auto &[name, v] : uniforms)
+            {
+                const GLint l = loc(p, name);
+                if (l < 0)
+                    continue;
+                if (v.size() == 1)
+                    glUniform1f_(l, v[0]);
+                else if (v.size() == 2)
+                    glUniform2f_(l, v[0], v[1]);
+                else if (v.size() == 3)
+                    glUniform3f_(l, v[0], v[1], v[2]);
+                else if (v.size() == 4)
+                    glUniform4f_(l, v[0], v[1], v[2], v[3]);
+            }
+            glBegin(GL_TRIANGLE_STRIP);
+            glTexCoord2f(0.f, 0.f);
+            glVertex2f(-1.f, -1.f);
+            glTexCoord2f(1.f, 0.f);
+            glVertex2f(1.f, -1.f);
+            glTexCoord2f(0.f, 1.f);
+            glVertex2f(-1.f, 1.f);
+            glTexCoord2f(1.f, 1.f);
+            glVertex2f(1.f, 1.f);
+            glEnd();
+            glUseProgram_(0);
+            SDL_GL_UnbindTexture(entity);
+        }
+        glPopAttrib();
+    }
+
 private:
     struct Program
     {
@@ -257,7 +329,7 @@ private:
         return s;
     }
 
-    Program &program(const std::string &id, const std::string &body)
+    Program &program(const std::string &id, const std::string &body, bool entity = false)
     {
         Program &p = programs_[id];
         if (p.tried)
@@ -273,7 +345,8 @@ private:
             "uniform vec2 resolution;\n"
             "uniform float time;\n"
             "varying vec2 uv;\n"
-            "vec4 frame(vec2 p) { return texture2D(tex, vec2(p.x, 1.0 - p.y)); }\n"
+            + std::string(entity ? "vec4 frame(vec2 p) { return texture2D(tex, p); }\n" // (a thing's own picture is an SDL texture: top down like uv)
+                                 : "vec4 frame(vec2 p) { return texture2D(tex, vec2(p.x, 1.0 - p.y)); }\n") +
             "vec4 canvas(sampler2D t, vec2 p) { return texture2D(t, p); }\n"
             "#line 1\n";
         const GLuint vs = compile(GL_VERTEX_SHADER, vertex, id + " (vertex)");
