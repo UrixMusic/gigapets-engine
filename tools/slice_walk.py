@@ -72,6 +72,30 @@ def lambda_header(l):
     return (m.group(1) or m.group(2), m.group(4) or '()', (m.group(5) or '').strip())
 
 
+def split_params(params):
+    """'(int a, std::function<void(int, int)> f = {}, const T &x)' -> [('int a', 'a'), ...] (type text, name)"""
+    inner = params.strip()[1:-1]
+    parts, depth, cur = [], 0, ''
+    for ch in inner:
+        if ch in '<({[':
+            depth += 1
+        elif ch in '>)}]':
+            depth -= 1
+        if ch == ',' and depth == 0:
+            parts.append(cur)
+            cur = ''
+        else:
+            cur += ch
+    if cur.strip():
+        parts.append(cur)
+    out = []
+    for p in parts:
+        core = re.sub(r'\s*=.*$', '', p.strip())
+        m = re.search(r'([A-Za-z_]\w*)\s*$', core)
+        out.append((p.strip(), m.group(1) if m else ''))
+    return out
+
+
 def run_walk_range(L):
     s = next(i for i, l in enumerate(L) if l.startswith('int runWalk('))
     e = next(i for i in range(s, len(L)) if L[i] == '}')
@@ -184,6 +208,8 @@ def main():
         h.append('{')
         for n, t in sorted(env.items()):
             t = t.replace('std::__cxx11::basic_string<char>', 'std::string')
+            t = re.sub(r'runWalk\([^)]*\)::', '', t)  # a struct local to runWalk(), moved to the header by the spec's types: its plain name
+            t = re.sub(r'runWalk\([^)]*\)::', '', t)   # a struct local to runWalk(): moved to the header by the spec's "types", so its plain name
             if t.startswith('fn:'):
                 h.append('    std::function<%s> %s;' % (t[3:], n + ('Fn' if n in defaults else '')))
             elif t.startswith('?'):
@@ -226,7 +252,13 @@ def main():
                 ret_kw = 'return ' if False else ''
                 repl[(a, b)] = (c, ['        %s = [&]%s { return (*%s).%s(%s); };' % (tgt, prm, ctl, mname, names)])
             else:
-                repl[(a, b)] = (c, ['        auto %s = [&](auto &&...a) -> decltype(auto) { return (*%s).%s(std::forward<decltype(a)>(a)...); };' % (name, ctl, name)])
+                if '(' in params and 'auto' not in params and params.strip() != '()':
+                    sp_ = split_params(params)
+                    repl[(a, b)] = (c, ['        auto %s = [&]%s -> decltype(auto) { return (*%s).%s(%s); };' % (name, params, ctl, name, ', '.join(n for t, n in sp_))])
+                elif params.strip() == '()':
+                    repl[(a, b)] = (c, ['        auto %s = [&]() -> decltype(auto) { return (*%s).%s(); };' % (name, ctl, name)])
+                else:
+                    repl[(a, b)] = (c, ['        auto %s = [&](auto &&...a) -> decltype(auto) { return (*%s).%s(std::forward<decltype(a)>(a)...); };' % (name, ctl, name)])
         # build the new line list
         out = []
         i = 0
@@ -243,11 +275,11 @@ def main():
         # declare the controller pointer before the first extracted lambda and build it after the last
         first_a = min(v[0] for v in repl.values())
         # find indices in `out` by searching the forwarder text
-        first_text = [x for x in out if x.startswith('        auto %s = [&](auto &&' % order[0][0]) or x.startswith('        %s = [&]' % order[0][0])]
+        first_text = [x for x in out if x.startswith('        auto %s = [&]' % order[0][0]) or x.startswith('        %s = [&]' % order[0][0])]
         idx_first = out.index(first_text[0])
         out.insert(idx_first, '        std::unique_ptr<%s> %s; // built below, once everything it takes is declared (%s)' % (cls, ctl, spec['header']))
         last_name = order[-1][0]
-        last_text = [x for x in out if x.startswith('        auto %s = [&](auto &&' % last_name) or x.startswith('        %s = [&]' % last_name)]
+        last_text = [x for x in out if x.startswith('        auto %s = [&]' % last_name) or x.startswith('        %s = [&]' % last_name)]
         idx_last = out.index(last_text[0])
         init = ['        {',
                 '            %sEnv env{%s};' % (cls, ', '.join(sorted(env.keys()))),

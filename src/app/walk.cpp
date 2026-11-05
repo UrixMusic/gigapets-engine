@@ -277,6 +277,7 @@ static void grantStarterItems(gp::Player &p, const std::vector<gp::ItemDef> &def
 }
 // Returns gp::kRunQuit (window closed), gp::kRunToMenu (F10) or gp::kRunError.
 #include "../game/walk/walk_room.hpp"
+#include "../game/walk/walk_world_actions.hpp"
 #include "../game/walk/walk_draw.hpp"
 #include "../game/walk/walk_items.hpp"
 #include "../game/walk/walk_pet_activities.hpp" // the player homes and hotels (RoomController, RoomView): needs the types above
@@ -1341,86 +1342,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         auto isSpecialItem = [](int i)
         { return (i >= 2 && i <= 17) || (i >= 0x109 && i <= 0x10b); };
 
-        // AdjustPersonalityStat + AddToStatCounter(2 + stat*4, applied delta)
-        auto personalityDelta = [&](int stat, int delta)
-        {
-            const int before = player.personality[stat];
-            player.adjustPersonality(gp::PersonalityStat(stat), delta);
-            itemHost.addStatCounter(2 + stat * 4, player.personality[stat] - before);
-        };
+        std::unique_ptr<WorldActions> worldActionsCtl; // built below, once everything it takes is declared (walk_world_actions.hpp)
+        auto personalityDelta = [&](int stat, int delta) -> decltype(auto) { return (*worldActionsCtl).personalityDelta(stat, delta); };
 
-        // GrantItemOrEvent, special-id branches only. Returns false for normal items.
-        auto grantSpecial = [&](int id, bool sound) -> bool
-        {
-            if (!isSpecialItem(id))
-                return false;
-
-            if (id == 0x109)
-            {
-                player.adjustMoney(randIn(5, 11));
-                if (sound)
-                    sfx(0x14, 200);
-            }
-            else if (id == 0x10a)
-            {
-                player.adjustMoney(randIn(20, 51));
-                if (sound)
-                    sfx(0x14, 200);
-            }
-            else if (id == 0x10b) // mystery bag
-            {
-                if (randIn(0, 99) < 60)
-                {
-                    const int r = randIn(1, 5);
-                    if (r == 1)
-                    {
-                        player.adjustMoney(randIn(30, 61));
-                        if (sound)
-                            sfx(0x14, 200);
-                    }
-                    else // r = 2..5 -> stat 0..3
-                        personalityDelta(r - 2, randIn(1, 10));
-                    if (sound)
-                        sfx(0x53, 200);
-                }
-                else
-                {
-                    const int r = randIn(1, 8);
-                    switch (r)
-                    {
-                    case 1:
-                        player.adjustCare(gp::Tiredness, -80);
-                        break;
-                    case 2:
-                        player.illnessId = randIn(0, 9);
-                        petFellIll(); // SetActiveIllness
-                        break;
-                    case 3:
-                        player.adjustCare(gp::Cleanliness, -80);
-                        break;
-                    case 4:
-                        player.adjustCare(gp::Happiness, -80);
-                        break;
-                    default: // r = 5..8 -> stat 0..3
-                        personalityDelta(r - 5, -randIn(1, 10));
-                        break;
-                    }
-                    if (sound)
-                        sfx(1, 200);
-                }
-            }
-            else // ids 2..17
-            {
-                const int stat = (id - 2) / 4, k = (id - 2) % 4;
-                const int amt = k == 0 ? 1 : k == 1 ? randIn(1, 3)
-                                         : k == 2   ? randIn(1, 5)
-                                                    : 50;
-                personalityDelta(stat, amt);
-                if (sound)
-                    sfx(0x53, 200);
-            }
-            return true;
-        };
+        auto grantSpecial = [&](int id, bool sound) -> decltype(auto) { return (*worldActionsCtl).grantSpecial(id, sound); };
 
         // The first-time messages in the overworld (settings.hpp). tutStep: 0 none, 1 the pet turns to the front, 2 it waits
         // 0.25 s, then the message opens. afterPickup asks for the "see all your STUFF" message (15) once the pet is free.
@@ -1452,51 +1377,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         int thoughtIcon = -1, thoughtTicks = 0; // the bubble up over the pet (icon tile), -1 = none
         std::function<bool(const std::string &)> scriptThink; // player.think(kind), set where the bubble code is
 
-        auto tryPickup = [&](int idx)
-        {
-            const int area = cur->def->legacyId;
-            gp::PickupEnv pe;
-            pe.held = [&](int i)
-            { return ownedCount(i); };
-            pe.capacity = [&](int i)
-            { return isSpecialItem(i) ? 1 : (i >= 0 && i < int(itemDefs.size()) ? itemDefs[i].maxQty : 1); };
-            pe.grant = [&](int i)
-            {
-                if (!grantSpecial(i, true))
-                {
-                    if (i >= 0 && i < int(itemDefs.size()))
-                        player.addItem(itemDefs[size_t(i)].id, 1);
-                    sfx(0x53, 200); // GrantItemOrEvent: PlaySoundEffect(0x53, 200) when the pickup asks for a sound
-                    gp::onItemGranted(events, area, i, db.fixedSpotsIn(area), spawnEnv);
-                }
-            };
-            const int pickedItem = idx >= 0 && idx < events.size() ? events.events()[size_t(idx)].item : -1;
-            const gp::WorldItem *pickedEv = idx >= 0 && idx < events.size() ? &events.events()[size_t(idx)] : nullptr;
-            const gp::Id pickedItemId = pickedItem >= 0 && pickedItem < int(itemDefs.size()) ? itemDefs[size_t(pickedItem)].id : gp::Id();
-            const int pickX = pickedEv ? pickedEv->x : pos.x, pickY = pickedEv ? pickedEv->y : pos.y;
-            if (!pickedItemId.empty() && scripts.fireBeforePickup(cur->def->id, pickedItemId, pickX, pickY).suppress)
-                return; // a mod left it lying there
-            const gp::PickupOutcome o = events.pickup(idx, pe);
-            if (o.result == gp::PickupResult::Granted && pickedItem >= 0 && pickedItem < int(itemDefs.size()))
-            {
-                // Spots with notLegacyFlag stay gone once their item has been picked up (SetLegacyFlag).
-                const gp::Id &pickedId = itemDefs[size_t(pickedItem)].id;
-                for (const gp::FixedSpotDef *s : db.fixedSpotsIn(area))
-                    if (s->notLegacyFlag && s->item == pickedId)
-                    {
-                        gp::markLegacy(player, pickedId);
-                        break;
-                    }
-            }
-            if (o.result == gp::PickupResult::Granted && !pickedItemId.empty())
-                scripts.fireAfterPickup(cur->def->id, pickedItemId, pickX, pickY);
-            if (o.result == gp::PickupResult::Granted)
-                afterPickup = true; // ProcessStoryModeObjectInteraction: IsFirstTimeEvent(0xf) right after the item is granted
-            if (o.result == gp::PickupResult::NeedItem)
-                dialogue.show(gp::messageBox("You need " + itemName(o.needItem) + " first.")); // placeholder text
-            else if (o.result == gp::PickupResult::AtCapacity)
-                dialogue.show(gp::messageBox("You can't carry any more.")); // placeholder text
-        };
+        auto tryPickup = [&](int idx) -> decltype(auto) { return (*worldActionsCtl).tryPickup(idx); };
 
         // The map-marker arrows (anims 0x10 / 0x11 / 0x12, 18 fps) are in icon_selector.hpp.
         constexpr int kEvPal = 0x28c, kFlowerSprite = 0x9c1, kHoleSprite = 0x9c2;
@@ -2183,128 +2064,21 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         int &digStep = S.pet.digStep, &digTicks = S.pet.digTicks;
         constexpr int kDigTicks = 30;                     // placeholder: length of sound 0xbe (SFX category 9)
 
-        // The oldest hole filling in when a sixth is dug (UpdateDigHoleVisuals 0x03fa5f): the dig animation (bubble 0x16) played
-        // backwards, at 28 fps, where that hole was.
-        struct HoleFill
-        {
-            int x, y, ticks;
-        };
         std::vector<HoleFill> holeFills;
         constexpr int kHoleFillFps = 0x1c;
-        auto tickHoleFills = [&]
-        {
-            if (holeFills.empty())
-                return;
-            const int frames = int(animRefById("base:anim/22@28c").size());
-            for (HoleFill &f : holeFills)
-                ++f.ticks;
-            holeFills.erase(std::remove_if(holeFills.begin(), holeFills.end(), [&](const HoleFill &f)
-                                           { return f.ticks * kHoleFillFps / 30 >= frames; }),
-                            holeFills.end());
-        };
+        auto tickHoleFills = [&]() -> decltype(auto) { return (*worldActionsCtl).tickHoleFills(); };
 
-        // The story blasts (game/story_blast.hpp): the explosion animation at a world spot.
-        struct Blast
-        {
-            int x, y, ticks;
-        };
         std::vector<Blast> blasts;
         int gateBias = 0; // added to the quest count when objects are shown or hidden: 1 once a blast has changed the scenery
-        auto tickBlasts = [&]
-        {
-            if (blasts.empty())
-                return;
-            const int frames = int(animRefById("base:anim/" + std::to_string(gp::kBlastAnim) + "@28c").size());
-            for (Blast &b : blasts)
-                ++b.ticks;
-            blasts.erase(std::remove_if(blasts.begin(), blasts.end(), [&](const Blast &b)
-                                        { return b.ticks * gp::kBlastFps / 30 >= frames; }),
-                         blasts.end());
-        };
+        auto tickBlasts = [&]() -> decltype(auto) { return (*worldActionsCtl).tickBlasts(); };
 
-        auto startDig = [&]
-        { digStep = 1; digTicks = 0; settlePhase = 0; walkTicks = 0; };
+        auto startDig = [&]() -> decltype(auto) { return (*worldActionsCtl).startDig(); };
 
-        auto tickDig = [&]
-        {
-            if (!digStep)
-                return;
-            switch (digStep)
-            {
-            case 1: // settle facing (the ROM's reaction step is skipped)
-                if (host.pet.settle())
-                    digStep = 2;
-                break;
-            case 2: // bubble + RunSoundedAnimationTask
-                overId = 0x16;
-                overTicks = 0;
-                player.adjustCare(gp::Cleanliness, -gp::artOf(sp).digDirt);
-                player.adjustCare(gp::Tiredness, -1); // check this direction in-game
-                playAnim(gp::artOf(sp).dig, true, 14, Pose::Special); // PlayTaskAnimationVariant
-                sfx(9, 0xbe); // RunSoundedAnimationTask: PlaySoundEffect(9, 0xbe)
-                digTicks = 0;
-                digStep = 3;
-                break;
-            case 3: // wait for sound 9 to end (IsSoundIdActive); without an audio device, a fixed time
-                if (++digTicks >= (gp::audio().ready() ? 1 : kDigTicks) && !gp::audio().sfxActive(9))
-                    digStep = 4;
-                break;
-            case 4:
-            { // IsBubbleFinished, then the hit test
-                const int frames = int(animRefById(reactAnimId(0x16, 0x28c)).size());
-                if (frames > 0 && overTicks * kBubbleFps / 30 < frames)
-                    break;
-                overId = -1;
-                const size_t holesBefore = events.holes().size();
-
-                uint32_t bits = 0; // player flags -> bits
-                for (int n = 0; n < 32; ++n)
-                    if (player.hasTrigger(n))
-                        bits |= 1u << n;
-
-                const gp::DigResult r = events.dig(cur->def->legacyId, pos.x, pos.y, bits, rnd);
-                if (r.filledHole && r.filledHole->area == cur->def->legacyId) // the oldest hole fills in
-                    holeFills.push_back({r.filledHole->x, r.filledHole->y, 0});
-
-                for (int n = 0; n < 32; ++n) // bits -> player flags (only new ones matter)
-                    if (bits >> n & 1u)
-                        player.setTrigger(n);
-
-                const bool found = r.kind == gp::DigResult::Kind::Item;
-                std::printf("dig: %s\n", found ? "item" : r.kind == gp::DigResult::Kind::Dud ? "dud"
-                                                                                             : "miss");
-                std::printf("holes now: %zu\n", events.holes().size());
-                scripts.fireAfterDig(cur->def->id, pos.x, pos.y, found ? "item" : r.kind == gp::DigResult::Kind::Dud ? "dud" : "miss",
-                                     found && r.item >= 0 && r.item < int(itemDefs.size()) ? itemDefs[size_t(r.item)].id : gp::Id());
-                if (r.triggerSet)
-                    std::printf("trigger flags 0x%x (SavePetStatusBlock)\n", bits);
-                animDone = true;
-                digStep = 5;
-                break;
-            }
-            case 5: // wait for the reaction, then idle
-                if (animDone)
-                {
-                    digStep = 0;
-                    playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
-                }
-                break;
-            }
-        };
+        auto tickDig = [&]() -> decltype(auto) { return (*worldActionsCtl).tickDig(); };
 
         int &swiftDropStep = S.pet.swiftDropStep, &swiftDropTicks = S.pet.swiftDropTicks;
         std::vector<int> &swiftDropItems = S.pet.swiftDropItems;
-        auto startItemDrop = [&](std::vector<int> items)
-        {
-            if (items.empty())
-                return;
-            sfx(0x5d);
-            swiftDropItems = std::move(items);
-            swiftDropStep = 1;
-            swiftDropTicks = 0;
-            settlePhase = 0;
-            walkTicks = 0;
-        };
+        auto startItemDrop = [&](std::vector<int> items) -> decltype(auto) { return (*worldActionsCtl).startItemDrop(items); };
         // the engine system "minigame.prize": what a minigame hands out (game: "swift_pick", "three_in_a_row" or "memory_match"; items: item ids joined by commas, one per prize, repeats
         // for more of one; change the list, or cancel / replace and nothing drops). An unknown id is dropped from the list.
         mgEnv.startItemDrop = [&](std::vector<int> items)
@@ -2352,34 +2126,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
         svc.startRandomGame = [&]
         { minigames.openRandomGame(pos.x, pos.y + 10); };
-        auto tickSwiftDrop = [&]
+        auto tickSwiftDrop = [&]() -> decltype(auto) { return (*worldActionsCtl).tickSwiftDrop(); };
         {
-            if (!swiftDropStep || minigames.active() || pendingScreen) // activity runs once the world is back
-                return;
-            if (swiftDropStep == 1)
-            {
-                if (host.pet.settle())
-                    swiftDropStep = 2;
-            }
-            else if (++swiftDropTicks >= 45) // 1.5 s at 30 Hz
-            {
-                // ROM RandRange is exclusive at the top; this randIn is inclusive, so hi - 1.
-                int x = minigames.petX + randIn(-35, 35), y = minigames.petY + randIn(-2, 3);
-                for (size_t k = 0; k < swiftDropItems.size(); ++k)
-                {
-                    if (k > 0) // each next item: 6..10 lower, 0x14..0x22 to the other side of the target x (sign of the side: GUESS)
-                    {
-                        y += randIn(6, 0xb - 1);
-                        const int d = randIn(0x14, 0x23 - 1);
-                        x = minigames.petX + (x >= minigames.petX ? -d : d);
-                    }
-                    events.placeAt(cur->def->legacyId, swiftDropItems[k], x, y, false); // persist flag is a guess
-                }
-                sfx(0x54);
-                swiftDropStep = 0;
-                playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
-            }
-        };
+            WorldActionsEnv env{afterPickup, animDone, animRefById, blasts, cur, db, dialogue, digStep, digTicks, events, holeFills, host, isSpecialItem, itemDefs, itemName, kDigTicks, kHoleFillFps, minigames, overId, overTicks, ownedCount, pendingScreen, petFellIll, playAnim, pos, randIn, reactAnimId, restIdleId, restIdleRate, rnd, scripts, settlePhase, sfx, sp, spawnEnv, swiftDropItems, swiftDropStep, swiftDropTicks, walkTicks};
+            worldActionsCtl = std::make_unique<WorldActions>(std::move(env));
+        }
 
         auto useFurnishing = [&](auto &&...a) -> decltype(auto) { return (*itemScreenCtl).useFurnishing(std::forward<decltype(a)>(a)...); };
 
