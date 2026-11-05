@@ -142,6 +142,12 @@ namespace gp
              "name (the name, up to 9 characters: change it)"},
             {"frontend.options", "the player changed a row of the Options screen (Left / Right / Z), the game's own or a mod's (options.add); cancel or replace and the change is not made",
              "row (\"music\", \"sfx\", \"volume\", \"tutorials\", \"interpolate\", \"scale\", \"scale_mode\", \"window_mode\", \"aspect\", \"retro\", \"live\", a mod row's id, or \"\" for a key row), forward (1 = Right / Z, 0 = Left), by_z (1 = Z)"},
+            {"frontend.boot", "the front end starts and the logos are about to show (once per run; not when a debug flag skips them); the system has no default action: change the values",
+             "logo_ms (how long the logo holds, 0..30000: change it), skip (1 = go straight to the menu)"},
+            {"frontend.load", "a saved pet was chosen on the load screen (frontend.start follows when the game starts from it); cancel or replace and it is not picked",
+             "slot (0..2), name (the pet's name)"},
+            {"frontend.house", "Z on a house of the slot screen (after the name): an empty one makes the pet there, a full one asks to remove its pet; cancel or replace and the front end does nothing for that press",
+             "slot (0..2), occupied (1 = a pet lives there)"},
             {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
              "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };

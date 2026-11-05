@@ -297,7 +297,7 @@ public:
                     const double v = feScripts.optionGet(mi);
                     std::string value;
                     if (mr->kind == "toggle")
-                        value = v != 0 ? "On" : "Off";
+                        value = gp::fe::feText(v != 0 ? "on" : "off");
                     else if (mr->kind == "choice")
                         value = uiDb->textOr(mr->choices[size_t(std::clamp(int(v), 0, int(mr->choices.size()) - 1))], "?");
                     else

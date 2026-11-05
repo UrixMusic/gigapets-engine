@@ -320,8 +320,13 @@ public:
                         setScreenNoFade(Screen::Menu);
                     else if (slotFull[loadCur])
                     {
-                        loadPicked = true;
-                        loadPickedAt = SDL_GetTicks();
+                        // the engine system "frontend.load": a saved pet was chosen on the load screen (the game is started from it next: frontend.start); cancel or replace and it is not picked
+                        gp::SystemCtx lc;
+                        lc.set("slot", loadCur).set("name", slotName[loadCur]);
+                        feScripts.system("frontend.load", lc, [&]
+                                         {
+                            loadPicked = true;
+                            loadPickedAt = SDL_GetTicks(); });
                     }
                 }
             }
@@ -543,6 +548,13 @@ public:
             }
             else if (screen == Screen::House && down && !rep && fadeTick >= 16)
             {
+                // the engine system "frontend.house": Z on a house (an empty one makes the pet there, a full one asks to remove its pet); true = no mod took it over
+                auto houseSystemDefault = [&]
+                {
+                    gp::SystemCtx hc;
+                    hc.set("slot", houseCur).set("occupied", slotFull[houseCur] ? 1 : 0);
+                    return feScripts.system("frontend.house", hc, [] {});
+                };
                 if (dlg.open())
                 {
                     gp::DialogueBox &b = *dlg.box;
@@ -565,6 +577,9 @@ public:
                 {
                     if (houseCur == 3)
                         goMenu(); // Back
+                    else if (!houseSystemDefault()) // the engine system "frontend.house" (below): a mod took the choice over
+                    {
+                    }
                     else if (!slotFull[houseCur])
                         create(houseCur);
                     else

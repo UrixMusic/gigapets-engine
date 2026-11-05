@@ -26,6 +26,7 @@
 #include <tuple>
 #include <array>
 
+#include "../game/frontend/fe_strings.hpp" // the front end's words (reworded by text records)
 #include "../game/script_draw.hpp"
 #include "../engine/gl_shader.hpp"
 #include "../game/menu_draw.hpp"
@@ -157,23 +158,23 @@ inline void drawIntro(Gfx &g, const MenuView &m)
 {
     constexpr int L = 0x3000;
     g.drawTile(0x9f2, m.colour[1], 0xcf, 0x45, L);
-    g.drawTextBox(4, 0x4c7, 0x14, 0x25, "Next you will:", 0x140, 0, L);
-    g.drawTextBox(0, 0x28c, 0x14, 0x53, "* Choose a pet", 200, 0, L);
-    g.drawTextBox(0, 0x28c, 0x14, 0x67, "* Name it", 200, 0, L);
-    g.drawTextBox(0, 0x28c, 0x14, 0x7b, "* Pick a house", 200, 0, L);
-    g.drawTextBox(2, 0x28c, 0x0a, 0xc0, "Press Select to continue", 200, 1, L);
+    g.drawTextBox(4, 0x4c7, 0x14, 0x25, gp::fe::feText("intro_next"), 0x140, 0, L);
+    g.drawTextBox(0, 0x28c, 0x14, 0x53, gp::fe::feText("intro_pet"), 200, 0, L);
+    g.drawTextBox(0, 0x28c, 0x14, 0x67, gp::fe::feText("intro_name"), 200, 0, L);
+    g.drawTextBox(0, 0x28c, 0x14, 0x7b, gp::fe::feText("intro_house"), 200, 0, L);
+    g.drawTextBox(2, 0x28c, 0x0a, 0xc0, gp::fe::feText("intro_continue"), 200, 1, L);
 }
 
 inline void drawHouse(Gfx &g, int cur, const std::string (&names)[3], const bool (&full)[3])
 {
     constexpr int L = 0x3000;
     static const int ys[4] = {0x7d, 0x96, 0xaf, 200};
-    g.drawTextBox(4, 0x4c7, 0, 0x14, "Select your house.", 0x140, 1, L);
+    g.drawTextBox(4, 0x4c7, 0, 0x14, gp::fe::feText("house_title"), 0x140, 1, L);
     if (cur != 3)
         g.drawTile(0x9c3 + cur, 0x28c, 0x108, 0xe6, L, 999);
     for (int i = 0; i < 4; ++i)
     {
-        const std::string label = i == 3 ? "Back" : (full[i] ? names[i] : "Empty");
+        const std::string label = i == 3 ? gp::fe::feText("back") : (full[i] ? names[i] : gp::fe::feText("empty"));
         g.drawTextBox(i == cur ? 5 : 4, 0x4c7, 8, ys[i], label, 0x140, 0, L);
     }
 }
@@ -191,7 +192,7 @@ inline void drawLoad(Gfx &g, int cur, bool picked, const std::string (&names)[3]
     g.drawTile(0x9e6, 0x4c7, 0x5f, 8, L, 999);
     for (int i = 0; i < 4; ++i)
     {
-        const std::string label = i == 3 ? "Back" : (full[i] ? names[i] : "Empty");
+        const std::string label = i == 3 ? gp::fe::feText("back") : (full[i] ? names[i] : gp::fe::feText("empty"));
         g.drawTextBox(i == cur ? (picked ? 6 : 5) : 4, 0x4c7, 0, ys[i], label, 0x140, 1, L);
     }
 }
@@ -214,22 +215,22 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
     };
     static const Row rows[gp::kOptRowsDebug] = { // sprites and x from the ROM's table at 0xf47c
         {{0x9d8, 0x9de, 0x9de}, 0x1e, nullptr},
-        {{-1, -1, -1}, 0x1e, "SFX"},
+        {{-1, -1, -1}, 0x1e, "opt_sfx"},
         {{0x9dc, 0x9e2, 0x9e2}, 0x1e, nullptr},
         {{0x9db, 0x9e1, 0x9e2}, 0x1e, nullptr},
-        {{-1, -1, -1}, 0x1e, "Interpolate"},
-        {{-1, -1, -1}, 0x1e, "Scale"},
-        {{-1, -1, -1}, 0x1e, "Scale Mode"},
-        {{-1, -1, -1}, 0x1e, "Window Mode"},
-        {{-1, -1, -1}, 0x1e, "Aspect Ratio"},
-        {{-1, -1, -1}, 0x1e, "Retro Audio"},
-        {{-1, -1, -1}, 0x1e, "Music Playback"},
+        {{-1, -1, -1}, 0x1e, "opt_interpolate"},
+        {{-1, -1, -1}, 0x1e, "opt_scale"},
+        {{-1, -1, -1}, 0x1e, "opt_scale_mode"},
+        {{-1, -1, -1}, 0x1e, "opt_window_mode"},
+        {{-1, -1, -1}, 0x1e, "opt_aspect"},
+        {{-1, -1, -1}, 0x1e, "opt_retro"},
+        {{-1, -1, -1}, 0x1e, "opt_live"},
         {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, // the key rows: named below
         {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""},
         {{0x9d7, 0x9dd, 0x9ed}, 0x82, nullptr},
-        {{-1, -1, -1}, 0x1e, "Test Mode"}, // debug mode only
+        {{-1, -1, -1}, 0x1e, "opt_test"}, // debug mode only
     };
-    static const char *const kWindowNames[gp::kWindowModeCount] = {"Windowed", "Fullscreen", "Borderless"};
+    const std::string kWindowNames[gp::kWindowModeCount] = {gp::fe::feText("windowed"), gp::fe::feText("fullscreen"), gp::fe::feText("borderless")};
     g.drawTile(0x9e6, 0x4c7, 0x5f, 8, L, 999);
     auto value = [&](int row, int y, const std::string &text, bool small = false)
     {
@@ -260,10 +261,10 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
         if (rows[r].s[0] >= 0)
             g.drawTile(rows[r].s[i == sel ? (pressed ? 2 : 1) : 0], BP, rows[r].x, y, L, 999);
         else if (r == gp::kOptSfx) // the big-font label, centred where it was tuned
-            g.drawTextBox(sel == i ? 5 : 4, 0x4c7, rows[r].x - 11, y + 2, rows[r].label, 0x50, 1, L);
+            g.drawTextBox(sel == i ? 5 : 4, 0x4c7, rows[r].x - 11, y + 2, gp::fe::feText(rows[r].label), 0x50, 1, L);
         else // the small-font names, left-aligned where the buttons' art starts; the value is right-aligned (below)
         {
-            const std::string name = gp::isKeyRow(r) ? std::string("Key: ") + gp::kActionNames[gp::keyRowAction(r)] : std::string(rows[r].label);
+            const std::string name = gp::isKeyRow(r) ? gp::fe::feText("key_prefix") + gp::kActionNames[gp::keyRowAction(r)] : gp::fe::feText(rows[r].label);
             g.drawTextBox(2, 0x28c, kLabelX, y + 4, name, kLabelW, 0, L);
             if (sel == i) // the small font has no highlight colour, so the selected row gets a marker
                 g.drawTextBox(2, 0x28c, kLabelX - 12, y + 4, ">", 0x10, 0, L);
@@ -287,30 +288,30 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
             onOff(i, y, o.tutorials);
             break;
         case gp::kOptInterpolate:
-            value(i, y, o.interpolate ? "On" : "Off", true); // the new switches are small-font text, not the ROM's tiles
+            value(i, y, gp::fe::feText(o.interpolate ? "on" : "off"), true); // the new switches are small-font text, not the ROM's tiles
             break;
         case gp::kOptScale:
             std::snprintf(buf, sizeof buf, "%dx", o.scale);
             value(i, y, buf, true);
             break;
         case gp::kOptScaleMode:
-            value(i, y, o.perfectScale ? "Perfect" : "Stretch", true);
+            value(i, y, gp::fe::feText(o.perfectScale ? "perfect" : "stretch"), true);
             break;
         case gp::kOptAspect:
             value(i, y, o.aspect == 1 ? "16:9" : "4:3", true);
             break;
         case gp::kOptRetro:
-            value(i, y, o.retroAudio ? "On" : "Off", true);
+            value(i, y, gp::fe::feText(o.retroAudio ? "on" : "off"), true);
             break;
         case gp::kOptLive:
-            value(i, y, o.liveMusic ? "Live" : "Baked", true);
+            value(i, y, gp::fe::feText(o.liveMusic ? "live" : "baked"), true);
             break;
         case gp::kOptWindowMode:
             value(i, y, kWindowNames[std::clamp(o.windowMode, 0, gp::kWindowModeCount - 1)], true);
             break;
         default:
             if (gp::isKeyRow(r)) // a key binding: the key's name, or the prompt while it waits for one
-                value(i, y, capture == gp::keyRowAction(r) ? std::string("Press a key") : gp::keys().name(gp::keyRowAction(r)), true);
+                value(i, y, capture == gp::keyRowAction(r) ? gp::fe::feText("key_press") : gp::keys().name(gp::keyRowAction(r)), true);
             break;
         }
     }
@@ -1568,7 +1569,9 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             gp::importRom(rom, *uiDb, 0);
             // A pet that wears a mod's colour needs that palette to be drawn in the slot list: load the mods (their palette records are what
             // matter here) and fill the palette registry the sprite code looks mod colours up in. The game does the same when it starts.
+            gp::fe::importFeStrings(*uiDb); // the front end's words, as texts a mod can replace
             gp::ModReport feRep = gp::importMods(*uiDb, "mods");
+            gp::fe::feDb() = uiDb.get();
             for (const std::string &w : feRep.errors) // (a mod that did not load: its folder name must be its id, and so on)
                 std::fprintf(stderr, "front end: mod error: %s\n", w.c_str());
             for (const std::string &p : gp::checkModScripts(*uiDb, feRep, feScripts, "mods")) // (a script that does not load is reported by the game itself, once it starts)
@@ -1771,7 +1774,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         int species = 0;
         Uint32 pressedUntil = 0;
         int browseA = 2, browsePal = 0x5c5;
-        constexpr Uint32 kLogoMs = 3500; // 3.5 s, decoded from the float compare
+        Uint32 kLogoMs = 3500; // 3.5 s, decoded from the float compare (the system "frontend.boot" may change it)
         Uint32 bootT0 = SDL_GetTicks(), lastMs = bootT0;
         double tickAcc = 0;
         int bootPhase = 0; // 0 logo hold, 1 fade out, 2 slide-in
@@ -1951,6 +1954,16 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             }
         }
         bootT0 = lastMs = SDL_GetTicks();
+        if (screen == Screen::Boot)
+        {
+            // the engine system "frontend.boot": the logos are about to show (once, when the game starts); logo_ms is how long they hold (0..30000, change it), skip 1 goes straight to the menu
+            gp::SystemCtx bc;
+            bc.set("logo_ms", double(kLogoMs)).set("skip", 0);
+            feScripts.system("frontend.boot", bc, [] {});
+            kLogoMs = Uint32(std::clamp(int(bc.num("logo_ms")), 0, 30000));
+            if (bc.num("skip") != 0)
+                screen = Screen::Menu;
+        }
         bool run = true;
         int frame = 0; // (the loop counter: the sections below are lambdas now)
         std::unique_ptr<FrontEvents> frontEventsCtl; // built below, once everything it takes is declared (front_events.hpp)
