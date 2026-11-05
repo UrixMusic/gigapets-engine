@@ -32,6 +32,15 @@ static Run decay(gp::ScriptHost &h, double amount, std::string stat = "hunger")
 
 int main()
 {
+    { // the room systems exist; room.leave's x, y come back changed
+        gp::ScriptHost h;
+        CHECK(h.runString("a", "local L = System.hooks('room.leave'); function L:before(ctx) ctx.x = ctx.x + 5 end; System.hooks('room.enter'); System.hooks('room.interact')"));
+        gp::SystemCtx c;
+        c.set("location", 0).set("x", 100).set("y", 50);
+        h.system("room.leave", c, [] {});
+        CHECK(c.num("x") == 105 && c.num("y") == 50);
+        CHECK(h.errors().empty());
+    }
     { // player.tricks / setTricks: the mask of known tricks, in any order
         gp::ScriptHost h;
         int mask = 1;

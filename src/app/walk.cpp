@@ -3092,16 +3092,25 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         {
             if (!gp::isRoomLocation(location) || room)
                 return;
-            sfx(gp::kRoomEnterSound); // PlaySoundEffect(0x13, 200)
-            requestScreen([&, location]
-                          { beginRoom(location); });
+            // the engine system "room.enter": the pet goes through a home or hotel door (kind: "home" = its own, "visit" = another save slot's, "hotel"); cancel or replace and it stays outside
+            gp::SystemCtx ec;
+            ec.set("location", location).set("kind", gp::isHotel(location) ? "hotel" : location == slot ? "home" : "visit");
+            scripts.system("room.enter", ec, [&]
+                           {
+                sfx(gp::kRoomEnterSound); // PlaySoundEffect(0x13, 200)
+                requestScreen([&, location]
+                              { beginRoom(location); }); });
         };
 
         auto leaveRoom = [&]
         {
             const gp::RoomExitPoint p = gp::roomReturnPoint(room->location); // back at the door, by return state
+            // the engine system "room.leave": where the pet comes out in the area (change x, y: it cannot be cancelled, the room is already over)
+            gp::SystemCtx lc;
+            lc.set("location", room->location).set("x", p.x).set("y", p.y);
+            scripts.system("room.leave", lc, [] {});
             room.reset();
-            pos = {p.x, p.y};
+            pos = {int(lc.num("x")), int(lc.num("y"))};
             prevPos = pos;
             facing = 1;
             walkTicks = 0;
@@ -3719,29 +3728,34 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 }
                 else if (r.phase == P::Idle)
                     ++r.animTicks;
-                // Z at the door walks the pet out (HandlePetStageEvents: the nearest decoration is the door -> activity 4).
-                if (zPressed && r.phase != P::Walking && r.nearby == gp::kDecorDoor)
+                // Z next to something (the engine system "room.interact": target "door", "bowl", "visitor" or "bed"; cancel, or replace, and nothing happens, or the mod does its own thing)
+                const char *target = !zPressed || r.phase == P::Walking ? nullptr
+                                     : r.nearby == gp::kDecorDoor      ? "door"
+                                     : r.nearby == gp::kDecorBowl      ? "bowl"
+                                     : r.nearby == gp::kDecorVisitor   ? "visitor"
+                                     : r.nearby == gp::kDecorBed       ? "bed"
+                                                                       : nullptr;
+                if (target)
                 {
-                    r.phase = P::Leaving;
-                    r.walkTicks = 0;
-                }
-                // Z at the food bowl: eat (ApplyItemCategoryEffect(0x1c), then activity 6).
-                else if (zPressed && r.phase != P::Walking && r.nearby == gp::kDecorBowl)
-                {
-                    startEating(r, true);
-                    return;
-                }
-                // Z on the visiting pet opens the item screen in mode 2 to give it items (not built yet).
-                else if (zPressed && r.phase != P::Walking && r.nearby == gp::kDecorVisitor)
-                {
-                    startGive(r);
-                    return;
-                }
-                // Z at the bed: sleep (activity 5).
-                else if (zPressed && r.phase != P::Walking && r.nearby == gp::kDecorBed)
-                {
-                    startSleep(r, false);
-                    return;
+                    gp::SystemCtx ic;
+                    ic.set("location", r.location).set("target", target).set("x", r.x);
+                    bool ran = false;
+                    scripts.system("room.interact", ic, [&]
+                                   {
+                        ran = true;
+                        if (r.nearby == gp::kDecorDoor) // Z at the door walks the pet out (HandlePetStageEvents: the nearest decoration is the door -> activity 4)
+                        {
+                            r.phase = P::Leaving;
+                            r.walkTicks = 0;
+                        }
+                        else if (r.nearby == gp::kDecorBowl) // Z at the food bowl: eat (ApplyItemCategoryEffect(0x1c), then activity 6)
+                            startEating(r, true);
+                        else if (r.nearby == gp::kDecorVisitor) // Z on the visiting pet opens the item screen in mode 2 to give it items
+                            startGive(r);
+                        else if (r.nearby == gp::kDecorBed) // Z at the bed: sleep (activity 5)
+                            startSleep(r, false); });
+                    if (ran && r.nearby != gp::kDecorDoor)
+                        return;
                 }
             }
             // The decoration next to the pet, for the selector arrow and for Z (FindDecorationNearPetX). Only while the pet is

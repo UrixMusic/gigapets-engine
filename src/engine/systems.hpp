@@ -104,6 +104,12 @@ namespace gp
              "number (the quest's number), scripted (1 = a story quest), giver, receiver (npc ids; set them), type (a quest type id, e.g. \"base:questtype/3\"), tier (the area tier 0..6), time (a time limit in seconds, 0 = none), objectives, bonus, spawn (lists of \"item_id*count\" joined by commas, e.g. \"base:item/205*2,m:item/gem*1\"; unknown items are dropped). A replace that leaves giver empty gets the game's roll"},
             {"quest.text", "a line of a generated quest is about to be shown (also the reminder of a story quest: kind \"reminder\"); change `text` to reword it",
              "kind (\"request\", \"accept\", \"decline\", \"reminder\", \"complete\", \"hint\", \"fail\", or \"story\" for a line of a story quest dialogue), text (the line, the {names} already filled in), number (the quest's number), type (a quest type id), giver, receiver (npc ids)"},
+            {"room.enter", "the pet goes through the door of a home or hotel (before the screen fades to the room); cancel or replace and it stays outside",
+             "location (0..2 the player homes, 4..7 the hotels), kind (\"home\" = its own, \"visit\" = another save slot's, \"hotel\")"},
+            {"room.leave", "the pet has walked out of the room and is put back in the area; it cannot be cancelled",
+             "location, x, y (where it comes out in the area: change them)"},
+            {"room.interact", "Z next to something in a room: the door (leave), the food bowl (eat), the bed (sleep), or the visiting pet (give items); cancel or replace and nothing of that happens",
+             "location, target (\"door\", \"bowl\", \"bed\" or \"visitor\"), x (the pet's place along the room)"},
             {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
              "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };
