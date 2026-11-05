@@ -26,6 +26,7 @@
 #include <tuple>
 #include <array>
 
+#include "../game/script_draw.hpp"
 #include "../game/menu_draw.hpp"
 #include "../game/name_entry.hpp"
 #include "rom.hpp"
@@ -1565,6 +1566,31 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             }
             return *slot;
         };
+        SpriteCache feSprites(ren, *uiDb); // the pictures a script draws in the front end
+        ScriptDrawer feDrawer(ren);
+        feDrawer.sprite = [&](const std::string &id) -> AnimRef
+        {
+            AnimRef A;
+            A.anim = uiDb->anim(id);
+            A.tex = A.anim ? feSprites.animTextures(id) : nullptr;
+            return A;
+        };
+        feDrawer.text = [&](const gp::DrawCmd &c)
+        {
+            std::string str;
+            if (c.kind == gp::DrawCmd::Kind::Num)
+                str = c.num == std::floor(c.num) && std::fabs(c.num) < 1e15 ? std::to_string(static_cast<long long>(c.num)) : std::to_string(c.num);
+            else
+                str = gp::fillTemplateVars(uiDb->textOr(c.str, ""), c.vars);
+            const gp::Align al = c.align == 1 ? gp::Align::Center : c.align == 2 ? gp::Align::Right : gp::Align::Left;
+            int bx = c.x, bw = c.width;
+            if (bw == 0)
+            {
+                bw = 320;
+                bx = c.align == 1 ? c.x - bw / 2 : c.align == 2 ? c.x - bw : c.x;
+            }
+            fontFor(c.font == 3 ? 3 : 0, c.font == 3 ? 0x104 : 0x28c).draw(str, bx, c.y, bw, al);
+        };
         gp::DebugCode debugCode;
         bool showOutlines = false; // F8: the old white debug boxes
 
@@ -2643,27 +2669,13 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                                                    : gp::Align::Left;
                 fontFor(t.style, t.pal).draw(t.s, t.x, t.y, t.w, al);
             }
-            // Game.hooks().onHud(g) draws over the front end's screens too (rect, text and num; pictures are not drawn here)
-            for (const gp::DrawCmd &c : feScripts.drawHud(""))
-            {
-                if (c.kind == gp::DrawCmd::Kind::Rect)
-                {
-                    SDL_SetRenderDrawBlendMode(ren, c.blend == 1 ? SDL_BLENDMODE_ADD : c.blend == 2 ? SDL_BLENDMODE_MOD : c.a < 255 ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE);
-                    SDL_SetRenderDrawColor(ren, Uint8(c.r), Uint8(c.g), Uint8(c.b), Uint8(c.a));
-                    const SDL_Rect r{c.x, c.y, c.w, c.h};
-                    c.fill ? SDL_RenderFillRect(ren, &r) : SDL_RenderDrawRect(ren, &r);
-                    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
-                }
-                else if (c.kind == gp::DrawCmd::Kind::Text || c.kind == gp::DrawCmd::Kind::Num)
-                {
-                    std::string str;
-                    if (c.kind == gp::DrawCmd::Kind::Num)
-                        str = c.num == std::floor(c.num) && std::fabs(c.num) < 1e15 ? std::to_string(static_cast<long long>(c.num)) : std::to_string(c.num);
-                    else
-                        str = gp::fillTemplateVars(uiDb->textOr(c.str, ""), c.vars);
-                    fontFor(c.font == 3 ? 3 : 0, c.font == 3 ? 0x104 : 0x28c).draw(str, c.x, c.y, c.width > 0 ? c.width : 320, c.align == 1 ? gp::Align::Center : c.align == 2 ? gp::Align::Right : gp::Align::Left);
-                }
-            }
+            // Game.hooks().onHud(g) and onPostDraw(g) draw over the front end's screens too, with everything a script can draw (script_draw.hpp: shapes, canvases, blits, meshes, "@frame",
+            // sprites of mods and the game's pictures, text)
+            feDrawer.run(feScripts.drawHud(""));
+            gp::useWholeScreen(ren);
+            feDrawer.frameDrawW = gp::logicalW();
+            feDrawer.frameDrawH = 240;
+            feDrawer.run(feScripts.drawPost(gp::logicalW()));
             if (showOutlines)
             {
                 SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
