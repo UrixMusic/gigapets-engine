@@ -39,8 +39,58 @@ namespace gp
         // Offered every reward activity (the code: -2 the bonus scatter, -7 the spawn drop, -8 / -10 the story blasts, ...) before it runs; the host may change `code` (another
         // native reward) and returns whether the activity should run at all (false: a mod cancelled or replaced it; the dialogue just carries on). Unset = run it.
         std::function<bool(int &code)> rewardSystem;
+        // The next quest is being set up (QuestRuntime::load): the host (the engine system "quest.load") may change it or do the choosing itself. `d` is the scripted record, or for a
+        // generated quest an empty one with giver -1; `roll` runs the game's own generator into it. Unset = just roll.
+        std::function<void(QuestDef &d, int counter, bool scripted, const std::function<void()> &roll)> shapeQuest;
         RandFn rnd;
     };
+
+    // A list of quest entries as text, for scripts: "item_id*count" joined by commas, with "*buried" (w2) when it is not 0. parseQuestEntries drops ids `known` refuses.
+    inline std::string formatQuestEntries(const std::vector<QuestEntry> &v)
+    {
+        std::string s;
+        for (const QuestEntry &e : v)
+        {
+            if (!s.empty())
+                s += ',';
+            s += e.item + "*" + std::to_string(e.count);
+            if (e.w2)
+                s += "*" + std::to_string(e.w2);
+        }
+        return s;
+    }
+    inline std::vector<QuestEntry> parseQuestEntries(const std::string &text, const std::function<bool(const Id &)> &known)
+    {
+        std::vector<QuestEntry> out;
+        size_t at = 0;
+        while (at <= text.size())
+        {
+            size_t end = text.find(',', at);
+            if (end == std::string::npos)
+                end = text.size();
+            std::string part = text.substr(at, end - at);
+            at = end + 1;
+            while (!part.empty() && part.front() == ' ')
+                part.erase(part.begin());
+            if (part.empty())
+                continue;
+            QuestEntry e;
+            e.count = 1;
+            const size_t star = part.find('*');
+            e.item = part.substr(0, star);
+            if (star != std::string::npos)
+            {
+                const size_t star2 = part.find('*', star + 1);
+                e.count = std::atoi(part.substr(star + 1, star2 == std::string::npos ? std::string::npos : star2 - star - 1).c_str());
+                if (star2 != std::string::npos)
+                    e.w2 = std::atoi(part.substr(star2 + 1).c_str());
+            }
+            if (e.count < 1 || e.item.empty() || (known && !known(e.item)))
+                continue;
+            out.push_back(e);
+        }
+        return out;
+    }
 
     // Captures `this` in callbacks: don't move or copy it once a box is open.
     struct QuestRuntime
@@ -76,13 +126,28 @@ namespace gp
                     scripted = true;
                     break;
                 }
-            if (!scripted)
+            const auto roll = [&]
             {
-                if (world.areaTier)
+                if (!scripted && world.areaTier)
                 {
                     d = rollNextQuest(counter, q.prevReceiver, q.prevTypeMode, table, world, h.rnd);
                     d.id = counter;
                 }
+            };
+            if (!scripted)
+                d.giver = -1; // (the generator fills it; a mod that did the choosing leaves its own)
+            if (h.shapeQuest)
+                h.shapeQuest(d, counter, scripted, roll);
+            else
+                roll();
+            if (!scripted)
+            {
+                if (d.giver < 0) // a mod took the choosing over and chose nothing: the game's roll
+                    roll();
+                if (d.giver < 0)
+                    d.giver = 0;
+                if (world.areaTier && d.id != counter)
+                    d.id = counter;
                 d.generic = true; // id stays -1 (talk() ignores it) until world is set
             }
             loadQuest(q, std::move(d));

@@ -222,6 +222,25 @@ int main()
         CHECK(placed4 == (mode == 0 ? 1 : 0) && sfx4 == (mode == 0 ? 1 : 0));
         CHECK(r4.counter == 2 && r4.q.phase == 0);
     }
+    // ---- entries as text, and shapeQuest: the host sees the quest being set up and may change it
+    {
+        std::vector<QuestEntry> v = parseQuestEntries("base:item/5*2, m:item/x*3*1,nope*1,base:item/9*0,", [](const Id &i) { return i != "nope"; });
+        CHECK(v.size() == 2 && v[0].item == "base:item/5" && v[0].count == 2 && v[1].item == "m:item/x" && v[1].count == 3 && v[1].w2 == 1);
+        CHECK(formatQuestEntries(v) == "base:item/5*2,m:item/x*3*1");
+        CHECK(parseQuestEntries("a", nullptr).size() == 1 && parseQuestEntries("a", nullptr)[0].count == 1);
+        Dialogue d5;
+        QuestRuntime r5;
+        r5.dlg = &d5;
+        r5.table = tbl;
+        int seen = -1;
+        bool rolled = false;
+        r5.h.shapeQuest = [&](QuestDef &d, int counter, bool scripted, const std::function<void()> &roll) { seen = counter; if (scripted) d.giver = 0x33; (void)roll; };
+        r5.load(1);
+        CHECK(seen == 1 && r5.q.def.giver == 0x33); // a scripted quest, changed
+        r5.h.shapeQuest = [&](QuestDef &d, int counter, bool scripted, const std::function<void()> &roll) { rolled = !scripted; roll(); };
+        r5.load(r5.lastId() + 1);
+        CHECK(rolled && r5.q.def.giver >= 0); // a generated one: the roll ran, nothing is left at the placeholder -1
+    }
     // no onComplete wired: rewards as before
     {
         Dialogue d3;

@@ -100,6 +100,8 @@ namespace gp
              "npc, level (the teacher's trick, 1..3), known (how many tricks the pet knows), mask (which: bit 0 = trick 1 .. bit 2 = trick 3), cooldown (seconds left of the shared cooldown), can (1 = a lesson now: set it to decide; 0 falls through to a normal friend visit); replace or cancel = you did the talk"},
             {"trick.learn", "a lesson ends (the minigame was won or lost), before the message",
              "npc, level, won (1 / 0: change it), mask (which tricks the pet will know after: bit 0 = trick 1 .. bit 2 = trick 3; the level's bit is added on a win: change it, the pet may learn them in any order)"},
+            {"quest.load", "the next quest is set up (a scripted story quest, or a generated one that the game rolls); replace it and do the choosing yourself, or change what was rolled in after",
+             "number (the quest's number), scripted (1 = a story quest), giver, receiver (npc ids; set them), type (a quest type id, e.g. \"base:questtype/3\"), tier (the area tier 0..6), time (a time limit in seconds, 0 = none), objectives, bonus, spawn (lists of \"item_id*count\" joined by commas, e.g. \"base:item/205*2,m:item/gem*1\"; unknown items are dropped). A replace that leaves giver empty gets the game's roll"},
             {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
              "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };

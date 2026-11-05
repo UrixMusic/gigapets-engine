@@ -5126,6 +5126,59 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             refreshBits();
             saveGame();
         };
+        // the engine system "quest.load" (systems.hpp): the next quest is being set up. NPCs and the type go by their ids; objectives / bonus / spawn are "item_id*count" lists
+        qh.shapeQuest = [&](gp::QuestDef &d, int counter, bool scripted, const std::function<void()> &roll)
+        {
+            const auto npcId = [&](int p) -> std::string
+            { const gp::NpcDef *n = p >= 0 ? npcAt(p) : nullptr; return n ? n->id : std::string(); };
+            const auto poolOf = [&](const std::string &id) -> int
+            {
+                for (int p = 0; p < 0x4e; ++p)
+                    if (npcByIndex[size_t(p)] && npcByIndex[size_t(p)]->id == id)
+                        return p;
+                for (const auto &[p, n] : modPoolNpcs)
+                    if (n->id == id)
+                        return p;
+                return -1;
+            };
+            const auto typeOfId = [&](const std::string &id) -> int
+            {
+                for (const auto &t : quests.world.types)
+                    if (t.id == id)
+                        return t.mode;
+                return -1;
+            };
+            const auto fill = [&](gp::SystemCtx &c)
+            {
+                c.set("giver", npcId(d.giver)).set("receiver", npcId(d.receiver)).set("type", quests.world.type(d.typeMode).id).set("tier", d.areaTier).set("time", d.timeLimit)
+                    .set("objectives", gp::formatQuestEntries(d.objectives)).set("bonus", gp::formatQuestEntries(d.bonus)).set("spawn", gp::formatQuestEntries(d.spawn));
+            };
+            gp::SystemCtx c;
+            c.set("number", counter).set("scripted", scripted ? 1 : 0);
+            fill(c);
+            scripts.system("quest.load", c, [&]
+                           {
+                roll();
+                fill(c); });
+            const auto itemKnown = [&](const gp::Id &i) { return db.item(i) != nullptr; };
+            if (const int g = poolOf(c.str("giver")); g >= 0)
+                d.giver = g;
+            else if (!scripted && c.str("giver").empty())
+                d.giver = -1; // (nothing chosen: the game rolls)
+            if (const int r = poolOf(c.str("receiver")); r >= 0)
+                d.receiver = r;
+            if (const int t = typeOfId(c.str("type")); t >= 0)
+                d.typeMode = t;
+            d.areaTier = std::clamp(int(c.num("tier")), 0, 6);
+            d.timeLimit = std::max(0, int(c.num("time")));
+            // (a list a mod did not touch stays exactly as it was)
+            if (c.str("objectives") != gp::formatQuestEntries(d.objectives))
+                d.objectives = gp::parseQuestEntries(c.str("objectives"), itemKnown);
+            if (c.str("bonus") != gp::formatQuestEntries(d.bonus))
+                d.bonus = gp::parseQuestEntries(c.str("bonus"), itemKnown);
+            if (c.str("spawn") != gp::formatQuestEntries(d.spawn))
+                d.spawn = gp::parseQuestEntries(c.str("spawn"), itemKnown);
+        };
         // the engine system "quest.reward" (systems.hpp): every reward activity of a quest goes through it
         qh.rewardSystem = [&](int &code)
         {
