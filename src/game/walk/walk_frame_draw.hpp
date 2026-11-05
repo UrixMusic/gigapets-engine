@@ -128,6 +128,26 @@ class FrameDraw : public FrameDrawEnv
 {
 public:
     explicit FrameDraw(FrameDrawEnv env) : FrameDrawEnv(std::move(env)) {}
+    ~FrameDraw()
+    {
+        if (worldTex_)
+            SDL_DestroyTexture(worldTex_);
+    }
+    // The world is drawn into this picture (the size of the logical screen) when the camera is zoomed or turned, and then shown scaled / rotated (see "camera.view": zoom, angle)
+    SDL_Texture *worldTex_ = nullptr;
+    int worldTexW_ = 0, worldTexH_ = 0;
+    SDL_Texture *worldTarget(int w, int h)
+    {
+        if (!worldTex_ || worldTexW_ != w || worldTexH_ != h)
+        {
+            if (worldTex_)
+                SDL_DestroyTexture(worldTex_);
+            worldTex_ = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, w, h);
+            worldTexW_ = w;
+            worldTexH_ = h;
+        }
+        return worldTex_;
+    }
     void sfx(int id, int vol = 255) { sfxFn(id, vol); }
     void playAnim(int aid, bool loop, int rate, Pose p, std::vector<AnimStep> next = {}) { playAnimFn(aid, loop, rate, p, next); }
 
@@ -136,21 +156,49 @@ public:
     {
         renderAlpha = smoothCam ? float(std::min(acc * tickHz(), 1.0)) : 1.f;
         const float petFX = smoothAt(prevPos.x, pos.x), petFY = smoothAt(prevPos.y, pos.y); // pet's drawn position
+        float zoom = 1.f, angle = 0.f;
         float camX = clampCamF(petFX - W / 2, cur->img.w, W);
         float camY = clampCamF(petFY - gp::tuning().camY - shakeDy, cur->img.h, H); // the belly flop moves the camera's lead
         {
             // the engine system "camera.view" (every frame): the top left corner of the view in the area, as the game worked it out (x, y: the pet's drawn place). A mod changes
-            // camX / camY (follow something else, pan, zoom is not here), or replaces it and sets them itself; w, h = the area's size, W, H the view's
+            // camX / camY (follow something else, pan), zoom (1 = as it is, 2 = twice as big, 0.5 = twice as far; 0.25 to 4) and angle (degrees, the world turns around the middle of the
+            // view; the screens, dialogue and HUD do not), or replaces it and sets them itself; w, h = the area's size, W, H the view's
             gp::SystemCtx cc;
-            cc.set("x", petFX).set("y", petFY).set("camX", camX).set("camY", camY).set("w", cur->img.w).set("h", cur->img.h).set("viewW", W).set("viewH", H);
+            cc.set("x", petFX).set("y", petFY).set("camX", camX).set("camY", camY).set("w", cur->img.w).set("h", cur->img.h).set("viewW", W).set("viewH", H).set("zoom", 1).set("angle", 0);
             scripts.system("camera.view", cc, [] {});
             camX = float(cc.num("camX"));
             camY = float(cc.num("camY"));
+            zoom = std::clamp(float(cc.num("zoom", 1)), 0.25f, 4.f);
+            angle = std::fmod(float(cc.num("angle", 0)), 360.f);
+            if (!(zoom > 0.f) || room) // (a house room has its own camera)
+                zoom = 1.f;
+            if (room)
+                angle = 0.f;
         }
-        cur->runtime->updateVisible(int(std::floor(camX)), int(std::floor(camY)), W, H);
+        const bool worldFx = zoom != 1.f || angle != 0.f;
+        // The world is drawn into a picture of (view size / zoom), around the same middle, and that picture is shown over the whole view: zoomed out, more of the area is in it
+        const int tw = worldFx ? std::max(8, int(std::ceil(float(W) / zoom))) : W, th = worldFx ? std::max(8, int(std::ceil(float(H) / zoom))) : H;
+        if (worldFx)
+        {
+            camX += float(W - tw) * 0.5f;
+            camY += float(H - th) * 0.5f;
+        }
+        {
+            const float spread = angle != 0.f ? 1.5f : 1.f; // (turned, the corners of the view show more of the area)
+            const int vw = int(std::ceil(float(tw) * spread)), vh = int(std::ceil(float(th) * spread));
+            cur->runtime->updateVisible(int(std::floor(camX - float(vw - tw) * 0.5f)), int(std::floor(camY - float(vh - th) * 0.5f)), vw, vh);
+        }
 
         // ---- DRAW ----
         gp::clearFrame(ren);
+        SDL_Texture *worldTarget_ = nullptr;
+        if (worldFx && (worldTarget_ = worldTarget(tw, th))) // the world is drawn in its own picture and shown zoomed / turned below
+        {
+            SDL_SetRenderTarget(ren, worldTarget_);
+            SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+            SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+            SDL_RenderClear(ren);
+        }
         SDL_FRect dst{-camX, -camY, float(cur->img.w), float(cur->img.h)};
         SDL_RenderCopyF(ren, tex, nullptr, &dst);
 
@@ -501,6 +549,13 @@ public:
                     SDL_RenderCopyF(ren, (*A.tex)[size_t(f)], nullptr, &r);
                 }
             }
+        }
+        if (worldTarget_) // the world is done: show its picture zoomed / turned about the middle of the screen
+        {
+            SDL_SetRenderTarget(ren, nullptr);
+            const SDL_FRect dstW{0.f, 0.f, float(W), float(H)};
+            SDL_SetTextureBlendMode(worldTarget_, SDL_BLENDMODE_NONE);
+            SDL_RenderCopyExF(ren, worldTarget_, nullptr, &dstW, double(angle), nullptr, SDL_FLIP_NONE);
         }
         if (W > 320) // 16:9: the 320 x 240 screens (and the HUD, dialogue and bar) sit in the middle of the wide world
         {

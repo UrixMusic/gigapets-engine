@@ -113,7 +113,7 @@ namespace gp
             {"room.activity", "a button of the house bar starts a sequence in a room: sleeping or washing (the bed and the food bowl in the room itself are room.interact); cancel or replace and nothing starts",
              "location, activity (\"sleep\" or \"wash\")"},
             {"camera.view", "every frame in the walking world: where the camera is (the view's top left corner in the area), after the game worked it out; the belly-flop shake is already in it",
-             "x, y (the pet's drawn place), camX, camY (the corner: change them to look elsewhere; not clamped to the area), w, h (the area's size), viewW, viewH (the view's size in pixels)"},
+             "x, y (the pet's drawn place), camX, camY (the corner: change them to look elsewhere; not clamped to the area), zoom (1 = as is; 0.25 to 4) and angle (degrees) turn and scale the world around the middle of the view, the screens and HUD stay as they are, w, h (the area's size), viewW, viewH (the view's size in pixels)"},
             {"minigame.start", "a minigame is about to open (a well, a game tent, a friend's game, a trick lesson); cancel or replace and it does not open",
              "game (\"swift_pick\", \"three_in_a_row\", \"memory_match\" or \"trick_guess\")"},
             {"minigame.prize", "a minigame ended and is about to hand out its prize (the pet drops it); cancel or replace and nothing drops",

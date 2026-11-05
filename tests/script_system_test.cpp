@@ -44,12 +44,12 @@ int main()
     }
     { // camera and minigame systems exist; a camera hook's numbers (fractions too) and a prize list come back changed
         gp::ScriptHost h;
-        CHECK(h.runString("a", "local C = System.hooks('camera.view'); function C:after(ctx) ctx.camX = ctx.camX + 0.5; ctx.camY = ctx.y end;"
+        CHECK(h.runString("a", "local C = System.hooks('camera.view'); function C:after(ctx) ctx.camX = ctx.camX + 0.5; ctx.camY = ctx.y; ctx.zoom = ctx.zoom * 2; ctx.angle = 30 end;"
                                "local P = System.hooks('minigame.prize'); function P:before(ctx) ctx.items = ctx.items .. ',base:item/5' end; System.hooks('minigame.start')"));
         gp::SystemCtx c;
-        c.set("x", 100).set("y", 60).set("camX", 10).set("camY", 20);
+        c.set("x", 100).set("y", 60).set("camX", 10).set("camY", 20).set("zoom", 1).set("angle", 0);
         h.system("camera.view", c, [] {});
-        CHECK(c.num("camX") == 10.5 && c.num("camY") == 60);
+        CHECK(c.num("camX") == 10.5 && c.num("camY") == 60 && c.num("zoom") == 2 && c.num("angle") == 30);
         gp::SystemCtx p;
         p.set("game", "swift_pick").set("items", "base:item/1");
         h.system("minigame.prize", p, [] {});
