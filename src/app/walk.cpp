@@ -5368,6 +5368,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 y = int(pos.y);
                 return true;
             };
+            wapi.tutorialsOn = [&] { return settings.tutorials; };
             wapi.think = [&](const std::string &kind)
             { return scriptThink && scriptThink(kind); };
             wapi.setPetPos = [&](int x, int y)

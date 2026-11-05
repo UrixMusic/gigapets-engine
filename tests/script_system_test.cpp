@@ -67,6 +67,24 @@ int main()
         h.system("thought.show", c, [] {});
         CHECK(c.str("kind") == "tired" && h.errors().empty());
     }
+    { // tutorial.once: shown the first time only, remembered under the mod's prefix, and only while tutorials are on
+        gp::ScriptHost h;
+        std::set<std::string> flags;
+        int said = 0;
+        bool on = true;
+        h.api().hasFlag = [&](const std::string &f) { return flags.count(f) > 0; };
+        h.api().setFlag = [&](const std::string &f) { flags.insert(f); };
+        h.api().say = [&](const std::string &, const gp::ScriptApi::SayVars &) { ++said; return true; };
+        h.api().tutorialsOn = [&] { return on; };
+        CHECK(h.runString("m", "assert(tutorial.once('first', 'm:str/x') == true); assert(tutorial.once('first', 'm:str/x') == false)"));
+        CHECK(said == 1 && flags.count("m:tutorial_first") == 1);
+        on = false;
+        CHECK(h.runString("m", "assert(tutorial.once('second', 'm:str/x') == false)")); // tutorials off: nothing, and not used up
+        CHECK(said == 1 && flags.count("m:tutorial_second") == 0);
+        on = true;
+        CHECK(h.runString("m", "assert(tutorial.once('second', 'm:str/x') == true)"));
+        CHECK(!h.runString("m", "tutorial.once('bad name', 'm:str/x')")); // a name is letters, digits, _ and -
+    }
     { // player.tricks / setTricks: the mask of known tricks, in any order
         gp::ScriptHost h;
         int mask = 1;

@@ -55,6 +55,7 @@ namespace gp
         std::function<int(const std::string &item)> count;
         std::function<bool(const std::string &flag)> hasFlag;
         std::function<void(const std::string &flag)> setFlag; // the host has already checked the mod prefix and characters
+        std::function<bool()> tutorialsOn;                    // the options screen's "tutorials" switch (unset = on)
         // The pet's stats, by name (the host has already checked the name against careStatNames() /
         // personalityStatNames()). adjust* return the change that was actually made: stats are clamped, and the game
         // ignores a negative care change until 4 quests are done, so it can differ from `delta`.
@@ -276,6 +277,7 @@ namespace gp
             bind("player", "count", l_pCount);
             bind("player", "hasFlag", l_pHasFlag);
             bind("player", "setFlag", l_pSetFlag);
+            bind("tutorial", "once", l_tutorialOnce);
             bind("player", "care", l_pCare);
             bind("player", "adjustCare", l_pAdjustCare);
             bind("player", "personality", l_pPersonality);
@@ -1724,6 +1726,32 @@ namespace gp
             if (h.api_.setFlag)
                 h.api_.setFlag(flag);
             return 0;
+        }
+
+        // tutorial.once(name, textId [, vars]) -> true if the message was shown. A first-time message of the mod: shown the first time only (it is remembered in the save, under the
+        // mod's own prefix) and only while the player has "tutorials" on in the options, like the game's own. `name` is letters, digits, _ and -.
+        static int l_tutorialOnce(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *name = luaL_checkstring(L, 1);
+            const char *text = luaL_checkstring(L, 2);
+            const int nvars = checkVars(L, 3, "tutorial.once");
+            const ScriptApi::SayVars vars = readVars(L, 3, nvars);
+            for (const char *c = name; *c; ++c)
+                if (!(std::isalnum(static_cast<unsigned char>(*c)) || *c == '_' || *c == '-'))
+                    return luaL_argerror(L, 1, "a tutorial name is letters, digits, _ and - only");
+            if (!*name || std::strlen(name) > 60)
+                return luaL_argerror(L, 1, "a tutorial name is 1 to 60 characters");
+            const std::string flag = h.curMod_ + ":tutorial_" + name;
+            bool shown = false;
+            if ((!h.api_.tutorialsOn || h.api_.tutorialsOn()) && h.api_.hasFlag && !h.api_.hasFlag(flag) && h.api_.say && h.api_.say(text, vars))
+            {
+                if (h.api_.setFlag)
+                    h.api_.setFlag(flag);
+                shown = true;
+            }
+            lua_pushboolean(L, shown);
+            return 1;
         }
 
         // ---- engine values (the registry) ----
