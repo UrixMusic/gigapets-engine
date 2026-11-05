@@ -64,7 +64,7 @@ namespace gp
     {
         std::vector<std::string> problems;
         for (const std::string &id : rep.loaded)
-            scripts.loadMod(id, modsDir / id);
+            scripts.loadMod(id, modsDir / id, rep.trusted.count(id) > 0);
         for (const std::string &e : scripts.errors())
             problems.push_back(e);
         if (problems.empty()) // hooks can only be judged once every script has loaded

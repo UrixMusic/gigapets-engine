@@ -251,11 +251,16 @@ namespace gp
             open(LUA_STRLIBNAME, luaopen_string);
             open(LUA_MATHLIBNAME, luaopen_math);
             open(LUA_UTF8LIBNAME, luaopen_utf8);
+            // The sandbox drops these; a trusted mod's environment gets them back (see trustedEnvFor)
+            lua_newtable(L_);
             for (const char *g : {"dofile", "loadfile", "load", "collectgarbage"})
             {
+                lua_getglobal(L_, g);
+                lua_setfield(L_, -2, g);
                 lua_pushnil(L_);
                 lua_setglobal(L_, g);
             }
+            trustedShared_ = luaL_ref(L_, LUA_REGISTRYINDEX);
             dropField("string", "dump");
             dropField("math", "random");
             dropField("math", "randomseed");
@@ -431,8 +436,9 @@ namespace gp
         // How many scripts are waiting for an answer or a timer (for tests and for the game to know it is not idle).
         size_t waiting() const { return routines_.size(); }
 
-        // Runs mods/<id>/scripts/*.lua in name order. Top-level code only registers hooks.
-        void loadMod(const std::string &modId, const std::filesystem::path &dir)
+        // Runs mods/<id>/scripts/*.lua in name order. Top-level code only registers hooks. A `trusted` mod (manifest "trusted": true) runs in an environment that also has io, os,
+        // debug, coroutine, load / loadfile / dofile / collectgarbage and a `require` for its own scripts folder: nothing is sandboxed, so it can do whatever the player's account can.
+        void loadMod(const std::string &modId, const std::filesystem::path &dir, bool trusted = false)
         {
             namespace fs = std::filesystem;
             const fs::path sd = dir / "scripts";
@@ -444,6 +450,7 @@ namespace gp
                     files.push_back(f.path());
             std::sort(files.begin(), files.end());
             curMod_ = modId;
+            const int env = trusted ? trustedEnvFor(dir) : LUA_NOREF;
             for (const fs::path &f : files)
             {
                 if (luaL_loadfilex(L_, f.string().c_str(), "t") != LUA_OK) // "t" = text only, no bytecode
@@ -451,9 +458,82 @@ namespace gp
                     fail(f.string());
                     continue;
                 }
+                if (env != LUA_NOREF) // the chunk's globals are the trusted environment
+                {
+                    lua_rawgeti(L_, LUA_REGISTRYINDEX, env);
+                    lua_setupvalue(L_, -2, 1);
+                }
                 call(0, f.string());
             }
             curMod_.clear();
+        }
+
+        // The environment of a trusted mod: its own table (so what it defines stays its own) over a shared one holding the unsandboxed libraries, over the sandbox's globals.
+        int trustedEnvFor(const std::filesystem::path &dir)
+        {
+            if (trustedLibs_ == LUA_NOREF)
+            {
+                lua_rawgeti(L_, LUA_REGISTRYINDEX, trustedShared_); // load, loadfile, dofile, collectgarbage
+                const std::pair<const char *, lua_CFunction> libs[] = {{LUA_IOLIBNAME, luaopen_io}, {LUA_OSLIBNAME, luaopen_os}, {LUA_DBLIBNAME, luaopen_debug}, {LUA_COLIBNAME, luaopen_coroutine}};
+                for (const auto &[name, f] : libs)
+                {
+                    luaL_requiref(L_, name, f, 0); // (not made a global: the sandboxed mods do not see it)
+                    lua_setfield(L_, -2, name);
+                }
+                lua_newtable(L_); // the sandbox's globals behind it
+                lua_pushglobaltable(L_);
+                lua_setfield(L_, -2, "__index");
+                lua_setmetatable(L_, -2);
+                trustedLibs_ = luaL_ref(L_, LUA_REGISTRYINDEX);
+            }
+            lua_newtable(L_); // this mod's
+            lua_newtable(L_);
+            lua_rawgeti(L_, LUA_REGISTRYINDEX, trustedLibs_);
+            lua_setfield(L_, -2, "__index");
+            lua_setmetatable(L_, -2);
+            // require("name"): runs mods/<id>/scripts/name.lua (dots are folders) once, in the same environment, and returns what it returned
+            lua_newtable(L_); // the loaded modules
+            lua_pushvalue(L_, -2);                                   // env
+            lua_pushstring(L_, (dir / "scripts").string().c_str());  // folder
+            lua_pushcclosure(L_, l_trustedRequire, 3);               // upvalues: loaded, env, folder
+            lua_setfield(L_, -2, "require");
+            return luaL_ref(L_, LUA_REGISTRYINDEX); // (the loaded table is held by the closure)
+        }
+        static int l_trustedRequire(lua_State *L)
+        {
+            const std::string name = luaL_checkstring(L, 1);
+            for (char c : name)
+                if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.' || c == '-'))
+                    return luaL_error(L, "require: a module name is letters, digits, _, - and dots");
+            lua_pushvalue(L, 1);
+            lua_gettable(L, lua_upvalueindex(1)); // loaded[name]
+            if (!lua_isnil(L, -1))
+                return 1;
+            lua_pop(L, 1);
+            std::string rel = name;
+            for (char &c : rel)
+                if (c == '.')
+                    c = '/';
+            if (rel.find("//") != std::string::npos || rel.front() == '/' || rel.back() == '/')
+                return luaL_error(L, "require: bad module name '%s'", name.c_str());
+            const std::filesystem::path file = std::filesystem::path(lua_tostring(L, lua_upvalueindex(3))) / (rel + ".lua");
+            if (!std::filesystem::exists(file))
+                return luaL_error(L, "require: no module '%s' (looked for %s)", name.c_str(), file.string().c_str());
+            if (luaL_loadfilex(L, file.string().c_str(), "t") != LUA_OK)
+                return lua_error(L);
+            lua_pushvalue(L, lua_upvalueindex(2));
+            lua_setupvalue(L, -2, 1);
+            lua_pushvalue(L, 1);
+            lua_call(L, 1, 1);
+            if (lua_isnil(L, -1))
+            {
+                lua_pop(L, 1);
+                lua_pushboolean(L, 1);
+            }
+            lua_pushvalue(L, 1);
+            lua_pushvalue(L, -2);
+            lua_settable(L, lua_upvalueindex(1)); // loaded[name] = result
+            return 1;
         }
 
         // Every registered hook table and the functions it defines, for validating after all scripts have loaded.
@@ -3325,6 +3405,7 @@ namespace gp
         std::map<std::string, Hook> gameHooks_; // one table, under the id ""
         std::string sayPortrait_; // the npc id a say() / ask() asked a portrait of, until the host has taken it (takeSayPortrait)
         std::map<std::string, Hook> systemHooks_; // System.hooks(name): before / replace / after of an engine system
+        int trustedShared_ = LUA_NOREF, trustedLibs_ = LUA_NOREF; // the unsandboxed functions and libraries a trusted mod's environment is built over
         int sharedCtx_ = LUA_NOREF; // while a system's stage runs: the one ctx table all its hooks share (so changes carry from hook to hook and back to the engine)
         std::set<std::string> disabled_;
         std::string curMod_;

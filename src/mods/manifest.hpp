@@ -24,6 +24,7 @@ namespace gp
         std::string id, version, gameApi;
         std::vector<std::string> needs;     // "requires" is a C++20 keyword
         std::vector<std::string> loadAfter; // soft ordering, ignored if that mod isn't installed
+        bool trusted = false;               // "trusted": true: its Lua runs without the sandbox (io, os, require, load ...); the player is told at start
         fs::path dir;
     };
 
@@ -73,6 +74,7 @@ namespace gp
             m.gameApi = j.at("game_api").get<std::string>();
             m.needs = j.value("requires", std::vector<std::string>{});
             m.loadAfter = j.value("load_after", std::vector<std::string>{});
+            m.trusted = j.value("trusted", false);
         }
         catch (const json::exception &e)
         {

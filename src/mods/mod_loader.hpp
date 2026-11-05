@@ -22,6 +22,7 @@ namespace gp
         std::vector<std::string> errors, warnings;
         std::vector<std::string> loaded;               // mod ids in load order
         std::map<std::string, std::string> versions;   // mod id -> its manifest version
+        std::set<std::string> trusted;                 // mods whose Lua runs without the sandbox (manifest "trusted": true)
         std::map<std::string, std::string> lastWriter; // record id -> mod id (provenance, for later conflict logs)
         int nextAreaNumber = 1000;                     // the number the next mod area gets (AreaDef::legacyId); the base game uses 0..40
         bool ok() const { return errors.empty(); }
@@ -3792,6 +3793,8 @@ namespace gp
             }
             rep.loaded.push_back(m.id);
             rep.versions[m.id] = m.version;
+            if (m.trusted)
+                rep.trusted.insert(m.id);
         }
         // a song's instruments named by id must exist now that every mod's are there (a warning: the channel plays instrument 0 / the drum is left out)
         for (const auto *list : {&audioRegistry().songs})

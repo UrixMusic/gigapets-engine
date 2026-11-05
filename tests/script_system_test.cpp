@@ -122,6 +122,42 @@ int main()
         h.system("frontend.start", c, [&] { got = int(c.num("slot")); });
         CHECK(got == 2 && h.errors().empty());
     }
+    { // a trusted mod's scripts run without the sandbox (io, os, require ...); a sandboxed one's do not, and the two do not see each other's globals
+        namespace fs = std::filesystem;
+        const fs::path root = fs::temp_directory_path() / "gp_trusted_test";
+        std::error_code rmEc;
+        fs::remove_all(root, rmEc);
+        for (const char *id : {"safe", "wild"})
+        {
+            fs::create_directories(root / id / "scripts");
+            std::ofstream(root / id / "scripts" / "main.lua") << R"(
+                have_os = os ~= nil; have_io = io ~= nil; have_load = load ~= nil; have_require = require ~= nil
+                mine = "mine"
+                if require then
+                    lib = require("util.helper")
+                    again = require("util.helper") == lib
+                    local f = io.open(")" << (root / id / "out.txt").generic_string() << R"(", "w"); f:write("hi"); f:close()
+                end
+            )";
+        }
+        fs::create_directories(root / "wild" / "scripts" / "util");
+        std::ofstream(root / "wild" / "scripts" / "util" / "helper.lua") << "return { answer = 42 }";
+        gp::ScriptHost h;
+        h.loadMod("safe", root / "safe", false);
+        h.loadMod("wild", root / "wild", true);
+        CHECK(h.errors().empty());
+        CHECK(h.runString("probe", "assert(os == nil and io == nil and load == nil and require == nil and debug == nil)")); // the sandbox is unchanged for everyone else
+        CHECK(!fs::exists(root / "safe" / "out.txt") && fs::exists(root / "wild" / "out.txt")); // only the trusted one wrote its file
+        std::string got;
+        {
+            std::ifstream f(root / "wild" / "out.txt");
+            f >> got;
+        }
+        CHECK(got == "hi");
+        // what the trusted one defined stays in its own environment (the sandboxed one wrote to the shared globals, as before)
+        CHECK(h.runString("probe", "assert(lib == nil and again == nil and have_os == false)"));
+        fs::remove_all(root, rmEc);
+    }
     { // player.tricks / setTricks: the mask of known tricks, in any order
         gp::ScriptHost h;
         int mask = 1;

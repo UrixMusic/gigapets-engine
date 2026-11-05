@@ -318,7 +318,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         for (const auto &e : rep.errors)
             std::fprintf(stderr, "mod error: %s\n", e.c_str());
         for (const auto &id : rep.loaded)
-            std::printf("loaded mod %s\n", id.c_str());
+            std::printf("loaded mod %s%s\n", id.c_str(), rep.trusted.count(id) ? "  (TRUSTED: its scripts run without the sandbox)" : "");
         if (!rep.ok())
             return 1;
         if (haveSave) // the saved species may be a mod's: it exists now

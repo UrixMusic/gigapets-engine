@@ -156,6 +156,8 @@ int main(int argc, char **argv)
                     std::printf("warning: %s\n", w.c_str());
                 for (const auto &e : rep.errors)
                     std::printf("error: %s\n", e.c_str());
+                for (const auto &id : rep.trusted)
+                    std::printf("trusted: %s (its scripts run without the sandbox: io, os, require, load ...)\n", id.c_str());
                 std::printf("%zu mod(s) loaded, %zu error(s), %zu warning(s)\n", rep.loaded.size(), rep.errors.size(), rep.warnings.size());
                 return rep.ok() ? 0 : 1;
             }
