@@ -770,7 +770,7 @@ int main()
                           "local B = Scene.hooks('m:scene/bad')\n"
                           "function B:onDraw(g) g.rect(1, 2, 3, 4, { 300, 0, 0 }) end\n"
                           "local C = Scene.hooks('m:scene/many')\n"
-                          "function C:onDraw(g) for i = 1, 2001 do g.rect(0, 0, 1, 1, { 1, 1, 1 }) end end\n"
+                          "function C:onDraw(g) for i = 1, 4001 do g.rect(0, 0, 1, 1, { 1, 1, 1 }) end end\n"
                           "local D = Scene.hooks('m:scene/tickerr')\n"
                           "function D:onTick(ctx) error('boom') end\n"));
         std::string id;
