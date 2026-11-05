@@ -4315,6 +4315,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 return;
             }
 
+            // the engine system "item.use": what using the item does (eating, medicine, furnishing, map, potion...); a mod may cancel, replace or follow it
+            const auto nativeUse = [&]
+            {
             if (gp::isFurnishingType(d.type) || d.type == int(gp::ItemType::Food) || d.type == int(gp::ItemType::Medicine))
                 sfx(0x59, 0xbe); // ItemMenuScreen: PlaySoundEffect(0x59, 0xbe) for these
 
@@ -4442,6 +4445,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             // Menu result 2: fade out of the menu and play the eat animation.
             requestScreen([&]
                           { im.open = false; barBusy = 0; barAnim.visible = false; startFeed(); });
+            };
+            gp::SystemCtx ic;
+            ic.set("item", d.id).set("type", d.type).set("room", room ? 1 : 0);
+            scripts.system("item.use", ic, nativeUse);
         };
 
         // ---- 4. STATE + AREA SWITCHING ----
