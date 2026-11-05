@@ -86,6 +86,7 @@ namespace gp
         // or mod area id) landing at x, y with a fade, like a door: false for an unknown area. shake is the camera shake of a belly flop.
         std::function<bool(int &x, int &y)> getPetPos;
         std::function<bool(int x, int y)> setPetPos;
+        std::function<bool(const std::string &kind)> think; // a thought bubble over the pet: "hungry", "sick", "tired" or "mood"; false if one is up, or the kind is unknown
         std::function<void(int what)> lockPet;
         std::function<void()> unlockPet;
         std::function<bool(int kind)> petReact;
@@ -331,6 +332,7 @@ namespace gp
             bind("counter", "add", l_ctAdd);
             bind("player", "pos", l_petPos);
             bind("player", "setPos", l_petSetPos);
+            bind("player", "think", l_petThink);
             bind("player", "lock", l_petLock);
             bind("player", "unlock", l_petUnlock);
             bind("player", "react", l_petReact);
@@ -2713,6 +2715,14 @@ namespace gp
         }
 
         // ---- the pet in the walking world ----
+        // player.think(kind) -> true if the bubble went up ("hungry", "sick", "tired" or "mood"); false if one is already up, or in a room, or the kind is unknown
+        static int l_petThink(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const std::string kind = luaL_checkstring(L, 1);
+            lua_pushboolean(L, h.api_.think && h.api_.think(kind));
+            return 1;
+        }
         // player.pos() -> x, y (the pet's feet in the area, pixels), or nil when there is no pet in the world (a house room, a scene).
         static int l_petPos(lua_State *L)
         {

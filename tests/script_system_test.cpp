@@ -55,6 +55,18 @@ int main()
         CHECK(p.str("items") == "base:item/1,base:item/5");
         CHECK(h.errors().empty());
     }
+    { // player.think, and the panel / thought systems
+        gp::ScriptHost h;
+        std::string got;
+        h.api().think = [&](const std::string &k) { got = k; return k != "nope"; };
+        CHECK(h.runString("a", "assert(player.think('hungry') == true); assert(player.think('nope') == false)"));
+        CHECK(got == "nope");
+        CHECK(h.runString("b", "System.hooks('panel.open'); local T = System.hooks('thought.show'); function T:before(ctx) if ctx.kind == 'mood' then ctx.kind = 'tired' end end"));
+        gp::SystemCtx c;
+        c.set("kind", "mood");
+        h.system("thought.show", c, [] {});
+        CHECK(c.str("kind") == "tired" && h.errors().empty());
+    }
     { // player.tricks / setTricks: the mask of known tricks, in any order
         gp::ScriptHost h;
         int mask = 1;

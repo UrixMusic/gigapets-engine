@@ -1713,6 +1713,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         std::unique_ptr<gp::ReactionSeq> potionSeq;
         long tiredDecayAccum = 0, hungerDecayAccum = 0; // the stat decay counts (thought_bubble.hpp)
         int thoughtIcon = -1, thoughtTicks = 0; // the bubble up over the pet (icon tile), -1 = none
+        std::function<bool(const std::string &)> scriptThink; // player.think(kind), set where the bubble code is
 
         auto tryPickup = [&](int idx)
         {
@@ -2056,10 +2057,20 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         int pendingBarState = -1;
         auto runBarState = [&](int s)
         {
+            // the engine system "panel.open": the player opened a panel from the bar (panel "stats", "items", "tricks" or "map"); cancel or replace and it does not open (a mod may
+            // open its own screen instead, scene.open)
+            auto panel = [&](const char *name, std::function<void()> open)
+            {
+                gp::SystemCtx pc;
+                pc.set("panel", name);
+                scripts.system("panel.open", pc, [&]
+                               { open(); });
+            };
             if (s == kStatsState)
             {
-                requestScreen([&]
-                              { statsOpen = true; });
+                panel("stats", [&]
+                      { requestScreen([&]
+                                      { statsOpen = true; }); });
                 return;
             }
             if (s >= 0xb && s <= 0xd && goHome) // MapLocationToGameState(slot): Go Home
@@ -2072,13 +2083,14 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 std::printf("bar: SwitchGameState(0x%x)\n", s);
                 return;
             }
-            requestScreen([&]
-                          {
+            panel("items", [&]
+                  { requestScreen([&]
+                                  {
                 im = {};
                 im.open = true;
                 im.category = barHost.category;
                 im.filtered = buildFiltered(im.category);
-                std::printf("item menu: category %d, %zu items, slot %d\n", im.category, im.filtered.size(), itemSlot); });
+                std::printf("item menu: category %d, %zu items, slot %d\n", im.category, im.filtered.size(), itemSlot); }); });
         };
         barHost.onState = [&](int s)
         {
@@ -2593,6 +2605,32 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
 
         // ---- the hungry / tired bubble (TickCareStatWatchdog conditions 4 and 6); see thought_bubble.hpp ----
+        // The bubble over the pet (kind "hungry", "sick", "tired" or "mood"): the engine system "thought.show" first (change `kind`, or cancel / replace for no bubble). True if it went up.
+        auto showThought = [&](const std::string &kind0) -> bool
+        {
+            static const std::pair<const char *, int> icons[] = {{"hungry", gp::kThoughtHungerIcon}, {"sick", gp::kThoughtSickIcon}, {"tired", gp::kThoughtTiredIcon}, {"mood", gp::kThoughtMoodIcon}};
+            gp::SystemCtx c;
+            c.set("kind", kind0);
+            bool up = false;
+            scripts.system("thought.show", c, [&]
+                           {
+                for (const auto &[name, icon] : icons)
+                    if (c.str("kind") == name)
+                    {
+                        thoughtIcon = icon;
+                        up = true;
+                    } });
+            return up;
+        };
+        scriptThink = [&](const std::string &kind) -> bool // player.think(kind): a bubble now, if none is up
+        {
+            if (thoughtIcon >= 0 || room)
+                return false;
+            if (kind != "hungry" && kind != "sick" && kind != "tired" && kind != "mood")
+                return false;
+            thoughtTicks = 0;
+            return showThought(kind);
+        };
         auto tickThoughtBubble = [&]
         {
             const bool walking = pose == Pose::Move;
@@ -2620,15 +2658,14 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             }
             if (thoughtIcon < 0)
             {
-                if (gp::hungerBubbleStep(hungerTimer, player.care[gp::Hunger], walking, false))
-                    thoughtIcon = gp::kThoughtHungerIcon;
-                else if (gp::sickBubbleStep(sickTimer, !player.isHealthy(), walking, false))
-                    thoughtIcon = gp::kThoughtSickIcon;
-                else if (gp::tiredBubbleStep(tiredTimer, player.care[gp::Tiredness], walking, false))
-                    thoughtIcon = gp::kThoughtTiredIcon;
-                else if (gp::moodBubbleStep(moodTimer, player.care[gp::Happiness], walking, false))
-                    thoughtIcon = gp::kThoughtMoodIcon;
+                const char *kind = gp::hungerBubbleStep(hungerTimer, player.care[gp::Hunger], walking, false)       ? "hungry"
+                                   : gp::sickBubbleStep(sickTimer, !player.isHealthy(), walking, false)                  ? "sick"
+                                   : gp::tiredBubbleStep(tiredTimer, player.care[gp::Tiredness], walking, false)         ? "tired"
+                                   : gp::moodBubbleStep(moodTimer, player.care[gp::Happiness], walking, false)           ? "mood"
+                                                                                                                         : nullptr;
                 thoughtTicks = 0;
+                if (kind)
+                    showThought(kind);
                 return;
             }
             ++thoughtTicks;
@@ -2708,11 +2745,17 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         // ---- the tricks panel (trick_panel.hpp) ----
         barHost.onTricks = [&]
         {
-            barBusy = 5; // HandleTrickAction: the bar closes (anim 3) and the panel opens (anim 4)
-            sfx(trickLay.click, trickLay.clickVolume);
-            barAnim = {gp::kTrickBarCloseAnim, 0, 0, false, true};
-            panelAnim = {gp::kTrickPanelAnim, 0, 0, false, true};
-            panelClosing = false;
+            gp::SystemCtx pc; // the engine system "panel.open" (panel "tricks"); a cancel closes the bar again
+            pc.set("panel", "tricks");
+            const bool ran = scripts.system("panel.open", pc, [&]
+                                            {
+                barBusy = 5; // HandleTrickAction: the bar closes (anim 3) and the panel opens (anim 4)
+                sfx(trickLay.click, trickLay.clickVolume);
+                barAnim = {gp::kTrickBarCloseAnim, 0, 0, false, true};
+                panelAnim = {gp::kTrickPanelAnim, 0, 0, false, true};
+                panelClosing = false; });
+            if (!ran)
+                bar.forceClose();
         };
         auto closeTrickPanel = [&] // Z, X or Enter: the panel just goes, with no closing animation, and the bar is not shown again
         {
@@ -2843,12 +2886,16 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         // ---- the island map (world_map.hpp): a full-screen picture box with a marker where the pet is ----
         svc.showMap = [&]
         {
-            const auto m = gp::mapMarker(cur->def->legacyId, pos.x, pos.y);
-            gp::DialogueBox b;
-            b.kind = gp::BoxKind::Picture;
-            b.markX = m ? m->x : 0; // an area off the map keeps the last marker in the ROM; there is none to keep here
-            b.markY = m ? m->y : 0;
-            dialogue.show(std::move(b));
+            gp::SystemCtx pc; // the engine system "panel.open" (panel "map")
+            pc.set("panel", "map");
+            scripts.system("panel.open", pc, [&]
+                           {
+                const auto m = gp::mapMarker(cur->def->legacyId, pos.x, pos.y);
+                gp::DialogueBox b;
+                b.kind = gp::BoxKind::Picture;
+                b.markX = m ? m->x : 0; // an area off the map keeps the last marker in the ROM; there is none to keep here
+                b.markY = m ? m->y : 0;
+                dialogue.show(std::move(b)); });
         };
 
         // ---- the spaceship's colour machine (activity 0x29); see color_machine.hpp ----
@@ -5321,6 +5368,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 y = int(pos.y);
                 return true;
             };
+            wapi.think = [&](const std::string &kind)
+            { return scriptThink && scriptThink(kind); };
             wapi.setPetPos = [&](int x, int y)
             {
                 if (room || pendingExit)

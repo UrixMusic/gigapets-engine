@@ -118,6 +118,10 @@ namespace gp
              "game (\"swift_pick\", \"three_in_a_row\", \"memory_match\" or \"trick_guess\")"},
             {"minigame.prize", "a minigame ended and is about to hand out its prize (the pet drops it); cancel or replace and nothing drops",
              "game (\"swift_pick\", \"three_in_a_row\" or \"memory_match\"), items (item ids joined by commas, one per prize: change the list; an unknown id is dropped)"},
+            {"panel.open", "the player opens a panel (from the bar: the stats screen, the item screen, the tricks panel; or the island map from a map item); cancel or replace and it does not open: a mod may open its own screen instead (scene.open)",
+             "panel (\"stats\", \"items\", \"tricks\" or \"map\")"},
+            {"thought.show", "a thought bubble is about to go up over the pet (the game's hungry / sick / tired / low mood ones, or a mod's player.think); cancel or replace and none goes up",
+             "kind (\"hungry\", \"sick\", \"tired\" or \"mood\": change it to show another icon)"},
             {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
              "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };
