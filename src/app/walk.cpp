@@ -65,6 +65,7 @@
 #include "../game/stat_notify.hpp"
 #include "../game/swift_pick.hpp"
 #include "../mods/mod_loader.hpp"
+#include "../mods/mod_list.hpp"
 #include "../game/three_in_a_row.hpp"
 #include "../game/memory_match.hpp"
 #include "../game/trick_showcase.hpp"
@@ -309,6 +310,9 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         scripts.setRegistry(&engineValues);
         scripts.loadModSave(sd.kv); // what the mods kept in this slot (save.get)
         scripts.loadProfile(gp::loadProfileFile()); // and for the whole game (profile.get)
+        if (haveSave && sd.has("mods")) // a save made with other mods: say so (it still loads)
+            for (const std::string &c : gp::modListChanges(sd.kv["mods"], gp::modListString(rep.loaded, rep.versions)))
+                std::fprintf(stderr, "mod warning: %s\n", c.c_str());
         for (const auto &w : rep.warnings)
             std::fprintf(stderr, "mod warning: %s\n", w.c_str());
         for (const auto &e : rep.errors)
@@ -334,34 +338,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         {
             std::printf("recoloured %d pet npcs\n", n);
         }
-        for (const std::string &id : rep.loaded)
-            scripts.loadMod(id, std::filesystem::path("mods") / id);
-        for (const auto &e : scripts.errors())
-            std::fprintf(stderr, "script error: %s\n", e.c_str());
-        if (!scripts.errors().empty())
+        // Scripts load now, and every hook must point at something that exists and use a real hook name, or it would silently never fire.
+        for (const std::string &p : gp::checkModScripts(db, rep, scripts, "mods"))
+            std::fprintf(stderr, "script error: %s\n", p.c_str());
+        if (!rep.ok())
             return 1;
-        // Every hook must point at something that exists and use a real hook name, or it would silently never fire.
-        {
-            gp::HookTargets targets;
-            targets.npcExists = [&](const std::string &id)
-            { return db.hasNpc(id); };
-            targets.areaExists = [&](const std::string &id)
-            { return db.area(id) != nullptr; };
-            targets.itemExists = [&](const std::string &id)
-            { return db.item(id) != nullptr; };
-            const std::vector<std::string> hookProblems = gp::validateHooks(scripts, targets);
-            for (const std::string &p : hookProblems)
-                std::fprintf(stderr, "script error: %s\n", p.c_str());
-            bool sceneProblem = false; // an object that opens a scene nobody defined could never work: stop, like any other hook problem
-            for (const gp::InteractionDef *d : db.allInteractions())
-                if (d->action == "scene" && !scripts.sceneKnown(d->str.at("scene")))
-                {
-                    std::fprintf(stderr, "script error: object '%s' opens scene '%s', which no script defines (Scene.hooks)\n", d->object.c_str(), d->str.at("scene").c_str());
-                    sceneProblem = true;
-                }
-            if (!hookProblems.empty() || sceneProblem)
-                return 1;
-        }
         // The pet's species and palette come from the db now: the colour picked in the front end, else the species default.
         const gp::SpeciesDef *speciesDef = db.speciesByLegacy(playerSpecies);
         if (!speciesDef)
@@ -4895,6 +4876,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 it = it->first.rfind("mod.", 0) == 0 ? s.kv.erase(it) : std::next(it);
             for (const auto &[k, v] : scripts.modSaveKv())
                 s.kv[k] = v;
+            s.kv["mods"] = gp::modListString(rep.loaded, rep.versions); // the mods this save was made with
             gp::saveToFile(savePath, s);
             if (scripts.profileDirty()) // a script changed what the mods keep for the whole game
             {

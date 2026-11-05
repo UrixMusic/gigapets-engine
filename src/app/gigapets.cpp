@@ -139,6 +139,33 @@ int main(int argc, char **argv)
             }
         }
 
+    // `--validate-mods`: load the base game, every mod's data and scripts, print what is wrong (or "ok"), and quit with 1 if anything is; nothing is started or saved
+    for (int i = 2; i < argc; ++i)
+        if (!std::strcmp(argv[i], "--validate-mods"))
+        {
+            try
+            {
+                gp::Rom rom(romPath);
+                gp::ContentDB db;
+                gp::importRom(rom, db, 0);
+                gp::ModReport rep = gp::importMods(db, "mods");
+                gp::ScriptHost scripts;
+                if (rep.ok()) // scripts are checked against the content that did load
+                    gp::checkModScripts(db, rep, scripts, "mods");
+                for (const auto &w : rep.warnings)
+                    std::printf("warning: %s\n", w.c_str());
+                for (const auto &e : rep.errors)
+                    std::printf("error: %s\n", e.c_str());
+                std::printf("%zu mod(s) loaded, %zu error(s), %zu warning(s)\n", rep.loaded.size(), rep.errors.size(), rep.warnings.size());
+                return rep.ok() ? 0 : 1;
+            }
+            catch (const std::exception &e)
+            {
+                std::fprintf(stderr, "validate failed: %s\n", e.what());
+                return 1;
+            }
+        }
+
     // `--export-base <folder>`: write the base game's areas, tiles and objects as JSON and PNG for editing tools, then quit
     for (int i = 2; i + 1 < argc; ++i)
         if (!std::strcmp(argv[i], "--export-base"))
