@@ -1906,6 +1906,34 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             if (const char *sl = std::getenv("GP_FE_LOAD_SLOT"))
                 loadCur = std::clamp(std::atoi(sl), 0, 3);
         }
+        // Test harness: GP_FE_KEYS="30:down,45:z" presses those keys at those frames (z x up down left right enter escape); GP_FE_SHOT=file.bmp (and GP_FE_SHOT_FRAME, default 120) saves that frame and quits
+        const char *anyShot = loadShot ? loadShot : std::getenv("GP_FE_SHOT");
+        int shotFrame = 20;
+        if (!loadShot)
+        {
+            const char *sf = std::getenv("GP_FE_SHOT_FRAME");
+            shotFrame = sf ? std::atoi(sf) : 120;
+        }
+        std::vector<std::pair<int, SDL_Keycode>> testKeys;
+        if (const char *ks = std::getenv("GP_FE_KEYS"))
+        {
+            const std::string all = ks;
+            for (size_t at = 0; at < all.size();)
+            {
+                size_t end = all.find(',', at);
+                if (end == std::string::npos)
+                    end = all.size();
+                const std::string item = all.substr(at, end - at);
+                at = end + 1;
+                const size_t colon = item.find(':');
+                if (colon == std::string::npos)
+                    continue;
+                const std::string name = item.substr(colon + 1);
+                const SDL_Keycode key = name == "z" ? SDLK_z : name == "x" ? SDLK_x : name == "up" ? SDLK_UP : name == "down" ? SDLK_DOWN : name == "left" ? SDLK_LEFT : name == "right" ? SDLK_RIGHT : name == "enter" ? SDLK_RETURN : name == "escape" ? SDLK_ESCAPE : SDLK_UNKNOWN;
+                if (key != SDLK_UNKNOWN)
+                    testKeys.emplace_back(std::atoi(item.c_str()), key);
+            }
+        }
         bootT0 = lastMs = SDL_GetTicks();
         bool run = true;
         int frame = 0; // (the loop counter: the sections below are lambdas now)
@@ -2250,14 +2278,14 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                 SDL_SetRenderDrawColor(ren, 0, 0, 0, uint8_t(alpha));
                 SDL_RenderFillRect(ren, nullptr);
             }
-            if (loadShot && frame == 20)
+            if (anyShot && frame == shotFrame)
             {
                 int w = 0, h = 0;
                 SDL_GetRendererOutputSize(ren, &w, &h);
                 if (SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888))
                 {
                     SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_ARGB8888, surf->pixels, surf->pitch);
-                    SDL_SaveBMP(surf, loadShot);
+                    SDL_SaveBMP(surf, anyShot);
                     SDL_FreeSurface(surf);
                 }
                 run = false;
@@ -2275,6 +2303,18 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         };
         for (; run && (maxFrames < 0 || frame < maxFrames); ++frame)
         {
+            for (const auto &[kf, key] : testKeys) // (the test harness's key presses)
+                if (kf == frame)
+                {
+                    SDL_Event ev;
+                    SDL_zero(ev);
+                    ev.type = SDL_KEYDOWN;
+                    ev.key.keysym.sym = key;
+                    ev.key.keysym.scancode = SDL_GetScancodeFromKey(key);
+                    SDL_PushEvent(&ev);
+                    ev.type = SDL_KEYUP;
+                    SDL_PushEvent(&ev);
+                }
             handleEvents();
             stepAndDraw();
         }
