@@ -2188,129 +2188,127 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
         walk::bindScripts(svc); // world.drop, rand.* (and later player.* / flags): walk_script_bindings.hpp
         svc.petFellIll = petFellIll;
-        { // player.pos / lock / react, area.go, camera.shake: the walking world lives here, so the callbacks do too
-            gp::ScriptApi &wapi = scripts.api();
-            wapi.getPetPos = [&](int &x, int &y)
+        // // player.pos / lock / react, area.go, camera.shake: the walking world lives here, so the callbacks do too
+        gp::ScriptApi &wapi = scripts.api();
+        wapi.getPetPos = [&](int &x, int &y)
+        {
+            if (room)
+                return false;
+            x = int(pos.x);
+            y = int(pos.y);
+            return true;
+        };
+        wapi.tutorialsOn = [&] { return settings.tutorials; };
+        wapi.think = [&](const std::string &kind)
+        { return scriptThink && scriptThink(kind); };
+        wapi.setPetPos = [&](int x, int y)
+        {
+            if (room || pendingExit)
+                return false;
+            pos = {std::clamp(x, 0, cur->def->widthPx()), std::clamp(y, 0, cur->def->heightPx())};
+            prevPos = pos; // no gliding across the map
+            return true;
+        };
+        wapi.lockPet = [&](int what) { scriptLock |= what; };
+        wapi.unlockPet = [&] { scriptLock = 0; };
+        wapi.petReact = [&](int kind)
+        {
+            if (room || pendingExit || host.pet.busy())
+                return false;
+            static const gp::ReactAnim as[4] = {gp::ReactAnim::Positive, gp::ReactAnim::Emote, gp::ReactAnim::Shocked, gp::ReactAnim::Negative};
+            return host.pet.play(as[std::clamp(kind, 0, 3)], 1);
+        };
+        wapi.petAnimNumber = [&](const std::string &what) -> int
+        {
+            const gp::SpeciesArt &art = gp::artOf(sp);
+            if (what.find(':') != std::string::npos) // an anim id: a mod's, or the game's "base:anim/34"
             {
-                if (room)
-                    return false;
-                x = int(pos.x);
-                y = int(pos.y);
-                return true;
-            };
-            wapi.tutorialsOn = [&] { return settings.tutorials; };
-            wapi.think = [&](const std::string &kind)
-            { return scriptThink && scriptThink(kind); };
-            wapi.setPetPos = [&](int x, int y)
+                int n = -1;
+                if (std::sscanf(what.c_str(), "base:anim/%d", &n) == 1 && n >= 0 && n <= 0x2ff && what.find('@') == std::string::npos)
+                    return n;
+                return db.hasAnim(what) ? gp::modAnimNumber(what) : -1;
+            }
+            const auto &roles = gp::speciesRoles();
+            for (const auto &r : roles)
+                if (what == r.first)
+                    return art.*(r.second);
+            for (int k = 0; k < 3; ++k) // the three tricks: "trick1" .. "trick3" (the main animation of each level)
+                if (what == "trick" + std::to_string(k + 1))
+                    return art.trickMain[k];
+            return -1;
+        };
+        wapi.petPlay = [&](int anim, bool loop, int rate, const std::vector<int> &next)
+        {
+            if (room || pendingExit || host.pet.busy())
+                return false;
+            std::vector<AnimStep> rest;
+            for (size_t i = 0; i < next.size(); ++i)
+                rest.push_back({next[i], i + 1 == next.size() && loop, rate});
+            playAnim(anim, loop && next.empty(), rate, Pose::Special, std::move(rest));
+            return true;
+        };
+        wapi.petStopAnim = [&] { playAnim(restIdleId(), true, restIdleRate(), Pose::Idle); };
+        wapi.petPlaying = [&] { return pose == Pose::Special && !(animDone && queue.empty()); };
+        wapi.travel = [&](const std::string &area, int x, int y)
+        {
+            if (!db.area(area) || pendingExit || fade.a > 0.0 || room)
+                return false;
+            gp::ExitDef e;
+            e.id = "script:go";
+            e.fromArea = cur->def->id;
+            e.toArea = area;
+            e.consumeAndSpawn = true;
+            e.hasSpawnOverride = true;
+            e.spawnOverride = {x, y};
+            requestGoTo(e);
+            return pendingExit.has_value();
+        };
+        wapi.currentArea = [&] { return cur->def->id; };
+        wapi.walkable = [&](int x, int y) { return !room && x >= 0 && y >= 0 && x < cur->def->widthPx() && y < cur->def->heightPx() && world->tileWalkable(x, y) && world->inRoom(x, y) && !world->objectBlocks(x, y); };
+        wapi.areaSize = [&](int &w, int &h) { if (room) return false; w = cur->def->widthPx(); h = cur->def->heightPx(); return true; };
+        wapi.cameraShake = [&] { cameraShake.start(); };
+        // // shop.*: the stock lives here, so the callbacks do too
+        auto shopOf = [&](const std::string &name) -> const gp::ShopDef *
+        { const gp::ShopDef *s = db.shop(name); return s ? s : db.shopForArea(name); };
+        gp::ScriptApi &sapi = scripts.api();
+        sapi.shopStock = [&](const std::string &name, std::vector<gp::ScriptApi::ShopLine> &out)
+        {
+            const gp::ShopDef *s = shopOf(name);
+            if (!s)
+                return false;
+            if (const gp::ShopStock::Row *row = shopStock.rowOf(s->area))
+                for (const gp::StockEntry &e : *row)
+                    if (e.present())
+                        out.push_back({e.item, e.stock});
+            return true;
+        };
+        sapi.shopAdd = [&](const std::string &name, const std::string &item, int n)
+        {
+            const gp::ShopDef *s = shopOf(name);
+            if (!s || !db.item(item))
+                return 0;
+            for (int i = 0; i < n; ++i)
+                shopStock.claim(s->area, item);
+            return n;
+        };
+        sapi.shopRemove = [&](const std::string &name, const std::string &item)
+        {
+            const gp::ShopDef *s = shopOf(name);
+            return s && shopStock.removeItem(s->area, item);
+        };
+        sapi.shopRestock = [&](const std::string &name)
+        {
+            if (name.empty())
             {
-                if (room || pendingExit)
-                    return false;
-                pos = {std::clamp(x, 0, cur->def->widthPx()), std::clamp(y, 0, cur->def->heightPx())};
-                prevPos = pos; // no gliding across the map
-                return true;
-            };
-            wapi.lockPet = [&](int what) { scriptLock |= what; };
-            wapi.unlockPet = [&] { scriptLock = 0; };
-            wapi.petReact = [&](int kind)
-            {
-                if (room || pendingExit || host.pet.busy())
-                    return false;
-                static const gp::ReactAnim as[4] = {gp::ReactAnim::Positive, gp::ReactAnim::Emote, gp::ReactAnim::Shocked, gp::ReactAnim::Negative};
-                return host.pet.play(as[std::clamp(kind, 0, 3)], 1);
-            };
-            wapi.petAnimNumber = [&](const std::string &what) -> int
-            {
-                const gp::SpeciesArt &art = gp::artOf(sp);
-                if (what.find(':') != std::string::npos) // an anim id: a mod's, or the game's "base:anim/34"
-                {
-                    int n = -1;
-                    if (std::sscanf(what.c_str(), "base:anim/%d", &n) == 1 && n >= 0 && n <= 0x2ff && what.find('@') == std::string::npos)
-                        return n;
-                    return db.hasAnim(what) ? gp::modAnimNumber(what) : -1;
-                }
-                const auto &roles = gp::speciesRoles();
-                for (const auto &r : roles)
-                    if (what == r.first)
-                        return art.*(r.second);
-                for (int k = 0; k < 3; ++k) // the three tricks: "trick1" .. "trick3" (the main animation of each level)
-                    if (what == "trick" + std::to_string(k + 1))
-                        return art.trickMain[k];
-                return -1;
-            };
-            wapi.petPlay = [&](int anim, bool loop, int rate, const std::vector<int> &next)
-            {
-                if (room || pendingExit || host.pet.busy())
-                    return false;
-                std::vector<AnimStep> rest;
-                for (size_t i = 0; i < next.size(); ++i)
-                    rest.push_back({next[i], i + 1 == next.size() && loop, rate});
-                playAnim(anim, loop && next.empty(), rate, Pose::Special, std::move(rest));
-                return true;
-            };
-            wapi.petStopAnim = [&] { playAnim(restIdleId(), true, restIdleRate(), Pose::Idle); };
-            wapi.petPlaying = [&] { return pose == Pose::Special && !(animDone && queue.empty()); };
-            wapi.travel = [&](const std::string &area, int x, int y)
-            {
-                if (!db.area(area) || pendingExit || fade.a > 0.0 || room)
-                    return false;
-                gp::ExitDef e;
-                e.id = "script:go";
-                e.fromArea = cur->def->id;
-                e.toArea = area;
-                e.consumeAndSpawn = true;
-                e.hasSpawnOverride = true;
-                e.spawnOverride = {x, y};
-                requestGoTo(e);
-                return pendingExit.has_value();
-            };
-            wapi.currentArea = [&] { return cur->def->id; };
-            wapi.walkable = [&](int x, int y) { return !room && x >= 0 && y >= 0 && x < cur->def->widthPx() && y < cur->def->heightPx() && world->tileWalkable(x, y) && world->inRoom(x, y) && !world->objectBlocks(x, y); };
-            wapi.areaSize = [&](int &w, int &h) { if (room) return false; w = cur->def->widthPx(); h = cur->def->heightPx(); return true; };
-            wapi.cameraShake = [&] { cameraShake.start(); };
-        }
-        { // shop.*: the stock lives here, so the callbacks do too
-            auto shopOf = [&](const std::string &name) -> const gp::ShopDef *
-            { const gp::ShopDef *s = db.shop(name); return s ? s : db.shopForArea(name); };
-            gp::ScriptApi &sapi = scripts.api();
-            sapi.shopStock = [&](const std::string &name, std::vector<gp::ScriptApi::ShopLine> &out)
-            {
-                const gp::ShopDef *s = shopOf(name);
-                if (!s)
-                    return false;
-                if (const gp::ShopStock::Row *row = shopStock.rowOf(s->area))
-                    for (const gp::StockEntry &e : *row)
-                        if (e.present())
-                            out.push_back({e.item, e.stock});
-                return true;
-            };
-            sapi.shopAdd = [&](const std::string &name, const std::string &item, int n)
-            {
-                const gp::ShopDef *s = shopOf(name);
-                if (!s || !db.item(item))
-                    return 0;
-                for (int i = 0; i < n; ++i)
-                    shopStock.claim(s->area, item);
-                return n;
-            };
-            sapi.shopRemove = [&](const std::string &name, const std::string &item)
-            {
-                const gp::ShopDef *s = shopOf(name);
-                return s && shopStock.removeItem(s->area, item);
-            };
-            sapi.shopRestock = [&](const std::string &name)
-            {
-                if (name.empty())
-                {
-                    shopStock.restock(db.shops(), shopRnd);
-                    return !db.shops().empty();
-                }
-                const gp::ShopDef *s = shopOf(name);
-                if (!s)
-                    return false;
-                shopStock.rollOne(*s, shopRnd);
-                return true;
-            };
-        }
+                shopStock.restock(db.shops(), shopRnd);
+                return !db.shops().empty();
+            }
+            const gp::ShopDef *s = shopOf(name);
+            if (!s)
+                return false;
+            shopStock.rollOne(*s, shopRnd);
+            return true;
+        };
 
         gp::QuestTextEnv &txt = quests.txt; // adjust to the real member name
 
