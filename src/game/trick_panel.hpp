@@ -33,7 +33,45 @@ namespace gp
         int sprite, x, y;
     };
 
+    // The panel's numbers, as data: the record "base:minigame/trick_panel" (a mod's `minigame` patch changes them). The defaults are the game's own.
+    struct TrickLayout
+    {
+        int click = kTrickClick, clickVolume = kTrickClickVolume;
+        int questionBubble = kTrickQuestionBubble, answerBubble = kTrickAnswerBubble;
+        double questionWait = kTrickQuestionWait;
+        int unknown[kTrickSlots] = {kTrickUnknownSprite[0], kTrickUnknownSprite[1], kTrickUnknownSprite[2]};
+        int knownX[kTrickSlots] = {0x73, 0x9d, 199}, knownY[kTrickSlots] = {0xdc, 0xb4, 0xdc};
+        int unknownX[kTrickSlots] = {0x69, 0x9d, 199}, unknownY[kTrickSlots] = {0xdc, 0xb4, 0xdc};
+        template <class Def>
+        static TrickLayout from(const Def &m)
+        {
+            TrickLayout l;
+            l.click = int(m.get("click", l.click));
+            l.clickVolume = int(m.get("clickVolume", l.clickVolume));
+            l.questionBubble = int(m.get("questionBubble", l.questionBubble));
+            l.answerBubble = int(m.get("answerBubble", l.answerBubble));
+            l.questionWait = m.get("questionWaitMs", int(l.questionWait * 1000)) / 1000.0;
+            static const char *names[kTrickSlots] = {"Left", "Top", "Right"};
+            for (int i = 0; i < kTrickSlots; ++i)
+            {
+                const std::string n = names[i];
+                l.unknown[i] = int(m.get("unknown" + n, l.unknown[i]));
+                l.knownX[i] = int(m.get("knownX" + n, l.knownX[i]));
+                l.knownY[i] = int(m.get("knownY" + n, l.knownY[i]));
+                l.unknownX[i] = int(m.get("unknownX" + n, l.unknownX[i]));
+                l.unknownY[i] = int(m.get("unknownY" + n, l.unknownY[i]));
+            }
+            return l;
+        }
+    };
+
     // The tile drawn for slot 0..2 (left, top, right). `known` is the pet's tricksKnown.
+    inline TrickIcon trickIcon(int species, int slot, int known, const TrickLayout &L)
+    {
+        const int i = slot < 0 ? 0 : slot > 2 ? 2 : slot;
+        const bool have = known > i;
+        return {have ? artOf(species).trickIcons[i] : L.unknown[i], have ? L.knownX[i] : L.unknownX[i], have ? L.knownY[i] : L.unknownY[i]};
+    }
     inline TrickIcon trickIcon(int species, int slot, int known)
     {
         const bool have = known > slot;

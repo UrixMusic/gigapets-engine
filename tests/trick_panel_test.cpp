@@ -1,6 +1,7 @@
 // tests/trick_panel_test.cpp - the tricks panel's layout and keys (game/trick_panel.hpp).
 #include <cstdio>
 #include "../src/game/trick_panel.hpp"
+#include "../src/content/records.hpp"
 using namespace gp;
 
 int main()
@@ -21,6 +22,14 @@ int main()
     check("left is trick 1, up trick 2, right trick 3, down nothing", trickSlotForEvent(0) == 0 && trickSlotForEvent(2) == 1 && trickSlotForEvent(1) == 2 && trickSlotForEvent(3) == -1);
     check("Z, X and Enter close it", trickClosesPanel(4) && trickClosesPanel(5) && trickClosesPanel(6) && !trickClosesPanel(0) && !trickClosesPanel(3));
 
+    { // the layout is data: the defaults are the old numbers, and a record's numbers change them
+        MinigameDef m;
+        TrickLayout d = TrickLayout::from(m);
+        check("defaults match the game's own", trickIcon(1, 0, 1, d).sprite == trickIcon(1, 0, 1).sprite && trickIcon(1, 0, 0, d).x == 0x69 && d.click == 0x59 && d.questionWait == 0.5);
+        m.num = {{"knownXTop", 10}, {"unknownTop", 0x77}, {"questionWaitMs", 1000}, {"click", 5}};
+        d = TrickLayout::from(m);
+        check("a record moves the icon, swaps the placeholder, changes the wait and click", trickIcon(1, 1, 3, d).x == 10 && trickIcon(1, 1, 0, d).sprite == 0x77 && d.questionWait == 1.0 && d.click == 5);
+    }
     std::printf(fails ? "trick_panel_test: %d failure(s)\n" : "trick_panel_test: all passed\n", fails);
     return fails ? 1 : 0;
 }

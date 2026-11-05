@@ -86,6 +86,16 @@ namespace gp
             m.lists["codeLengths"] = {3, 4, 5}; // per level: how many of the pet's 5 traits form the code
             v.push_back(std::move(m));
         }
+        { // The tricks panel on the menu bar (trick_panel.hpp TrickLayout): its click sound, the question bubbles, the placeholder sprites and where the icons sit
+            MinigameDef m;
+            m.id = "base:minigame/trick_panel";
+            m.handler = "trick_panel";
+            m.num = {{"click", 0x59}, {"clickVolume", 0xbe}, {"questionBubble", 10}, {"answerBubble", 9}, {"questionWaitMs", 500},
+                     {"unknownLeft", 0x5f}, {"unknownTop", 0x5e}, {"unknownRight", 0x5f},
+                     {"knownXLeft", 0x73}, {"knownYLeft", 0xdc}, {"knownXTop", 0x9d}, {"knownYTop", 0xb4}, {"knownXRight", 199}, {"knownYRight", 0xdc},
+                     {"unknownXLeft", 0x69}, {"unknownYLeft", 0xdc}, {"unknownXTop", 0x9d}, {"unknownYTop", 0xb4}, {"unknownXRight", 199}, {"unknownYRight", 0xdc}};
+            v.push_back(std::move(m));
+        }
         return v;
     }
 }

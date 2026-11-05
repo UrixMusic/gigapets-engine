@@ -557,7 +557,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         {
                         }
 
-        for (int a : {0xe, 0x10, 0x11, 0x12, 0x16, 0x17, 0x18, gp::kTabAnimIn, gp::kTabAnimOut, gp::kBlastAnim, gp::kStinkAnim, gp::kExclaimIntroAnim, gp::kExclaimOutroAnim, gp::kTrickQuestionBubble, gp::kTrickAnswerBubble, gp::kHaloBubble, gp::kPitchforkBubble, gp::kStarBubble}) // 0xe: the wash bubble; arrow, dig bubble; 0x17/0x18: the thought bubble
+        const gp::TrickLayout trickLay = gp::TrickLayout::from(db.minigameOr("base:minigame/trick_panel")); // the tricks panel's numbers (data: a mod's minigame patch changes them)
+        for (int a : {0xe, 0x10, 0x11, 0x12, 0x16, 0x17, 0x18, gp::kTabAnimIn, gp::kTabAnimOut, gp::kBlastAnim, gp::kStinkAnim, gp::kExclaimIntroAnim, gp::kExclaimOutroAnim, trickLay.questionBubble, trickLay.answerBubble, gp::kHaloBubble, gp::kPitchforkBubble, gp::kStarBubble}) // 0xe: the wash bubble; arrow, dig bubble; 0x17/0x18: the thought bubble
             try
             {
                 gp::importAnim(rom, db, a, 0x28c);
@@ -2704,7 +2705,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         barHost.onTricks = [&]
         {
             barBusy = 5; // HandleTrickAction: the bar closes (anim 3) and the panel opens (anim 4)
-            sfx(gp::kTrickClick, gp::kTrickClickVolume);
+            sfx(trickLay.click, trickLay.clickVolume);
             barAnim = {gp::kTrickBarCloseAnim, 0, 0, false, true};
             panelAnim = {gp::kTrickPanelAnim, 0, 0, false, true};
             panelClosing = false;
@@ -2713,7 +2714,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         {
             if (barBusy != 4)
                 return;
-            sfx(gp::kTrickClick, gp::kTrickClickVolume);
+            sfx(trickLay.click, trickLay.clickVolume);
             panelAnim.visible = false;
             panelClosing = false;
             barAnim.visible = false;
@@ -2724,7 +2725,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         {
             questionStep = 1;
             questionTicks = 0;
-            questionBubble = gp::kTrickQuestionBubble;
+            questionBubble = trickLay.questionBubble;
         };
         auto startTrick = [&](int level) // activity 0xd: TickActor_NPCEncounterSequence
         {
@@ -2766,10 +2767,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 questionStep = 2;
                 questionTicks = 0;
             }
-            else if (questionStep == 2 && questionTicks >= int(gp::kTrickQuestionWait * 30))
+            else if (questionStep == 2 && questionTicks >= int(trickLay.questionWait * 30))
             {
                 questionStep = 3;
-                questionBubble = gp::kTrickAnswerBubble;
+                questionBubble = trickLay.answerBubble;
                 questionTicks = 0;
             }
             else if (questionStep == 3 && questionTicks >= len)
@@ -7126,7 +7127,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (barBusy == 4 && !panelClosing && !im.open && !statsOpen)
                 for (int slot = 0; slot < gp::kTrickSlots; ++slot)
                 {
-                    const gp::TrickIcon ic = gp::trickIcon(sp, slot, player.tricksKnown);
+                    const gp::TrickIcon ic = gp::trickIcon(sp, slot, player.tricksKnown, trickLay);
                     barGfx.tile(ic.sprite, 0x28c, ic.x, ic.y);
                 }
             if (bar.isOpen() && barBusy == 2)
