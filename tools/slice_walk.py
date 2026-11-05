@@ -20,6 +20,9 @@ spec.json:
 How the Env is found: the tool generates the class with an empty Env, compiles (-fsyntax-only) and reads the "'x' was not declared" errors; for every such name it looks
 the declaration up in runWalk() (a variable: its type; a lambda: the signature the compiler prints for it), adds it to Env and repeats until the compile is clean or
 nothing new can be found (then it prints what is left, for the spec's "env"). It edits walk.cpp in place: use git to take it back.
+
+Caveat: the class is built after the last moved lambda, so a forwarder must not be CALLED by code that runs before that line (a printout at setup, say): move such a call
+below the construction (the game then dies at start with exit code 3: a call through the empty pointer).
 """
 import json, re, subprocess, sys, os
 
