@@ -35,6 +35,9 @@ namespace gp
         std::function<void(int)> npcReact;
         std::function<int()> markFriended;            // returns the number of friends afterwards
         std::function<void(const char *, int)> event; // sounds, bubbles, pending events (placeholders)
+        // Optional: lets the game (and so the mods: system "encounter.classify") change the two reaction codes the rules gave for these deltas. Called once, when the
+        // pets have finished their first calls; the codes then decide the reactions and the outcome (see EncounterSequence).
+        std::function<void(int petDelta, int npcDelta, int &playerCode, int &animalCode)> classify;
     };
 
     class EncounterSequence
@@ -141,7 +144,8 @@ namespace gp
                 if (npcSeq_->tick(h.npc))
                 {
                     h.npcIdle();
-                    playerCat_ = classifyReaction(pet_, npc_);
+                    ensureCodes(h);
+                    playerCat_ = playerCode_;
                     animalCat_ = 0;
                     if (playerCat_ == 2)
                         h.event("bubble", 0x18);
@@ -161,7 +165,7 @@ namespace gp
                 }
                 if (animalCat_ == 0 && t_ >= npcDelay_)
                 {
-                    animalCat_ = classifyCompat(pet_, npc_);
+                    animalCat_ = animalCode_;
                     if (animalCat_ == 2)
                         h.event("bubble_npc", 0x18);
                     npcSeq_ = makeReaction(animalCat_, h.pet.rand(2, 6), true);
@@ -187,7 +191,7 @@ namespace gp
 
             case 0xc: // resolve (the categories are recomputed here, like the original)
             {
-                const int pc = classifyReaction(pet_, npc_), ac = classifyCompat(pet_, npc_);
+                const int pc = playerCode_, ac = animalCode_;
                 const int px = h.petX(), nx = h.npcX();
                 if (ac == 4 || ac == 5) // negative: walk away from the NPC. (AdjustCareStat(Happiness, ?): delta not read yet)
                 {
@@ -292,6 +296,17 @@ namespace gp
         }
 
     private:
+        // The two reaction codes for this pair, worked out once (the rules, then the game's chance to change them).
+        void ensureCodes(EncounterHost &h)
+        {
+            if (codes_)
+                return;
+            codes_ = true;
+            playerCode_ = classifyReaction(pet_, npc_);
+            animalCode_ = classifyCompat(pet_, npc_);
+            if (h.classify)
+                h.classify(pet_, npc_, playerCode_, animalCode_);
+        }
         bool gaveUp() const { return timer_ >= tuning().giveUpTicks; }
         void enter(int s)
         {
@@ -311,6 +326,8 @@ namespace gp
         int pet_, npc_;
         int step_ = 0, t_ = 0, timer_ = 0, total_ = 0;
         int targetX_ = 0, playerCat_ = 0, animalCat_ = 0;
+        bool codes_ = false;
+        int playerCode_ = 0, animalCode_ = 0;
         Outcome outcome_ = Outcome::Pending;
     };
 

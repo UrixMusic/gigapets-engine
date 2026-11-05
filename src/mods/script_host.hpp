@@ -765,6 +765,18 @@ namespace gp
                 {
                     defaultFn();
                     ranDefault = true;
+                    lua_rawgeti(L_, LUA_REGISTRYINDEX, ref); // what the default left in ctx is what `after` sees
+                    for (const SystemCtx::Value &v : ctx.values)
+                    {
+                        if (v.isString)
+                            lua_pushstring(L_, v.str.c_str());
+                        else if (v.num == std::floor(v.num) && std::fabs(v.num) < 1e15)
+                            lua_pushinteger(L_, lua_Integer(v.num));
+                        else
+                            lua_pushnumber(L_, v.num);
+                        lua_setfield(L_, -2, v.name.c_str());
+                    }
+                    lua_pop(L_, 1);
                 }
                 stage("after", nullptr, false);
             }

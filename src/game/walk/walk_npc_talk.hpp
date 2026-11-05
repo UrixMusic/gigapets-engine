@@ -415,8 +415,13 @@ inline void talkToNpc(WalkServices &svc, gp::NpcActor &n)
         {
             player.adjustCare(gp::Happiness, 5);
             player.setEncountered(d.id);
-            const int chance = gp::friendVisitChance(d.befriendOdds, player.personality[gp::Stars], d.stars);
-            const bool hit = gp::befriendRoll(npcRng, chance);
+            // the engine system "friend.visit": does a friend you visit give a gift? (`chance` from the rules, a mod may change it; `hit` is the answer: set it to decide)
+            gp::SystemCtx vc;
+            vc.set("npc", d.id).set("chance", gp::friendVisitChance(d.befriendOdds, player.personality[gp::Stars], d.stars)).set("hit", 0);
+            svc.scripts.system("friend.visit", vc, [&]
+                               { vc.set("hit", gp::befriendRoll(npcRng, int(vc.num("chance"))) ? 1 : 0); });
+            const int chance = int(vc.num("chance"));
+            const bool hit = vc.num("hit") != 0;
             std::printf("friend visit %s: chance %d -> %s\n", d.id.c_str(), chance, hit ? "hit" : "miss");
             if (hit)
             {
@@ -436,9 +441,14 @@ inline void talkToNpc(WalkServices &svc, gp::NpcActor &n)
     }
     const int pet = gp::personalityStatDelta(player.personality[gp::Halos], player.personality[gp::Pitchforks]);
     const int npc = gp::personalityStatDelta(d.halos, d.pitchforks);
-    player.setEncountered(d.id);
-    encNpc = &n;
-    enc = std::make_unique<gp::EncounterSequence>(pet, npc);
+    // the engine system "encounter.start": the two deltas are what the rules compare (a mod may change them); cancel, or replace, and no encounter begins (the NPC stays unmet)
+    gp::SystemCtx c;
+    c.set("npc", d.id).set("pet", pet).set("target", npc);
+    svc.scripts.system("encounter.start", c, [&]
+                       {
+                           player.setEncountered(d.id);
+                           encNpc = &n;
+                           enc = std::make_unique<gp::EncounterSequence>(int(c.num("pet")), int(c.num("target"))); });
 }
 
 } // namespace walk

@@ -137,6 +137,30 @@ int main()
         gp::HookTargets targets;
         CHECK(gp::validateHooks(h, targets).empty());
     }
+    { // the encounter systems exist and carry the npc id and codes
+        gp::ScriptHost h;
+        CHECK(h.runString("a", "local C = System.hooks('encounter.classify'); function C:before(ctx) ctx.player = ctx.animal + 1; ctx.animal = 5; seen_ = ctx.npc .. ctx.pet .. ctx.target end"));
+        CHECK(h.runString("b", "System.hooks('encounter.start'); System.hooks('encounter.finish'); System.hooks('friend.visit')"));
+        gp::SystemCtx c;
+        c.set("npc", "base:npc/9").set("pet", 3).set("target", 4).set("player", 1).set("animal", 2);
+        h.system("encounter.classify", c, [] {});
+        CHECK(c.num("player") == 3 && c.num("animal") == 5);
+        CHECK(h.runString("m", "assert(seen_ == 'base:npc/934', seen_)"));
+        gp::SystemCtx f;
+        f.set("npc", "x").set("outcome", "friend").set("chance", 40).set("friend", 0);
+        bool rolled = false;
+        h.system("encounter.finish", f, [&] { rolled = true; f.set("friend", 1); });
+        CHECK(rolled && f.num("friend") == 1);
+    }
+    { // what the default leaves in ctx is what after() sees, and what the engine keeps
+        gp::ScriptHost h;
+        CHECK(h.runString("a", "local S = System.hooks('encounter.finish'); function S:after(ctx) seen_ = ctx.friend end"));
+        gp::SystemCtx f;
+        f.set("npc", "x").set("outcome", "friend").set("chance", 40).set("friend", 0);
+        h.system("encounter.finish", f, [&] { f.set("friend", 1); });
+        CHECK(f.num("friend") == 1);
+        CHECK(h.runString("m", "assert(seen_ == 1, tostring(seen_))"));
+    }
     { // unknown system names are an error at registration; System.list shows the real ones
         gp::ScriptHost h;
         CHECK(!h.runString("a", "System.hooks('care.decya')"));

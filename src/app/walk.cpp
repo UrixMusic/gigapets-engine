@@ -2230,6 +2230,15 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         };
 
         gp::EncounterHost host;
+        host.classify = [&](int petDelta, int npcDelta, int &playerCode, int &animalCode)
+        {
+            // the engine system "encounter.classify": the reaction codes the rules gave (1, 2 = friendly, 3, 7 = startled / sad, 4, 5 = hostile, 6 = bored); a mod may change them
+            gp::SystemCtx c;
+            c.set("npc", encNpc ? encNpc->def->id : std::string()).set("pet", petDelta).set("target", npcDelta).set("player", playerCode).set("animal", animalCode);
+            scripts.system("encounter.classify", c, [] {});
+            playerCode = int(c.num("player"));
+            animalCode = int(c.num("animal"));
+        };
         auto walkAxis = [&](int target, bool xAxis) -> bool
         {
             int &c = xAxis ? pos.x : pos.y;
@@ -6069,7 +6078,13 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         enc.reset();
                         encNpc = nullptr;
                         playAnim(restIdleId(), true, restIdleRate(), Pose::Idle);
-                        if (friend_ && gp::befriendRoll(npcRng, gp::befriendChance(d.befriendOdds, player.personality[gp::Stars], d.stars)))
+                        // the engine system "encounter.finish": the encounter is over; a friendly outcome rolls for friendship. `chance` is the rules' number, `friend` the answer
+                        // (set it to decide; it is 0 if the outcome was not friendly and no mod says otherwise)
+                        gp::SystemCtx fc;
+                        fc.set("npc", d.id).set("outcome", friend_ ? "friend" : "other").set("chance", gp::befriendChance(d.befriendOdds, player.personality[gp::Stars], d.stars)).set("friend", 0);
+                        scripts.system("encounter.finish", fc, [&]
+                                       { fc.set("friend", friend_ && gp::befriendRoll(npcRng, int(fc.num("chance"))) ? 1 : 0); });
+                        if (fc.num("friend") != 0)
                             walk::grantFriendship(svc, d, false);
                     }
                     if (enc && encNpc)

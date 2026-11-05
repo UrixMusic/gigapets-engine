@@ -82,6 +82,14 @@ namespace gp
              "x, y (where it is: set them in replace to move it yourself), dx, dy (the way it goes: -1, 0 or 1; change them to reverse the controls, or set both 0 to hold it), steps (how many pixel steps this tick)"},
             {"npc.tick", "an NPC's own brain takes one tick: it walks its path, or picks and runs an idle activity (the sequences of tricks and calls have their own code and still run)",
              "id (the npc's id), x, y (set them in replace to move it yourself), activity (what it is doing: 0x17 = wandering), stationary, scripted (1 while a script drives it: npc.walkTo...)"},
+            {"encounter.start", "the pet meets an NPC it has not met (before the greeting sequence); cancel or replace and nothing starts, the NPC stays unmet",
+             "npc (id), pet (the pet's personality delta), target (the NPC's delta): the two numbers the rules compare; change them to change how well they get on"},
+            {"encounter.classify", "the sequence decides how the pet and the NPC react to each other, once the first calls are over; the codes also decide the outcome",
+             "npc, pet, target (the deltas), player and animal (the reaction codes the rules gave: 1, 2 friendly, 3 / 7 startled or sad, 4, 5 hostile, 6 bored): change them. A friendly animal code with a player code that is not 4 or 5 is a friendly outcome; 4 or 5 on the animal side is a hostile one; anything else neutral"},
+            {"encounter.finish", "the sequence has ended; after a friendly outcome the game rolls for friendship",
+             "npc, outcome (\"friend\" or \"other\"), chance (the roll's number, 0..100+), friend (1 = they become friends: set it to decide; the default rolls only after a friendly outcome)"},
+            {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
+             "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };
         return defs;
     }
