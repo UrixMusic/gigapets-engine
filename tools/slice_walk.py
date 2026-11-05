@@ -248,7 +248,7 @@ def main():
                 c -= 1
             if name in assigns:
                 tgt, mname, prm = [x for x in assign_info if x[0] == name][0]
-                names = ', '.join(re.sub(r'\s*=.*', '', p).split()[-1].lstrip('&*') for p in prm.strip('()').split(',') if p.strip())
+                names = ', '.join(n for t, n in split_params(prm)) if prm.strip() != '()' else ''
                 ret_kw = 'return ' if False else ''
                 repl[(a, b)] = (c, ['        %s = [&]%s { return (*%s).%s(%s); };' % (tgt, prm, ctl, mname, names)])
             else:
@@ -289,8 +289,10 @@ def main():
         text = NL.join(out)
         inc = '#include "../game/walk/%s"' % spec['header']
         if inc not in text:
-            key = '#include "../game/walk/walk_room.hpp"'
-            text = text.replace(key, key + NL + inc, 1) if key in text else text
+            lines = text.split(NL)
+            last = max(i for i, l in enumerate(lines) if l.startswith('#include "../game/walk/'))   # after the last walk header: it may use their types
+            lines.insert(last + 1, inc)
+            text = NL.join(lines)
         return text
 
     return spec, gen_header, gen_walk, env, cache_file, dry, defaults
