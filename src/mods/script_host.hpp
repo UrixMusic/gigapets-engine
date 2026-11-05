@@ -915,8 +915,8 @@ namespace gp
             return sceneCmds_;
         }
         // The last thing drawn each frame: Game.hooks().onPostDraw(g), over everything (world, menus, dialogue, scenes). Same drawing calls as onHud, and g.rect's blend modes make
-        // tints, darkening, vignettes and scanlines. ctx.w / ctx.h are the screen's size (320 x 240).
-        const std::vector<DrawCmd> &drawPost()
+        // tints, darkening, vignettes and scanlines. g.w / g.h are the whole screen's size: 320 x 240, or 426 x 240 in 16:9 (the filter covers the side bands too).
+        const std::vector<DrawCmd> &drawPost(int screenW = 320)
         {
             sceneCmds_.clear();
             if (!L_ || gameHooks_.empty())
@@ -930,6 +930,10 @@ namespace gp
                     lua_pushcclosure(L_, f, 1);
                     lua_setfield(L_, -2, name);
                 }
+                lua_pushinteger(L_, screenW);
+                lua_setfield(L_, -2, "w");
+                lua_pushinteger(L_, 240);
+                lua_setfield(L_, -2, "h");
             };
             drawing_ = hud_ = true;
             runHook(gameHooks_, 'G', "", "onPostDraw", fns, nullptr);

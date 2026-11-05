@@ -7135,8 +7135,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     fade.go(0.0, 6.0 / 30);
                 }
             }
-            drawScriptCmds(scripts.drawPost()); // Game.hooks().onPostDraw: over the finished frame
-            gp::useWholeScreen(ren); // the fade covers the whole window
+            gp::useWholeScreen(ren); // the whole window, side bands included
+            drawScriptCmds(scripts.drawPost(gp::logicalW())); // Game.hooks().onPostDraw: over the finished frame
             {
                 const Uint64 t = SDL_GetPerformanceCounter();
                 fade.step(std::min(double(t - fadeLast) / double(freq), 1.0 / 20)); // clamp so loadArea hitches don't skip the fade
