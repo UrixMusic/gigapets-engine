@@ -134,6 +134,12 @@ namespace gp
              "idle (seconds it has stood)"},
             {"pet.activity", "one of the pet's running activities takes its step this tick (only while it runs); change `step` to jump (0 ends it), or cancel / replace and drive the pet yourself while the game's step is skipped",
              "kind (\"feed\", \"dig\", \"wash\", \"drop\" = a minigame prize being dropped, \"potion\", \"bark\", \"trick\", \"question\", \"colour\"), step (where it is: 1, 2, 3 ...; 0 = not running)"},
+            {"frontend.intro", "the title's intro is over (Z) and the game goes on to the starter room; cancel or replace and the front end stays on the intro",
+             "(nothing)"},
+            {"frontend.starter", "the player pressed Z on a pet in the starter room; cancel or replace and it is not chosen",
+             "cursor (which pet: 0..11, two to a column)"},
+            {"frontend.name", "the player finished the pet's name (OK); the game goes on to the slot screen. cancel or replace and it stays on the name screen",
+             "name (the name, up to 9 characters: change it)"},
             {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
              "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };

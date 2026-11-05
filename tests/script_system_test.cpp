@@ -114,6 +114,15 @@ int main()
         CHECK(!h.runString("m", "say('m:str/a', {}, 'baker')"));
         CHECK(h.runString("m", "assert(text.get('m:str/x', { name = 'Pip' }) == 'm:str/x:Pip'); assert(text.get('m:str/none') == nil)"));
     }
+    { // the front end's screens: name can be changed; the others exist
+        gp::ScriptHost h;
+        CHECK(h.runString("a", "System.hooks('frontend.intro'); System.hooks('frontend.starter'); local N = System.hooks('frontend.name'); function N:before(ctx) ctx.name = string.upper(ctx.name) .. '!' end"));
+        gp::SystemCtx c;
+        c.set("name", "pip");
+        std::string got;
+        h.system("frontend.name", c, [&] { got = c.str("name"); });
+        CHECK(got == "PIP!" && h.errors().empty());
+    }
     { // the front end systems exist; frontend.start can change the slot
         gp::ScriptHost h;
         CHECK(h.runString("a", "System.hooks('frontend.menu'); local S = System.hooks('frontend.start'); function S:before(ctx) ctx.slot = 2 end"));

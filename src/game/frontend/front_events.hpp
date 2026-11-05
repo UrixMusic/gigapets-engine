@@ -279,8 +279,12 @@ public:
                     goMenu(); // event 5 -> state 4
                 else
                 {
-                    starter.start(rom, randBelow, makeStarterPool(*uiDb, gp::loadProfileFile()));
-                    setScreen(Screen::Starter);
+                    // the engine system "frontend.intro": the intro is over (Z): on to the starter room; cancel or replace and the front end stays on the intro (a mod may open a scene)
+                    gp::SystemCtx ic;
+                    feScripts.system("frontend.intro", ic, [&]
+                                     {
+                        starter.start(rom, randBelow, makeStarterPool(*uiDb, gp::loadProfileFile()));
+                        setScreen(Screen::Starter); });
                 }
             }
             else if (screen == Screen::Load && down && !rep && !loadPicked)
@@ -574,10 +578,20 @@ public:
                     pressedUntil = SDL_GetTicks() + 200; // WaitForElapsedTime(0.2)
                 if (r.done)
                 {
-                    std::printf("Done: name \"%s\" -> InitPetName, state 7 (house select)\n", name.name.c_str());
-                    houseCur = firstEmptySlot();
-                    dlg.box.reset();
-                    setScreen(Screen::House);
+                    // the engine system "frontend.name": the pet's name is chosen (OK); a mod may change `name` (up to 9 characters), or cancel / replace and the front end stays on the name screen
+                    gp::SystemCtx nc;
+                    nc.set("name", name.name);
+                    feScripts.system("frontend.name", nc, [&]
+                                     {
+                        std::string chosenName = nc.str("name");
+                        if (chosenName.size() > size_t(NameEntry::kMax))
+                            chosenName.resize(size_t(NameEntry::kMax));
+                        if (!chosenName.empty())
+                            name.name = chosenName;
+                        std::printf("Done: name \"%s\" -> InitPetName, state 7 (house select)\n", name.name.c_str());
+                        houseCur = firstEmptySlot();
+                        dlg.box.reset();
+                        setScreen(Screen::House); });
                 }
             }
             else if (screen == Screen::Browse && down)
@@ -611,7 +625,13 @@ public:
                     else if (k == SDLK_UP || k == SDLK_DOWN)
                         c ^= 1;
                     else if (k == SDLK_z)
-                        starter.confirm();
+                    {
+                        // the engine system "frontend.starter": Z on a pet of the starter room (cursor: 0..11, two to a column); cancel or replace and it is not chosen
+                        gp::SystemCtx sc;
+                        sc.set("cursor", starter.cursor);
+                        feScripts.system("frontend.starter", sc, [&]
+                                         { starter.confirm(); });
+                    }
                     if (c != starter.cursor)
                     {
                         starter.cursor = c;
