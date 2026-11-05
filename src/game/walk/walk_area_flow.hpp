@@ -49,7 +49,7 @@ struct AreaFlowEnv
     int &questionStep;
     gp::QuestRuntime &quests;
     std::function<void()> &refreshBits;
-    SDL_Renderer*ren;
+    SDL_Renderer *&ren;
     gp::ModReport &rep;
     std::function<void(std::function<void()>)> requestScreen;
     std::unique_ptr<RoomView> &room;
@@ -60,11 +60,11 @@ struct AreaFlowEnv
     gp::SaveData &sd;
     std::function<void(int, int)> sfxFn;
     bool &showCollision;
-    gp::NpcActor*showNpc;
+    gp::NpcActor *&showNpc;
     int &sp;
     const gp::SpeciesDef*speciesDef;
     bool &statsOpen;
-    SDL_Texture*tex;
+    SDL_Texture *&tex;
     int &trickStep;
     int &tutStep;
     std::unique_ptr<AreaWorld> &world;

@@ -79,7 +79,7 @@ struct RoomEnv
     gp::Dialogue &dialogue;
     WalkState &S;
     WalkServices &svc;
-    SDL_Renderer *ren;
+    SDL_Renderer *&ren;
     ItemMenu &im;
     int &sp;
     int &slot;

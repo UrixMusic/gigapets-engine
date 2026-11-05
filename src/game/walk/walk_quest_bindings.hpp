@@ -17,7 +17,7 @@ struct QuestBindingsEnv
     unsigned int&gameTicks;
     int &gateBias;
     std::function<void()> &holdDone;
-    gp::NpcActor*holdNpc;
+    gp::NpcActor *&holdNpc;
     int &holdTicks;
     std::function<std::string(int)> itemName;
     std::function<void()> loadNpcs;

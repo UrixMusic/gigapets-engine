@@ -29,7 +29,7 @@ struct WorldDrawEnv
     int &playerSpecies;
     gp::QuestRuntime &quests;
     std::function<std::string(int, int)> reactAnimId;
-    SDL_Renderer*ren;
+    SDL_Renderer *&ren;
     gp::Rom&rom;
     std::function<void(int, int)> sfxFn;
     TextDrawer &signText;

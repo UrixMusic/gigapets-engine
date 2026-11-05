@@ -218,9 +218,9 @@ def main():
                 if '$' in t:                       # a declarator the spec spells out ('const int (&$)[3]')
                     h.append('    %s;' % t.replace('$', n))
                     continue
-                if not t.endswith('&') and not t.endswith('*'):
-                    t += ' &'   # a variable of runWalk(): the Env refers to it
-                h.append('    %s%s;' % (t if t.endswith('&') or t.endswith('*') else t + ' ', n))
+                if not t.endswith('&'):
+                    t += ' &'   # a variable of runWalk() (a pointer too: the code may point it elsewhere): the Env refers to it
+                h.append('    %s%s;' % (t if t.endswith('&') else t + ' ', n))
         h.append('};')
         h.append('')
         h.append('class %s : public %sEnv' % (cls, cls))

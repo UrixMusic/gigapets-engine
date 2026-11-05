@@ -46,7 +46,7 @@ struct WorldStepEnv
     std::function<AnimRef(int)> getAnim;
     bool &giveMode;
     std::function<void()> &holdDone;
-    gp::NpcActor*holdNpc;
+    gp::NpcActor *&holdNpc;
     int &holdTicks;
     gp::EncounterHost &host;
     int&idleThreshold;
@@ -120,7 +120,7 @@ struct WorldStepEnv
     gp::ShopStock &shopStock;
     std::function<void()> &showDone;
     int &showLevel;
-    gp::NpcActor*showNpc;
+    gp::NpcActor *&showNpc;
     bool &showStarted;
     gp::TrickShowcase &showcase;
     int &sp;

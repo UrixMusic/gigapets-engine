@@ -21,7 +21,7 @@ struct FrameDrawEnv
     WalkGfx &barGfx;
     WalkBarHost &barHost;
     bool&barInHouse;
-    SDL_Texture*bgTex;
+    SDL_Texture *&bgTex;
     std::vector<Blast> &blasts;
     std::unique_ptr<Loaded> &cur;
     gp::ContentDB &db;
@@ -97,7 +97,7 @@ struct FrameDrawEnv
     int &questionTicks;
     gp::QuestRuntime &quests;
     std::function<std::string(int, int)> reactAnimId;
-    SDL_Renderer*ren;
+    SDL_Renderer *&ren;
     float&renderAlpha;
     gp::Rom&rom;
     std::unique_ptr<RoomView> &room;
@@ -106,15 +106,15 @@ struct FrameDrawEnv
     std::function<void(int, int)> sfxFn;
     std::function<int(const gp::Id &)> shadowFor;
     int &shakeDy;
-    gp::NpcActor*showNpc;
+    gp::NpcActor *&showNpc;
     std::function<float(int, int)> smoothAt;
     int &sp;
     gp::StatNotice &statNotice;
-    SDL_Texture*statsBgTex;
+    SDL_Texture *&statsBgTex;
     bool &statsOpen;
     int &stinkTicks;
     std::function<std::string(bool)> tabAnimId;
-    SDL_Texture*tex;
+    SDL_Texture *&tex;
     TextDrawer &text;
     int &thoughtIcon;
     int &thoughtTicks;
