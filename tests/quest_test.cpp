@@ -241,6 +241,39 @@ int main()
         r5.load(r5.lastId() + 1);
         CHECK(rolled && r5.q.def.giver >= 0); // a generated one: the roll ran, nothing is left at the placeholder -1
     }
+    // ---- textSystem: a generated quest's reminder goes through the host
+    {
+        Dialogue d6;
+        QuestRuntime r6;
+        r6.dlg = &d6;
+        r6.table = tbl;
+        std::vector<std::string> kinds;
+        auto &k = r6.h;
+        k.text = [](int id) { return "t" + std::to_string(id); };
+        k.held = [](const Id &) { return 0; };
+        k.remove = [](const Id &, int) {};
+        k.spawn = [](int, const Id &, int, bool) {};
+        k.place = [](const Id &, int, int, bool) {};
+        k.randomEvent = [] {};
+        k.clearFlagged = [] {};
+        k.sfx = [](int) {};
+        k.camX = [] { return 0; };
+        k.camY = [] { return 0; };
+        k.receiverY = [] { return 0; };
+        k.nowTick = [] { return 5; };
+        k.rnd = rnd;
+        k.textSystem = [&](const char *kind, std::string &t) { kinds.push_back(kind); t += "!"; };
+        r6.txt.str = [](const std::string &key) { return "S:" + key; };
+        r6.txt.npcName = [](int) { return std::string("N"); };
+        r6.txt.areaName = [](int) { return std::string("A"); };
+        r6.txt.itemName = [](const Id &, int) { return std::string("I"); };
+        r6.txt.rnd = rnd;
+        r6.load(1);
+        r6.talk(0x42); d6.choose(1); d6.choose(1); // accepted (scripted quest: its lines come from the text table, untouched)
+        r6.talk(0x42); // the receiver, objectives missing: the reminder
+        CHECK(!kinds.empty() && kinds.back() == "reminder");
+        CHECK(d6.open() && d6.box->body.size() > 1 && d6.box->body.back() == '!');
+    }
     // no onComplete wired: rewards as before
     {
         Dialogue d3;

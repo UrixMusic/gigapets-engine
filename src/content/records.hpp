@@ -287,6 +287,7 @@ namespace gp
         bool timed = false;
         bool spawnsOnAccept = true; // false: nothing is scattered when the quest is accepted
         std::string reminderKey;    // empty = the rolled "you don't have everything" lines
+        std::vector<Id> requestTexts, completeTexts, reminderTexts; // a mod type's own lines (text ids; one is picked at random). Empty = the game's.
         // how the generator picks this type: a roll r (1..9 in the base game) in [rollLo, rollHi] once
         // `rollMinTotal` quests are done. rollHi < rollLo = never rolled (scripted-only types).
         int rollLo = 0, rollHi = -1, rollMinTotal = 0;

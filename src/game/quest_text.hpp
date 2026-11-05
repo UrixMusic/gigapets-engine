@@ -69,6 +69,15 @@ namespace gp
         std::function<std::string(const Id &, int)> itemName;
         std::function<std::string(const std::string &)> str; // quest string key -> text; EMPTY when there is no such string
         RandFn rnd;                                          // rnd(lo, hi): hi exclusive
+        std::function<std::vector<std::string>(int mode, int kind)> typeLines; // a quest type's own lines, resolved: kind 0 request, 1 complete, 2 reminder; empty = the game's
+        // One of the type's own lines, or "" when it has none
+        std::string own(int mode, int kind) const
+        {
+            if (!typeLines || !rnd)
+                return {};
+            const std::vector<std::string> v = typeLines(mode, kind);
+            return v.empty() ? std::string() : v[size_t(rnd(1, int(v.size()) + 1)) - 1];
+        }
 
         bool has(const std::string &key) const { return str && !str(key).empty(); }
         // A missing string shows as "(key)" so the gap is visible in game instead of an empty box.
@@ -118,6 +127,8 @@ namespace gp
     // GetQuestCompleteDialogue
     inline std::string completeText(int typeMode, const QuestTextEnv &e)
     {
+        if (const std::string own = e.own(typeMode, 1); !own.empty())
+            return own;
         const int r = e.rnd(1, 4); // rolled even for modes 2/3/6/7, like the ROM
         switch (typeMode)
         {
@@ -135,6 +146,13 @@ namespace gp
     // GetQuestRequestDialogue (the generic offer text)
     inline std::string requestText(const QuestDef &d, const QuestTextEnv &e)
     {
+        if (const std::string own = e.own(d.typeMode, 0); !own.empty()) // a type of a mod: its own line, with {npc} (the receiver), {area} and {item} (the first objective) and {list}
+        {
+            std::string list;
+            for (size_t k = 0; k < std::min<size_t>(d.objectives.size(), 3); ++k)
+                list += (k ? ", " : "") + std::to_string(d.objectives[k].count) + " " + e.itemName(d.objectives[k].item, d.objectives[k].count);
+            return fillTemplate(own, {{"list", list}, {"npc", e.npcName(d.receiver)}, {"area", e.areaName(d.areaTier)}, {"item", d.objectives.empty() ? std::string() : e.itemName(d.objectives[0].item, d.objectives[0].count)}});
+        }
         switch (d.typeMode)
         {
         case 2:

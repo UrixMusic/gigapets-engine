@@ -42,6 +42,8 @@ namespace gp
         // The next quest is being set up (QuestRuntime::load): the host (the engine system "quest.load") may change it or do the choosing itself. `d` is the scripted record, or for a
         // generated quest an empty one with giver -1; `roll` runs the game's own generator into it. Unset = just roll.
         std::function<void(QuestDef &d, int counter, bool scripted, const std::function<void()> &roll)> shapeQuest;
+        // A line of a generated quest's text is about to be shown (kind: "request", "accept", "decline", "reminder", "complete", "hint", "fail"); the host may change it. Unset = as it is.
+        std::function<void(const char *kind, std::string &text)> textSystem;
         RandFn rnd;
     };
 
@@ -261,14 +263,21 @@ namespace gp
 
         bool textReady() const { return txt.npcName && txt.areaName && txt.itemName && txt.rnd; }
 
+        // A generated quest's line, after the host (the engine system "quest.text") had its say
+        std::string styled(const char *kind, std::string s)
+        {
+            if (h.textSystem)
+                h.textSystem(kind, s);
+            return s;
+        }
         std::string textFor(int id) { return id >= 0 ? h.text(id) : txt.s("placeholder_generated"); }
 
         std::string failText()
         {
             if (!textReady())
-                return txt.s("quest_failed_short");
+                return styled("fail", txt.s("quest_failed_short"));
             const int a = txt.npcTier ? txt.npcTier(q.def.giver) : 0;
-            return fillTemplate(txt.s("quest_failed"), {{"npc", txt.npcName(q.def.giver)}, {"prep", txt.prep(a)}, {"area", txt.areaName(a)}});
+            return styled("fail", fillTemplate(txt.s("quest_failed"), {{"npc", txt.npcName(q.def.giver)}, {"prep", txt.prep(a)}, {"area", txt.areaName(a)}}));
         }
 
         void show(DialogueBox b)
@@ -289,7 +298,7 @@ namespace gp
         void ask(int textId)
         {
             // generic quests: the confirm prompt text is not known yet (placeholder)
-            auto b = messageBox(textId >= 0 ? textFor(textId) : acceptText(txt));
+            auto b = messageBox(textId >= 0 ? textFor(textId) : styled("accept", acceptText(txt)));
             b.kind = BoxKind::Confirm;
             b.onYes = [this]
             { accept(); };
@@ -298,7 +307,7 @@ namespace gp
             {
                 if (h.onDecline)
                     h.onDecline();
-                sayStr(declineText(txt), [] {});
+                sayStr(styled("decline", declineText(txt)), [] {});
             };
             show(std::move(b));
         }
@@ -327,7 +336,7 @@ namespace gp
             {
             case QuestLine::Text:
                 if (q.def.generic && textReady())
-                    sayStr(requestText(q.def, txt), next);
+                    sayStr(styled("request", requestText(q.def, txt)), next);
                 else
                     say(l.text, next);
                 break;
@@ -398,7 +407,8 @@ namespace gp
             case TurnIn::Missing:
             {
                 const int roll = h.rnd ? h.rnd(1, 4) : 1;
-                show(messageBox(txt.s(reminderKey(world.type(q.def.typeMode), roll))));
+                const std::string own = txt.own(q.def.typeMode, 2);
+                show(messageBox(styled("reminder", own.empty() ? txt.s(reminderKey(world.type(q.def.typeMode), roll)) : own)));
                 break;
             }
             case TurnIn::Done:
@@ -409,7 +419,7 @@ namespace gp
                 { advance(advanceStep(q)); };
                 const auto &C = q.def.completionText;
                 if (q.def.generic)
-                    sayStr(txt.rnd ? completeText(q.def.typeMode, txt) : txt.s("placeholder_generated"), next);
+                    sayStr(styled("complete", txt.rnd ? completeText(q.def.typeMode, txt) : txt.s("placeholder_generated")), next);
                 else if (C.empty())
                     advance({});
                 else if (C[0] >= 0)
@@ -442,7 +452,7 @@ namespace gp
                     intro();
                 }
                 else if (q.def.id >= 0 && textReady())
-                    sayStr(hintText(q.def.giver, txt), [] {}); // "go see X" hint
+                    sayStr(styled("hint", hintText(q.def.giver, txt)), [] {}); // "go see X" hint
                 break;
             }
         }

@@ -5179,6 +5179,15 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (c.str("spawn") != gp::formatQuestEntries(d.spawn))
                 d.spawn = gp::parseQuestEntries(c.str("spawn"), itemKnown);
         };
+        // the engine system "quest.text": a generated quest's line (request, accept, decline, reminder, complete, hint, fail) before it is shown
+        qh.textSystem = [&](const char *kind, std::string &text)
+        {
+            const gp::QuestCompleteInfo info = questInfo();
+            gp::SystemCtx c;
+            c.set("kind", kind).set("text", text).set("number", quests.counter).set("type", info.type).set("giver", info.giverId).set("receiver", info.receiverId);
+            scripts.system("quest.text", c, [] {});
+            text = c.str("text");
+        };
         // the engine system "quest.reward" (systems.hpp): every reward activity of a quest goes through it
         qh.rewardSystem = [&](int &code)
         {
@@ -5345,6 +5354,15 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         gp::QuestTextEnv &txt = quests.txt; // adjust to the real member name
 
         quests.txt.rnd = rnd;
+        quests.txt.typeLines = [&](int mode, int kind) // a mod's quest type may carry its own lines (quest_type records: request_text, complete_text, reminder_text)
+        {
+            std::vector<std::string> out;
+            for (const gp::QuestTypeDef &t : db.questTypes())
+                if (t.mode == mode)
+                    for (const gp::Id &id : kind == 0 ? t.requestTexts : kind == 1 ? t.completeTexts : t.reminderTexts)
+                        out.push_back(db.textOr(id, ""));
+            return out;
+        };
         quests.txt.str = [&](const std::string &k)
         { return db.textOr("base:str/quest/" + k); }; // "" when missing: the builders then show "(key)"
         quests.txt.npcName = [&](int p)

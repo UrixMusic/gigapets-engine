@@ -1818,6 +1818,169 @@ namespace gp
             rep.lastWriter[id] = m.id;
         }
 
+        // quest_type: a kind of generated quest. Only mode "add".
+        //   { type: "quest_type", mode: "add", id: "mymod:questtype/delivery",
+        //     pool: [ { item: "mymod:item/pie", weight: 2, buried: false } ]   (what it asks for; empty = the default errand's pool),
+        //     count_lo / count_hi: 1..99 (how many of each item), objective_count / bonus_count: [ { from: 0, lo: 1, hi: 3 } ] (how many different items, and bonus items, once `from`
+        //     quests are done; empty = the default errand's), spawn: [ { item, count } ] (extra items dropped for the quest), fixed_area_tier: 0..6, excluded_tiers: [..],
+        //     timed: true (a time limit is worked out), spawns_on_accept: false, receiver: "random" (default) | "other" (a different NPC) | "self" (the giver),
+        //     roll_lo / roll_hi: the generator rolls 1..9 (10+ gives this type its own share: roll_hi up to 99), roll_min_total: only once this many quests are done,
+        //     request_text, complete_text, reminder_text: lists of text ids (one is picked at random; request_text has {npc} the receiver, {area}, {item}, {list}) }
+        // A type with no roll_lo / roll_hi is never rolled by the generator (a script's `quest.load` can still pick it by id).
+        inline void applyQuestType(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
+        {
+            static const std::set<std::string> allowed{"type", "mode", "id", "pool", "count_lo", "count_hi", "objective_count", "bonus_count", "spawn", "fixed_area_tier", "excluded_tiers",
+                                                       "timed", "spawns_on_accept", "receiver", "roll_lo", "roll_hi", "roll_min_total", "request_text", "complete_text", "reminder_text"};
+            std::string id, why;
+            if (!beginAdd(m, file, rec, rep, "quest_type", allowed, [&](const std::string &i)
+                          {
+                              for (const QuestTypeDef &t : db.questTypes())
+                                  if (t.id == i)
+                                      return true;
+                              return false; },
+                          id))
+                return;
+            QuestTypeDef t;
+            t.id = id;
+            // the number saves keep for this type: from the id (stable however the mods are ordered), 100 and up, probing past a taken one
+            {
+                unsigned h = 2166136261u;
+                for (const char c : id)
+                    h = (h ^ static_cast<unsigned char>(c)) * 16777619u;
+                int mode = 100 + int(h % 90000u);
+                for (bool again = true; again;)
+                {
+                    again = false;
+                    for (const QuestTypeDef &o : db.questTypes())
+                        if (o.mode == mode)
+                        {
+                            mode = mode >= 99999 ? 100 : mode + 1;
+                            again = true;
+                        }
+                }
+                t.mode = mode;
+            }
+            t.spawnsOnAccept = true;
+            auto itemOf = [&](const json &e, const char *key, Id &out) -> bool
+            {
+                if (!e.contains(key) || !e[key].is_string() || !db.item(e[key].get<std::string>()))
+                    return err(rep, file, m.id, "'" + id + "': every entry needs an '" + key + "' that is an item that exists"), false;
+                out = e[key].get<std::string>();
+                return true;
+            };
+            auto textList = [&](const char *key, std::vector<Id> &out) -> bool
+            {
+                if (!rec.contains(key))
+                    return true;
+                if (!rec[key].is_array() || rec[key].empty() || rec[key].size() > 8)
+                    return err(rep, file, m.id, "'" + id + "': '" + key + "' must be a list of 1 to 8 text ids"), false;
+                for (const json &e : rec[key])
+                {
+                    if (!e.is_string() || !db.hasText(e.get<std::string>()))
+                        return err(rep, file, m.id, "'" + id + "': '" + key + "' has an id that is not a text that exists"), false;
+                    out.push_back(e.get<std::string>());
+                }
+                return true;
+            };
+            auto ranges = [&](const char *key, std::vector<QuestCountRange> &out) -> bool
+            {
+                if (!rec.contains(key))
+                    return true;
+                if (!rec[key].is_array() || rec[key].empty() || rec[key].size() > 8)
+                    return err(rep, file, m.id, "'" + id + "': '" + key + "' must be a list of 1 to 8 like { \"from\": 0, \"lo\": 1, \"hi\": 3 }"), false;
+                for (const json &e : rec[key])
+                {
+                    QuestCountRange r;
+                    if (!e.is_object())
+                        return err(rep, file, m.id, "'" + id + "': every entry in '" + key + "' must be an object"), false;
+                    for (auto it = e.begin(); it != e.end(); ++it)
+                        if (it.key() != "from" && it.key() != "lo" && it.key() != "hi")
+                            return err(rep, file, m.id, "'" + id + "': unknown field '" + it.key() + "' in '" + key + "'"), false;
+                    if (!optInt(e, "from", r.fromTotal, 0, 100000, why) || !optInt(e, "lo", r.lo, 0, 9, why) || !optInt(e, "hi", r.hi, 0, 9, why))
+                        return err(rep, file, m.id, "'" + id + "': " + why), false;
+                    if (r.hi < r.lo)
+                        return err(rep, file, m.id, "'" + id + "': 'hi' must not be below 'lo' in '" + key + "'"), false;
+                    out.push_back(r);
+                }
+                return true;
+            };
+            if (rec.contains("pool"))
+            {
+                if (!rec["pool"].is_array() || rec["pool"].empty() || rec["pool"].size() > 64)
+                    return err(rep, file, m.id, "'" + id + "': 'pool' must be a list of 1 to 64 like { \"item\": \"mymod:item/pie\", \"weight\": 2 }");
+                for (const json &e : rec["pool"])
+                {
+                    if (!e.is_object())
+                        return err(rep, file, m.id, "'" + id + "': every entry in 'pool' must be an object");
+                    for (auto it = e.begin(); it != e.end(); ++it)
+                        if (it.key() != "item" && it.key() != "weight" && it.key() != "buried")
+                            return err(rep, file, m.id, "'" + id + "': unknown field '" + it.key() + "' in 'pool'");
+                    QuestPoolEntry p;
+                    bool buried = false;
+                    if (!itemOf(e, "item", p.item))
+                        return;
+                    if (!optInt(e, "weight", p.weight, 1, 100, why) || !optBool(e, "buried", buried, why))
+                        return err(rep, file, m.id, "'" + id + "': " + why);
+                    p.buried = buried ? 1 : 0;
+                    t.pool.push_back(std::move(p));
+                }
+            }
+            if (rec.contains("spawn"))
+            {
+                if (!rec["spawn"].is_array() || rec["spawn"].size() > 8)
+                    return err(rep, file, m.id, "'" + id + "': 'spawn' must be a list of up to 8 like { \"item\": \"mymod:item/pie\", \"count\": 1 }");
+                for (const json &e : rec["spawn"])
+                {
+                    QuestEntry q;
+                    q.count = 1;
+                    if (!e.is_object())
+                        return err(rep, file, m.id, "'" + id + "': every entry in 'spawn' must be an object");
+                    if (!itemOf(e, "item", q.item))
+                        return;
+                    if (!optInt(e, "count", q.count, 1, 99, why))
+                        return err(rep, file, m.id, "'" + id + "': " + why);
+                    t.spawn.push_back(std::move(q));
+                }
+            }
+            if (!ranges("objective_count", t.objectiveCount) || !ranges("bonus_count", t.bonusCount) || !textList("request_text", t.requestTexts) || !textList("complete_text", t.completeTexts) ||
+                !textList("reminder_text", t.reminderTexts))
+                return;
+            if (rec.contains("excluded_tiers"))
+            {
+                if (!rec["excluded_tiers"].is_array() || rec["excluded_tiers"].size() > 7)
+                    return err(rep, file, m.id, "'" + id + "': 'excluded_tiers' must be a list of area tiers (0..6)");
+                for (const json &e : rec["excluded_tiers"])
+                {
+                    if (!e.is_number_integer() || e.get<int>() < 0 || e.get<int>() > 6)
+                        return err(rep, file, m.id, "'" + id + "': 'excluded_tiers' must be a list of area tiers (0..6)");
+                    t.excludedTiers.push_back(e.get<int>());
+                }
+            }
+            if (rec.contains("receiver"))
+            {
+                const std::string r = rec["receiver"].is_string() ? rec["receiver"].get<std::string>() : "";
+                if (r != "random" && r != "other" && r != "self")
+                    return err(rep, file, m.id, "'" + id + "': 'receiver' must be \"random\", \"other\" or \"self\"");
+                t.receiver = r == "other" ? QuestReceiver::Other : r == "self" ? QuestReceiver::Self : QuestReceiver::Random;
+            }
+            if (!optInt(rec, "count_lo", t.countLo, 1, 99, why) || !optInt(rec, "count_hi", t.countHi, 1, 99, why) || !optInt(rec, "fixed_area_tier", t.fixedAreaTier, -1, 6, why) ||
+                !optBool(rec, "timed", t.timed, why) || !optBool(rec, "spawns_on_accept", t.spawnsOnAccept, why) || !optInt(rec, "roll_min_total", t.rollMinTotal, 0, 100000, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            if (t.countHi < t.countLo)
+                return err(rep, file, m.id, "'" + id + "': 'count_hi' must not be below 'count_lo'");
+            if (rec.contains("roll_lo") != rec.contains("roll_hi"))
+                return err(rep, file, m.id, "'" + id + "': 'roll_lo' and 'roll_hi' go together");
+            if (rec.contains("roll_lo"))
+            {
+                if (!optInt(rec, "roll_lo", t.rollLo, 1, 99, why) || !optInt(rec, "roll_hi", t.rollHi, 1, 99, why))
+                    return err(rep, file, m.id, "'" + id + "': " + why);
+                if (t.rollHi < t.rollLo)
+                    return err(rep, file, m.id, "'" + id + "': 'roll_hi' must not be below 'roll_lo'");
+            }
+            db.put(std::move(t));
+            rep.lastWriter[id] = m.id;
+        }
+
         // shop: what a shop can stock, and where. The stock is rolled from this table (see ShopDef): `rolls` weighted picks when the game starts, then one more
         // every restock. { type: "shop", mode: "add", id: "mymod:shop/store", area: "mymod:area/store", rolls: 10,
         //   items: [ { item: "mymod:item/pie", weight: 20, cap: 5 } ] }   // weight: 0..10000 (default 10), cap: the most offered at once, 1..99 (default 5)
@@ -3291,7 +3454,7 @@ namespace gp
                 return 1;
             if (t == "shop_stock")
                 return 4; // names shops, which are made in pass 3
-            return t == "spot" || t == "find" || t == "quest_spawn" || t == "gate" || t == "minigame" || t == "species" || t == "shop" || t == "side_quest" ? 3 : 2; // they name areas and items, so they come last
+            return t == "spot" || t == "find" || t == "quest_spawn" || t == "gate" || t == "minigame" || t == "species" || t == "shop" || t == "side_quest" || t == "quest_type" ? 3 : 2; // they name areas and items, so they come last
         }
         inline constexpr int kPasses = 5;
 
@@ -3374,6 +3537,8 @@ namespace gp
                     applyShopStock(db, m, file, r, rep);
                 else if (type == "side_quest")
                     applySideQuest(db, m, file, r, rep);
+                else if (type == "quest_type")
+                    applyQuestType(db, m, file, r, rep);
                 else if (type == "species")
                     applySpecies(db, m, file, r, rep);
                 else
