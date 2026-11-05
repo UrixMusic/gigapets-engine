@@ -22,6 +22,30 @@ int main()
     w.modeItem = [&](int m, int s) { return 0x300 + m * 16 + int(g() % 8) + (s & 0); };
     for (auto &r : w.rom.distance) for (int &v : r) v = 2;
     for (int i = 0; i < 0x43; ++i) w.rom.itemWeights.push_back({legacyItemId(0x40 + i), 1 + i % 3});
+    { // mod npcs in the pool: no extras = the base draw exactly; with extras they are drawn, and their tier gates them
+        QuestWorld b = w;
+        b.extraPool = {1000, 1001};
+        b.areaTier = [&](int id) { return id >= 1000 ? (id == 1000 ? 0 : 5) : w.areaTier(id); }; // 1001 needs 90 quests
+        std::mt19937 g1(7), g2(7);
+        RandFn r1 = [&](int x, int y) { return x + int(g1() % unsigned(y - x)); };
+        RandFn r2 = [&](int x, int y) { return x + int(g2() % unsigned(y - x)); };
+        for (int i = 0; i < 500; ++i) // no extras: the same draws as ever (the ids are those of the base range)
+        {
+            const int id = pickNpc(0x30, w, r1);
+            CHECK(id >= 0 && id < 0x4e);
+        }
+        int mod0 = 0, mod1 = 0;
+        for (int i = 0; i < 4000; ++i)
+        {
+            const int id = pickNpc(0x30, b, r2);
+            mod0 += id == 1000;
+            mod1 += id == 1001; // tier 5 is locked below 90 quests
+        }
+        CHECK(mod0 > 20 && mod1 == 0);
+        int late = 0;
+        for (int i = 0; i < 4000; ++i) late += pickNpc(0x5a, b, r2) == 1001;
+        CHECK(late > 20);
+    }
     for (int total : {1, 5, 20, 0x30, 0x50, 0x5a})
     {
         int prevT = 0x4e, prevM = 8;

@@ -98,7 +98,7 @@ namespace gp
         inline void applyNpc(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
         {
             static const std::set<std::string> allowed{"type", "mode", "id", "name", "area", "x", "y",
-                                                       "stationary", "anim", "lines", "palette", "based_on", "quest_min", "quest_max", "species"};
+                                                       "stationary", "anim", "lines", "palette", "based_on", "quest_min", "quest_max", "species", "quest_pool", "quest_tier"};
             for (auto it = rec.begin(); it != rec.end(); ++it)
                 if (!allowed.count(it.key()))
                     return err(rep, file, m.id, "unknown field '" + it.key() + "' in npc record");
@@ -192,6 +192,19 @@ namespace gp
                 return;
             if (!intField("x", n.x) || !intField("y", n.y) || !intField("quest_min", n.questMin) || !intField("quest_max", n.questMax))
                 return;
+            if (rec.contains("quest_pool"))
+            {
+                if (!rec["quest_pool"].is_boolean())
+                    return err(rep, file, m.id, "'" + id + "': 'quest_pool' must be true or false");
+                n.questPool = rec["quest_pool"].get<bool>();
+            }
+            if (rec.contains("quest_tier"))
+            {
+                static const std::set<int> tiers{0, 1, 2, 3, 5, 6, 7, 9};
+                if (!rec["quest_tier"].is_number_integer() || !tiers.count(rec["quest_tier"].get<int>()))
+                    return err(rep, file, m.id, "'" + id + "': 'quest_tier' must be one of 0, 1, 2, 3, 5, 6, 7, 9 (when quests may use this npc: 0 = always, 1 = after 3 quests, 2 / 3 = after 16, 9 = after 15, 6 = after 41, 7 = after 60, 5 = after 89)");
+                n.questTier = rec["quest_tier"].get<int>();
+            }
             if (n.questMin < 0 || n.questMax < 0)
                 return err(rep, file, m.id, "'" + id + "': 'quest_min' / 'quest_max' cannot be negative");
             if (n.questMax <= n.questMin)

@@ -606,6 +606,21 @@ int main()
         CHECK(base && base->questMin == 0 && base->questMax == 50 && base->availableAt(1) && !base->availableAt(50));
         CHECK(db.npc("base:npc/13")->questMin == 0x11 && !db.npc("base:npc/13")->availableAt(16) && db.npc("base:npc/13")->availableAt(17));
     }
+    { // npc quest_pool / quest_tier: a mod npc that joins the generated quests
+        TmpMods t("npcpool");
+        t.manifest("cave");
+        assets(t, "cave");
+        t.data("cave", "a.json", kGoodData);
+        t.data("cave", "b.json", R"([
+          {"type":"npc","mode":"add","id":"cave:npc/giver","based_on":"base:npc/12","area":"cave:area/main","x":5,"y":6,"quest_pool":true,"quest_tier":3},
+          {"type":"npc","mode":"add","id":"cave:npc/plain","based_on":"base:npc/12","area":"cave:area/main","x":5,"y":6}])");
+        ContentDB db = baseDb();
+        ModReport r = importMods(db, t.root);
+        CHECK(r.ok());
+        const NpcDef *g = db.npc("cave:npc/giver"), *p = db.npc("cave:npc/plain");
+        CHECK(g && g->questPool && g->questTier == 3 && g->index >= 1000);
+        CHECK(p && !p->questPool && p->questTier == 0);
+    }
     { // colour machine presets take palette ids, and a palette can name its species
         TmpMods t("colours");
         t.manifest("cave");
@@ -781,6 +796,8 @@ int main()
     bad("gatepatchnone", R"([{"type":"gate","mode":"patch","id":"base:gate/none","need":3}])", "no such gate");
     bad("gatepatchbarrier", R"([{"type":"gate","mode":"patch","id":"base:gate/5/25","barrier":"cave:obj/plain"}])", "unknown field");
     bad("npcquestneg", R"([{"type":"npc","mode":"replace","id":"base:npc/12","quest_min":-1}])", "cannot be negative");
+    bad("npcpoolbool", R"([{"type":"npc","mode":"replace","id":"base:npc/12","quest_pool":"yes"}])", "'quest_pool' must be true or false");
+    bad("npcpooltier", R"([{"type":"npc","mode":"replace","id":"base:npc/12","quest_tier":4}])", "'quest_tier' must be one of");
     bad("npcquestwindow", R"([{"type":"npc","mode":"replace","id":"base:npc/12","quest_min":5,"quest_max":5}])", "must be greater");
     bad("npcquesttype", R"([{"type":"npc","mode":"replace","id":"base:npc/12","quest_min":"3"}])", "must be an integer");
     bad("npcpalette", R"([{"type":"npc","mode":"replace","id":"base:npc/12","palette":"cave:pal/none"}])", "palette record");

@@ -17,6 +17,7 @@ namespace gp
         std::function<int(int, int)> modeItem; // optional override (tests); empty = the ported pickModeItem
         int playerSpecies = 0;
         int poolCount = 0x4e; // RandRange(0, 0x4e) -> ids 0..0x4d
+        std::vector<int> extraPool; // pool ids of mod npcs that joined the pool (quest_pool): drawn as poolCount, poolCount + 1, ...; none = the base draw exactly
         QuestRomTables rom;
         std::vector<QuestTypeDef> types; // from the db; see baseQuestTypes()
 
@@ -77,7 +78,8 @@ namespace gp
     {
         for (;;)
         {
-            const int id = rnd(0, w.poolCount);
+            const int roll = rnd(0, w.poolCount + int(w.extraPool.size()));
+            const int id = roll < w.poolCount ? roll : w.extraPool[size_t(roll - w.poolCount)];
             if (tierUnlocked(w.areaTier(id), total))
                 return id;
         }

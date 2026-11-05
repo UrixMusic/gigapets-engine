@@ -128,6 +128,10 @@ namespace gp
         Id palette; // a mod's PaletteDef: recolours the roaming pet's animations (applyNpcPalettes); empty = the ROM's own colours
         int questMin = 0, questMax = 0x7fffffff; // in the world while questMin <= quests completed < questMax (the base game's area 3 pets: 17..)
         bool availableAt(int quests) const { return quests >= questMin && quests < questMax; }
+        // A mod npc that can give and receive the generated quests (the base game's draw from its 78 pets): `questTier` is the area tier that says when quests may use it
+        // (0 = always, 1 = after 3 quests, 2 / 3 = after 16, 9 = after 15, 6 = after 41, 7 = after 60, 5 = after 89: the numbers the base areas have).
+        bool questPool = false;
+        int questTier = 0;
     };
 
     // Classifier rules from ClassifyReactionCategory (player side) / ClassifyCompatibilityReaction (animal side).

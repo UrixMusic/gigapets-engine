@@ -4588,12 +4588,19 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         // ---- quests ----
         // NPC lookup by pool id (NpcDef::index). NpcDef's area field is assumed to be `area`: rename if it differs.
         std::vector<const gp::NpcDef *> npcByIndex(0x4e, nullptr);
-        for (int a = 0; a < 256; ++a)
-            for (const gp::NpcDef *d : db.npcsInArea(a))
-                if (d->index >= 0 && d->index < 0x4e)
-                    npcByIndex[size_t(d->index)] = d;
+        std::map<int, const gp::NpcDef *> modPoolNpcs; // mod npcs with quest_pool: they give and receive generated quests under their own index (1000 and up)
+        for (const gp::NpcDef *d : db.allNpcs())
+            if (d->index >= 0 && d->index < 0x4e)
+                npcByIndex[size_t(d->index)] = d;
+            else if (d->questPool)
+                modPoolNpcs[d->index] = d;
         auto npcAt = [&](int p) -> const gp::NpcDef *
-        { return p >= 0 && p < 0x4e ? npcByIndex[size_t(p)] : nullptr; };
+        {
+            if (p >= 0 && p < 0x4e)
+                return npcByIndex[size_t(p)];
+            const auto it = modPoolNpcs.find(p);
+            return it == modPoolNpcs.end() ? nullptr : it->second;
+        };
 
         {
             std::set<std::pair<int, int>> done;
@@ -4653,8 +4660,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         quests.world.rom = db.questTables(); // generic-quest item weights and category distances: also from the db
         quests.world.types = db.questTypes();
         quests.world.playerSpecies = sp;
-        quests.world.areaTier = [&](int p)
-        { const gp::NpcDef *d = npcAt(p); return d ? d->area : 0; };
+        for (const auto &[idx, d] : modPoolNpcs)
+            quests.world.extraPool.push_back(idx);
+        quests.world.areaTier = [&](int p) // when quests may use the npc (a mod npc says so itself)
+        { const gp::NpcDef *d = npcAt(p); return !d ? 0 : d->questPool && d->index >= 0x4e ? d->questTier : d->area; };
         quests.world.stationary = [&](int p)
         { const gp::NpcDef *d = npcAt(p); return d && d->stationary; };
         quests.dlg = &dialogue;
@@ -5235,7 +5244,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         { return db.textOr("base:str/quest/" + k); }; // "" when missing: the builders then show "(key)"
         quests.txt.npcName = [&](int p)
         { const gp::NpcDef *d = npcAt(p); return d ? db.textOr(d->nameText, "?") : std::string("?"); };
-        quests.txt.npcTier = quests.world.areaTier;
+        quests.txt.npcTier = [&](int p) // where the npc is, for "go see X in <area>"
+        { const gp::NpcDef *d = npcAt(p); return d ? d->area : 0; };
         quests.txt.areaName = [&](int area)
         {
             const gp::AreaDef *a = db.areaByLegacy(area);
