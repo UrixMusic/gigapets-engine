@@ -110,6 +110,8 @@ namespace gp
              "location, x, y (where it comes out in the area: change them)"},
             {"room.interact", "Z next to something in a room: the door (leave), the food bowl (eat), the bed (sleep), or the visiting pet (give items); cancel or replace and nothing of that happens",
              "location, target (\"door\", \"bowl\", \"bed\" or \"visitor\"), x (the pet's place along the room)"},
+            {"room.activity", "a button of the house bar starts a sequence in a room: sleeping or washing (the bed and the food bowl in the room itself are room.interact); cancel or replace and nothing starts",
+             "location, activity (\"sleep\" or \"wash\")"},
             {"friend.visit", "the pet visits a friend it has not seen this session, and may be given a gift",
              "npc, chance (the roll's number), hit (1 = a gift: set it to decide)"},
         };

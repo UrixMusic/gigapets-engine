@@ -2156,9 +2156,20 @@ namespace gp
                     if (!optInt(e, "index", index, 0, 8, why))
                         return err(rep, file, m.id, "'" + id + "': " + why);
                     RoomDef::Decor &dc = d.decor[index];
+                    if (e.contains("sprite") && e["sprite"].is_string()) // a mod's picture: an anim id (its first frame, drawn with its own colours)
+                    {
+                        const Anim *a = db.anim(e["sprite"].get<std::string>());
+                        if (!a || a->frames.empty())
+                            return err(rep, file, m.id, "'" + id + "': decoration " + std::to_string(index) + ": unknown anim '" + e["sprite"].get<std::string>() + "' in 'sprite'");
+                        if (e.contains("palette"))
+                            return err(rep, file, m.id, "'" + id + "': decoration " + std::to_string(index) + ": a mod's picture has its own colours, so 'palette' goes with a numbered sprite only");
+                        dc.v[2] = registerUiArt(db, Anim(*a), kMenuPalette);
+                        dc.v[3] = kMenuPalette;
+                        dc.has |= (1u << 2) | (1u << 3);
+                    }
                     for (int k = 0; k < 6; ++k)
                     {
-                        if (!e.contains(names[k]))
+                        if (!e.contains(names[k]) || (k == 2 && e["sprite"].is_string()))
                             continue;
                         int v = 0;
                         if (!optInt(e, names[k], v, 0, 65535, why))

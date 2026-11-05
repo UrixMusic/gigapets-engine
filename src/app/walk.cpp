@@ -3189,14 +3189,17 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         { startSleep(*room, true); };
         roomActivity = [&](int id)
         {
-            if (id == 5) // the bar's sleep button
-            {
-                startSleep(*room, false);
-                return true;
-            }
-            if (id != gp::kWashActivity)
+            if (id != 5 && id != gp::kWashActivity)
                 return false;
-            startRoomWash(*room);
+            // the engine system "room.activity": a button of the house bar that starts a sequence (activity "sleep" or "wash"); cancel or replace and nothing starts (a mod may do its own)
+            gp::SystemCtx c;
+            c.set("location", room->location).set("activity", id == 5 ? "sleep" : "wash");
+            scripts.system("room.activity", c, [&]
+                           {
+                if (id == 5) // the bar's sleep button
+                    startSleep(*room, false);
+                else
+                    startRoomWash(*room); });
             return true;
         };
         // A cure (HandleCureIllnessEncounter 0x015ed8, activity 0x28): where the pet stands, the bubbles over it and the

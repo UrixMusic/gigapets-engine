@@ -186,6 +186,30 @@ int main()
             CHECK(db.item("q:item/d") == nullptr);
         }
     }
+    { // a decoration in a room's table drawn from a mod's anim
+        auto run = [&](const std::string &name, const std::string &records, ContentDB &db)
+        {
+            TmpMods t(name);
+            fs::create_directories(t.root / "q" / "assets");
+            fs::copy_file(fs::path("tests/assets") / "room_small.png", t.root / "q" / "assets" / "icon.png", fs::copy_options::overwrite_existing);
+            t.data(std::string("[") + R"({"type":"anim","mode":"add","id":"q:anim/pic","frames":[{"png":"assets/icon.png","anchorX":5,"anchorY":10}]},)" + records + "]");
+            return importMods(db, t.root).errors;
+        };
+        ContentDB db = baseDb();
+        const auto errs = run("art", R"({"type":"room","mode":"patch","id":"base:room/4","decorations":[{"index":5,"x":300,"y":150,"sprite":"q:anim/pic","flag":0}]})", db);
+        CHECK(errs.empty());
+        for (const auto &e : errs)
+            std::cerr << e << "\n";
+        const RoomDef *r = db.room(4);
+        CHECK(r && r->decor.count(5) && isModSprite(r->decor.at(5).v[2]) && r->decor.at(5).v[3] == kMenuPalette && r->decor.at(5).v[0] == 300 && (r->decor.at(5).has & 0b101111) == 0b101111);
+        for (const char *b : {R"({"type":"room","mode":"patch","id":"base:room/4","decorations":[{"index":5,"sprite":"q:anim/nope"}]})",
+                              R"({"type":"room","mode":"patch","id":"base:room/4","decorations":[{"index":5,"sprite":"q:anim/pic","palette":3}]})"})
+        {
+            ContentDB d2 = baseDb();
+            CHECK(!run("badart", b, d2).empty());
+            CHECK(d2.room(4) == nullptr);
+        }
+    }
     if (g_fail)
     {
         std::cerr << "room_record_test: " << g_fail << " failure(s)\n";
