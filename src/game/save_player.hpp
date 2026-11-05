@@ -55,6 +55,7 @@ namespace gp
         s.setIdList("friendIds", p.friended); // string ids, so mod NPCs survive a save
         s.setIdMap("itemIds", p.inventory);
         s.setIdList("flagIds", p.flags);
+        s.setIdMap("counterIds", p.counters);
         s.setMap("equip", p.equip);
         s.setInt("tutorialsShown", int(p.tutorialsShown & 0xffffu));
         // The HUD objectives of scripts: the ids in order, then one "objective.<id>" = "text|item|need" each (ids, texts and
@@ -129,6 +130,8 @@ namespace gp
             p.inventory = s.getIdMap("itemIds");
         if (s.has("flagIds"))
             p.flags = s.getIdList("flagIds");
+        if (s.has("counterIds"))
+            p.counters = s.getIdMap("counterIds");
         // Saves from before homes had furnishings start with what CreateNewPet gives that species.
         p.equip = s.has("equip") ? s.getMap("equip") : starterEquip(p.species);
         p.tutorialsShown = s.has("tutorialsShown") ? unsigned(s.getInt("tutorialsShown")) & 0xffffu : 0u;

@@ -407,19 +407,39 @@ namespace gp
         int weight = 1;
         int cap = 5;
     };
+    // One thing a side quest asks for. item: the pet holds `count` of `item`; flag: the player flag `flag` is set (a script sets it when something happens: a boss is
+    // beaten, a puzzle solved); counter: the counter `counter` (counter.add in a script) has reached `need`. `text` is the HUD line (needed for flag and counter).
+    struct SideObjective
+    {
+        enum Kind
+        {
+            Item,
+            Flag,
+            Counter
+        } kind = Item;
+        Id item, text;
+        std::string flag, counter;
+        int count = 1; // Item: how many; Counter: the value to reach
+    };
+
     // A quest of a mod that runs beside the story chain (record `side_quest`): the giver offers it (yes / no), the pet brings the items to the receiver (the giver
     // again if none is named), who pays the reward. Its progress is two flags on the player ("sq:<id>:active", "sq:<id>:done"), so several can be going at once.
     struct SideQuestDef
     {
         Id id;
         Id giver, receiver;
-        std::vector<QuestEntry> objectives;  // the items to bring (item, count); none = just go and talk to the receiver
+        std::vector<SideObjective> objectives; // what has to be done; none = nothing (turn it in, or complete it from a script)
+        // How it ends: "npc" = the pet tells `receiver` (the giver by default) once the objectives are done; "auto" = it ends by itself the moment they are done;
+        // "script" = only a script's quest.complete ends it (a puzzle or a boss decides).
+        std::string turnIn = "npc";
         Id offerText, acceptText, remindText, completeText; // acceptText and remindText are optional
         int rewardMoney = 0;
         std::vector<QuestEntry> rewardItems;
         int questMin = 0, questMax = 0x7fffffff; // offered while questMin <= quests completed < questMax
         std::string requires_;                   // a player flag that must be set before it is offered (empty = none)
         bool repeatable = false;                 // offered again once handed in
+        int timeLimit = 0;                       // seconds of play it may take once accepted (0 = no limit); the clock stops during dialogue and menus
+        Id failText;                             // shown when the time runs out (optional)
         bool availableAt(int quests) const { return quests >= questMin && quests < questMax; }
     };
 

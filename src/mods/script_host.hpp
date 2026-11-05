@@ -28,6 +28,22 @@ extern "C"
 namespace gp
 {
     // What scripts can do to the game. walk.cpp fills these in; an unset one does nothing.
+    // What quest.info(id) gives a script about a side quest.
+    struct SideQuestInfo
+    {
+        struct Objective
+        {
+            std::string kind, item, flag, counter, text; // kind: "item" | "flag" | "counter"; text is a text id (may be empty)
+            int have = 0, need = 1;
+            bool done = false;
+        };
+        bool found = false;
+        std::string id, state, giver, receiver, turnIn, offerText, completeText;
+        std::vector<Objective> objectives;
+        int rewardMoney = 0;
+        double timeLimit = 0, timeLeft = -1; // seconds; 0 / -1 = no limit
+    };
+
     struct ScriptApi
     {
         std::function<bool(const std::string &item, int x, int y)> drop; // false = unknown item
@@ -101,6 +117,14 @@ namespace gp
         std::function<bool(const std::string &id, const std::string &text, const std::string &item, int need)> setObjective;
         std::function<bool(const std::string &id)> clearObjective; // true if there was one
         std::function<bool(const std::string &id)> hasObjective;
+        // Side quests (record side_quest) and counters. sideState gives "idle" / "active" / "done", "" for an id that is not a side quest. sideStart / sideAbandon act at
+        // once and return whether anything changed; sideComplete only asks (the game ends the quest on its next tick, after the dialogue) and returns whether it is running.
+        std::function<std::string(const std::string &id)> sideState;
+        std::function<bool(const std::string &id)> sideStart, sideComplete, sideAbandon;
+        std::function<std::vector<std::string>()> sideActive;
+        std::function<SideQuestInfo(const std::string &id)> sideInfo;
+        std::function<int(const std::string &name)> counterGet;
+        std::function<void(const std::string &name, int value)> counterSet;
         // Objects and NPCs in the area the pet is in (object.* / npc.* in Lua). They last until the pet leaves the area.
         // spawnObject: `id` is made by the host and is new; false = unknown object type. reachX/reachY are 0 for a plain object, or the
         // reach box that makes it usable (Z near it, and Area.hooks onInteract fires). move/remove work on any object of the area, the
@@ -286,6 +310,16 @@ namespace gp
             bind("objective", "set", l_objSet);
             bind("objective", "clear", l_objClear);
             bind("objective", "has", l_objHas);
+            bind("quest", "state", l_qState);
+            bind("quest", "exists", l_qExists);
+            bind("quest", "start", l_qStart);
+            bind("quest", "complete", l_qComplete);
+            bind("quest", "abandon", l_qAbandon);
+            bind("quest", "active", l_qActive);
+            bind("quest", "info", l_qInfo);
+            bind("counter", "get", l_ctGet);
+            bind("counter", "set", l_ctSet);
+            bind("counter", "add", l_ctAdd);
             bind("player", "pos", l_petPos);
             bind("player", "setPos", l_petSetPos);
             bind("player", "lock", l_petLock);
@@ -485,7 +519,7 @@ namespace gp
                 return {"onOpen", "onTick", "onDraw"};
             case 'G':
                 return {"onQuestComplete", "onEnterArea", "onLoad", "onSave", "onBeforeDig", "onAfterDig", "onBeforePickup", "onAfterPickup",
-                        "onBeforeBuy", "onAfterBuy", "onBeforeExit", "onStatChange", "onBefriend", "onQuestAccept", "onQuestDecline", "onBeforeItemUse", "onSceneClose", "onHud"};
+                        "onBeforeBuy", "onAfterBuy", "onBeforeExit", "onStatChange", "onBefriend", "onQuestAccept", "onQuestDecline", "onQuestFail", "onBeforeItemUse", "onSceneClose", "onHud"};
             default:
                 return {"onInteract", "onEnter", "onLeave", "onTick", "onHud"};
             }
@@ -660,6 +694,12 @@ namespace gp
         bool fireQuestAnswer(bool accepted, const QuestCompleteInfo &q)
         {
             return runHook(gameHooks_, 'G', "", accepted ? "onQuestAccept" : "onQuestDecline", [&] { fillQuestCtx(q); }, nullptr);
+        }
+
+        // onQuestFail(ctx): a side quest ran out of its time_limit (it is idle again; nothing was paid). ctx.quest / giver / receiver as in onQuestComplete.
+        void fireQuestFail(const QuestCompleteInfo &q)
+        {
+            runHook(gameHooks_, 'G', "", "onQuestFail", [&] { fillQuestCtx(q); }, nullptr);
         }
 
         // onBeforeItemUse(ctx): the player chose "use" on ANY item, before the item's own Item.hooks(id).onItemUse and the game's handling.
@@ -2311,6 +2351,169 @@ namespace gp
             ScriptHost &h = self(L);
             const char *id = luaL_checkstring(L, 1);
             lua_pushboolean(L, h.api_.hasObjective && idCharsOk(id) && h.api_.hasObjective(id));
+            return 1;
+        }
+
+        // ---- side quests and counters ----
+        // quest.state(id) -> "idle" | "active" | "done" (nil if no side quest has that id); quest.exists(id); quest.start(id) -> true if it was idle and now runs (the offer rules
+        // are skipped: a script decides); quest.complete(id) -> true if it is running (it ends on the game's next tick, once no dialogue is open: the items go, the
+        // reward is paid, onQuestComplete fires); quest.abandon(id) -> true if it was running (back to idle, nothing paid); quest.active() -> a list of the running ids.
+        static int l_qState(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            const std::string st = h.api_.sideState && idCharsOk(id) ? h.api_.sideState(id) : std::string();
+            if (st.empty())
+                lua_pushnil(L);
+            else
+                lua_pushstring(L, st.c_str());
+            return 1;
+        }
+        static int l_qExists(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            lua_pushboolean(L, h.api_.sideState && idCharsOk(id) && !h.api_.sideState(id).empty());
+            return 1;
+        }
+        static int l_qStart(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            lua_pushboolean(L, h.api_.sideStart && idCharsOk(id) && h.api_.sideStart(id));
+            return 1;
+        }
+        static int l_qComplete(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            lua_pushboolean(L, h.api_.sideComplete && idCharsOk(id) && h.api_.sideComplete(id));
+            return 1;
+        }
+        static int l_qAbandon(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            lua_pushboolean(L, h.api_.sideAbandon && idCharsOk(id) && h.api_.sideAbandon(id));
+            return 1;
+        }
+        // quest.info(id) -> nil for an unknown id, else { id, state, giver, receiver (npc ids), turn_in, offer_text, complete_text (text ids), reward_money, time_limit, time_left
+        // (seconds, nil without a limit), objectives = { { kind = "item" | "flag" | "counter", item / flag / counter, text (a text id, may be nil), have, need, done }, ... } }:
+        // what a mod's own quest log draws (a scene's onDraw, or an onHud).
+        static int l_qInfo(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            SideQuestInfo q;
+            if (h.api_.sideInfo && idCharsOk(id))
+                q = h.api_.sideInfo(id);
+            if (!q.found)
+            {
+                lua_pushnil(L);
+                return 1;
+            }
+            auto str = [&](const char *k, const std::string &v)
+            {
+                if (v.empty())
+                    return;
+                lua_pushstring(L, v.c_str());
+                lua_setfield(L, -2, k);
+            };
+            lua_newtable(L);
+            str("id", q.id);
+            str("state", q.state);
+            str("giver", q.giver);
+            str("receiver", q.receiver);
+            str("turn_in", q.turnIn);
+            str("offer_text", q.offerText);
+            str("complete_text", q.completeText);
+            lua_pushinteger(L, q.rewardMoney);
+            lua_setfield(L, -2, "reward_money");
+            if (q.timeLimit > 0)
+            {
+                lua_pushnumber(L, q.timeLimit);
+                lua_setfield(L, -2, "time_limit");
+                lua_pushnumber(L, q.timeLeft);
+                lua_setfield(L, -2, "time_left");
+            }
+            lua_createtable(L, int(q.objectives.size()), 0);
+            for (size_t i = 0; i < q.objectives.size(); ++i)
+            {
+                const SideQuestInfo::Objective &o = q.objectives[i];
+                lua_newtable(L);
+                str("kind", o.kind);
+                str("item", o.item);
+                str("flag", o.flag);
+                str("counter", o.counter);
+                str("text", o.text);
+                lua_pushinteger(L, o.have);
+                lua_setfield(L, -2, "have");
+                lua_pushinteger(L, o.need);
+                lua_setfield(L, -2, "need");
+                lua_pushboolean(L, o.done);
+                lua_setfield(L, -2, "done");
+                lua_rawseti(L, -2, lua_Integer(i + 1));
+            }
+            lua_setfield(L, -2, "objectives");
+            return 1;
+        }
+        static int l_qActive(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const std::vector<std::string> ids = h.api_.sideActive ? h.api_.sideActive() : std::vector<std::string>();
+            lua_createtable(L, int(ids.size()), 0);
+            for (size_t i = 0; i < ids.size(); ++i)
+            {
+                lua_pushstring(L, ids[i].c_str());
+                lua_rawseti(L, -2, lua_Integer(i + 1));
+            }
+            return 1;
+        }
+        // counter.get(name) -> number (0 if never set; any counter can be read). counter.set(name, n) / counter.add(name, n) -> the new value; a script may only write counters under
+        // its own mod prefix ("mymod:slimes"), like flags. Counters are saved with the pet. A side quest's `counter` objective watches one.
+        static void counterName(lua_State *L, ScriptHost &h, const char *name, bool write)
+        {
+            if (write)
+            {
+                const std::string &mod = h.curMod_;
+                const bool prefixOk = !mod.empty() && std::strlen(name) > mod.size() + 1 && std::strncmp(name, mod.c_str(), mod.size()) == 0 && name[mod.size()] == ':';
+                if (!prefixOk)
+                    luaL_argerror(L, 1, lua_pushfstring(L, "counter names must start with \"%s:\" (the mod's own prefix)", mod.c_str()));
+            }
+            if (!idCharsOk(name))
+                luaL_argerror(L, 1, "counter name has a forbidden character (, = | or whitespace)");
+        }
+        static int l_ctGet(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *name = luaL_checkstring(L, 1);
+            counterName(L, h, name, false);
+            lua_pushinteger(L, h.api_.counterGet ? h.api_.counterGet(name) : 0);
+            return 1;
+        }
+        static int l_ctSet(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *name = luaL_checkstring(L, 1);
+            const lua_Integer n = luaL_checkinteger(L, 2);
+            counterName(L, h, name, true);
+            const int v = int(std::clamp<lua_Integer>(n, 0, 99999));
+            if (h.api_.counterSet)
+                h.api_.counterSet(name, v);
+            lua_pushinteger(L, v);
+            return 1;
+        }
+        static int l_ctAdd(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *name = luaL_checkstring(L, 1);
+            const lua_Integer n = luaL_optinteger(L, 2, 1);
+            counterName(L, h, name, true);
+            const int cur = h.api_.counterGet ? h.api_.counterGet(name) : 0;
+            const int v = int(std::clamp<lua_Integer>(cur + n, 0, 99999));
+            if (h.api_.counterSet)
+                h.api_.counterSet(name, v);
+            lua_pushinteger(L, v);
             return 1;
         }
 

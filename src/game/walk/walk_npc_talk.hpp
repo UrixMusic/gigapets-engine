@@ -202,6 +202,78 @@ inline bool tryTrickTeacher(WalkServices &svc, gp::NpcActor &n)
     return true;
 }
 
+// A side quest ends: the items it asked for go, `onQuestComplete` fires (a hook that returns false keeps the payment back), the reward is paid and `complete_text`
+// is shown (with `portrait` of whoever took it in, if there is one).
+inline void completeSideQuest(WalkServices &svc, const gp::SideQuestDef &q, const gp::NpcDef *by)
+{
+    auto &db = svc.db;
+    auto &player = svc.player;
+    gp::sideFinish(player, q);
+    gp::QuestCompleteInfo i;
+    i.questId = q.id;
+    i.number = player.questsCompleted;
+    i.giverId = q.giver;
+    i.receiverId = q.receiver;
+    if (!svc.scripts.fireQuestComplete(i).suppress)
+        gp::sideReward(player, q, [&](const gp::Id &it)
+                       { const gp::ItemDef *def = db.item(it); return def ? def->maxQty : 0; });
+    if (!q.completeText.empty())
+    {
+        gp::DialogueBox b = gp::messageBox(gp::fmtAll(db.textOr(q.completeText, "..."), player.name));
+        if (by)
+            b.portrait = gp::uiSpriteId(by->portraitSprite, by->portraitPalette);
+        svc.dialogue.show(std::move(b));
+    }
+    svc.saveGame();
+}
+
+// Once a tick: side quests that end by themselves ("auto": the objectives are done) and the ones a script finished (quest.complete). Waits while a dialogue is open.
+inline void sideQuestTick(WalkServices &svc)
+{
+    auto &player = svc.player;
+    auto &force = svc.S.script.sideComplete;
+    if (svc.db.sideQuests().empty())
+        return;
+    const bool paused = svc.dialogue.open();
+    const double hz = std::max(1.0, gp::tuning().tickHz);
+    for (const gp::SideQuestDef &q : svc.db.sideQuests()) // the clock of timed quests: it runs while the pet plays, not during dialogue
+    {
+        if (q.timeLimit <= 0 || gp::sideState(player, q) != gp::SideState::Active)
+            continue;
+        if (!paused)
+            ++player.counters[gp::sideTimeKey(q.id)];
+        if (!paused && gp::sideTimeLeft(player, q, hz) <= 0)
+        {
+            gp::sideAbandon(player, q); // out of time: back to idle, so the giver can offer it again
+            gp::QuestCompleteInfo i;
+            i.questId = q.id;
+            i.number = player.questsCompleted;
+            i.giverId = q.giver;
+            i.receiverId = q.receiver;
+            svc.scripts.fireQuestFail(i);
+            if (!q.failText.empty())
+                svc.dialogue.show(gp::messageBox(gp::fmtAll(svc.db.textOr(q.failText, "..."), player.name)));
+            svc.saveGame();
+            return;
+        }
+    }
+    if (paused)
+        return;
+    for (const gp::SideQuestDef &q : svc.db.sideQuests())
+    {
+        if (gp::sideState(player, q) != gp::SideState::Active)
+            continue;
+        const auto f = std::find(force.begin(), force.end(), q.id);
+        if (f == force.end() && !(q.turnIn == "auto" && gp::sideHasAll(player, q)))
+            continue;
+        if (f != force.end())
+            force.erase(f);
+        completeSideQuest(svc, q, nullptr);
+        return; // one at a time: the next waits for this one's box to close
+    }
+    force.clear(); // asked for a quest that is not running
+}
+
 // A mod's side quests (record side_quest) for the NPC the pet talked to: hand-in first, then an offer, then a reminder. True = it took the talk.
 inline bool sideQuestTalk(WalkServices &svc, const gp::NpcDef &d)
 {
@@ -228,14 +300,9 @@ inline bool sideQuestTalk(WalkServices &svc, const gp::NpcDef &d)
         return i;
     };
     for (const gp::SideQuestDef &q : all) // handing in
-        if (q.receiver == d.id && gp::sideState(player, q) == gp::SideState::Active && gp::sideHasAll(player, q))
+        if (q.turnIn == "npc" && q.receiver == d.id && gp::sideState(player, q) == gp::SideState::Active && gp::sideHasAll(player, q))
         {
-            gp::sideFinish(player, q);
-            if (!svc.scripts.fireQuestComplete(info(q)).suppress) // a script may take the payment over (return false)
-                gp::sideReward(player, q, [&](const gp::Id &it)
-                               { const gp::ItemDef *def = db.item(it); return def ? def->maxQty : 0; });
-            svc.dialogue.show(show(q.completeText, false));
-            svc.saveGame();
+            completeSideQuest(svc, q, &d);
             return true;
         }
     for (const gp::SideQuestDef &q : all) // an offer

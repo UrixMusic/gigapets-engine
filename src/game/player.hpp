@@ -83,6 +83,7 @@ namespace gp
         int questsCompleted = 0;
         std::map<std::string, int> inventory; // item id -> count
         std::set<std::string> flags;          // event / quest flags
+        std::map<std::string, int> counters;  // numbers scripts keep (counter.get / add / set), and side quests count with
         std::vector<ScriptObjective> objectives; // what scripts show on the HUD (objective.set), oldest first
         static constexpr size_t kMaxObjectives = 8;
         const ScriptObjective *objective(const std::string &id) const

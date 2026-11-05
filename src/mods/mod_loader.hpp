@@ -1656,15 +1656,20 @@ namespace gp
 
         // side_quest: a quest beside the story chain. Only mode "add".
         //   { type: "side_quest", mode: "add", id: "mymod:sidequest/pies", giver: "mymod:npc/baker", receiver: "mymod:npc/mayor" (default: the giver),
-        //     objectives: [ { item: "mymod:item/pie", count: 3 } ] (0 to 4; none = just go and talk to the receiver),
-        //     offer_text, complete_text: text ids (required), accept_text, remind_text: text ids (optional),
+        //     objectives: 0 to 4 of  { item: "mymod:item/pie", count: 3 }  (the pet holds that many; they are taken at hand-in)
+        //                          or { flag: "mymod:boss_dead", text: "mymod:str/defeat" }  (a script sets the player flag: a boss beaten, a puzzle solved)
+        //                          or { counter: "mymod:slimes", need: 10, text: "mymod:str/slimes" }  (a script's counter.add reaches `need`),
+        //     turn_in: "npc" (default: the pet tells the receiver) | "auto" (it ends the moment the objectives are done) | "script" (only quest.complete ends it),
+        //     offer_text: text id (required); complete_text: required for turn_in "npc", else optional; accept_text, remind_text: optional text ids,
         //     reward_money: 0..99999, reward_items: [ { item, count } ] (up to 4), quest_min / quest_max: offered while quest_min <= quests done < quest_max,
-        //     requires: a player flag that must be set first, repeatable: true = offered again after it is handed in }
+        //     requires: a player flag that must be set first, repeatable: true = offered again after it is handed in,
+        //     time_limit: seconds of play (5..86400) it may take once accepted; the clock stops during dialogue and menus; when it runs out the quest goes back to idle
+        //     (Game.hooks onQuestFail fires, fail_text, a text id, is shown), nothing is paid and the giver offers it again }
         // The giver offers it when the pet talks to them (a yes / no question); the objectives show on the HUD; the receiver takes the items, says complete_text and pays.
         inline void applySideQuest(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
         {
             static const std::set<std::string> allowed{"type", "mode", "id", "giver", "receiver", "objectives", "offer_text", "accept_text", "remind_text", "complete_text",
-                                                       "reward_money", "reward_items", "quest_min", "quest_max", "requires", "repeatable"};
+                                                       "reward_money", "reward_items", "quest_min", "quest_max", "requires", "repeatable", "turn_in", "time_limit", "fail_text"};
             std::string id, why;
             if (!beginAdd(m, file, rec, rep, "side_quest", allowed, [&](const std::string &i)
                           { return db.sideQuest(i) != nullptr; }, id))
@@ -1719,14 +1724,86 @@ namespace gp
                 }
                 return true;
             };
+            if (rec.contains("turn_in"))
+            {
+                const std::string t = rec["turn_in"].is_string() ? rec["turn_in"].get<std::string>() : "";
+                if (t != "npc" && t != "auto" && t != "script")
+                    return err(rep, file, m.id, "'" + id + "': 'turn_in' must be \"npc\", \"auto\" or \"script\"");
+                q.turnIn = t;
+            }
             if (!npcField("giver", q.giver, true) || !npcField("receiver", q.receiver, false) || !textField("offer_text", q.offerText, true) ||
-                !textField("complete_text", q.completeText, true) || !textField("accept_text", q.acceptText, false) || !textField("remind_text", q.remindText, false) ||
-                !entries("objectives", 4, q.objectives) || !entries("reward_items", 4, q.rewardItems))
+                !textField("complete_text", q.completeText, q.turnIn == "npc") || !textField("accept_text", q.acceptText, false) || !textField("remind_text", q.remindText, false) ||
+                !textField("fail_text", q.failText, false) || !entries("reward_items", 4, q.rewardItems))
                 return;
+            if (rec.contains("objectives"))
+            {
+                if (!rec["objectives"].is_array() || rec["objectives"].size() > 4)
+                    return err(rep, file, m.id, "'" + id + "': 'objectives' must be a list of up to 4");
+                for (const json &e : rec["objectives"])
+                {
+                    if (!e.is_object())
+                        return err(rep, file, m.id, "'" + id + "': every objective must be an object");
+                    for (auto it = e.begin(); it != e.end(); ++it)
+                        if (it.key() != "item" && it.key() != "count" && it.key() != "flag" && it.key() != "counter" && it.key() != "need" && it.key() != "text")
+                            return err(rep, file, m.id, "'" + id + "': unknown field '" + it.key() + "' in an objective");
+                    SideObjective o;
+                    const int kinds = int(e.contains("item")) + int(e.contains("flag")) + int(e.contains("counter"));
+                    if (kinds != 1)
+                        return err(rep, file, m.id, "'" + id + "': an objective needs exactly one of 'item', 'flag' or 'counter'");
+                    if (e.contains("text"))
+                    {
+                        if (!e["text"].is_string() || !db.hasText(e["text"].get<std::string>()))
+                            return err(rep, file, m.id, "'" + id + "': an objective's 'text' must be the id of a text that exists");
+                        o.text = e["text"].get<std::string>();
+                    }
+                    if (e.contains("item"))
+                    {
+                        if (!e["item"].is_string() || !db.item(e["item"].get<std::string>()))
+                            return err(rep, file, m.id, "'" + id + "': an objective needs an 'item' that exists");
+                        o.kind = SideObjective::Item;
+                        o.item = e["item"].get<std::string>();
+                        o.count = 1;
+                        if (!optInt(e, "count", o.count, 1, 99, why))
+                            return err(rep, file, m.id, "'" + id + "': " + why);
+                        if (e.contains("need"))
+                            return err(rep, file, m.id, "'" + id + "': 'need' only goes with a counter (an item uses 'count')");
+                    }
+                    else
+                    {
+                        const char *key = e.contains("flag") ? "flag" : "counter";
+                        std::string name = e[key].is_string() ? e[key].get<std::string>() : "";
+                        bool good = !name.empty() && name.size() <= 100;
+                        for (const char c : name)
+                            good = good && !std::isspace(static_cast<unsigned char>(c)) && c != ',' && c != '=' && c != '|';
+                        if (!good)
+                            return err(rep, file, m.id, std::string("'") + id + "': an objective's '" + key + "' must be a name without spaces or , = |");
+                        if (o.text.empty())
+                            return err(rep, file, m.id, std::string("'") + id + "': a " + key + " objective needs a 'text' (the line on the HUD)");
+                        if (e.contains("count"))
+                            return err(rep, file, m.id, "'" + id + "': a " + key + " objective takes no 'count'" + (e.contains("flag") ? "" : " (use 'need')"));
+                        if (e.contains("flag"))
+                        {
+                            o.kind = SideObjective::Flag;
+                            o.flag = name;
+                            if (e.contains("need"))
+                                return err(rep, file, m.id, "'" + id + "': a flag objective takes no 'need'");
+                        }
+                        else
+                        {
+                            o.kind = SideObjective::Counter;
+                            o.counter = name;
+                            o.count = 1;
+                            if (!optInt(e, "need", o.count, 1, 9999, why))
+                                return err(rep, file, m.id, "'" + id + "': " + why);
+                        }
+                    }
+                    q.objectives.push_back(std::move(o));
+                }
+            }
             if (q.receiver.empty())
                 q.receiver = q.giver;
             if (!optInt(rec, "reward_money", q.rewardMoney, 0, 99999, why) || !optInt(rec, "quest_min", q.questMin, 0, 100000, why) ||
-                !optInt(rec, "quest_max", q.questMax, 0, 0x7fffffff, why) || !optBool(rec, "repeatable", q.repeatable, why) || !optStr(rec, "requires", q.requires_, why))
+                !optInt(rec, "quest_max", q.questMax, 0, 0x7fffffff, why) || !optBool(rec, "repeatable", q.repeatable, why) || !optInt(rec, "time_limit", q.timeLimit, 5, 86400, why) || !optStr(rec, "requires", q.requires_, why))
                 return err(rep, file, m.id, "'" + id + "': " + why);
             if (q.questMax <= q.questMin)
                 return err(rep, file, m.id, "'" + id + "': 'quest_max' must be greater than 'quest_min'");
@@ -1734,9 +1811,9 @@ namespace gp
                 if (std::isspace(static_cast<unsigned char>(c)))
                     return err(rep, file, m.id, "'" + id + "': 'requires' is a flag name and cannot contain spaces");
             std::set<Id> seen;
-            for (const QuestEntry &o : q.objectives)
-                if (!seen.insert(o.item).second)
-                    return err(rep, file, m.id, "'" + id + "': item '" + o.item + "' is listed twice in 'objectives'");
+            for (const SideObjective &o : q.objectives)
+                if (!seen.insert((o.kind == SideObjective::Item ? "i:" + o.item : o.kind == SideObjective::Flag ? "f:" + o.flag : "c:" + o.counter)).second)
+                    return err(rep, file, m.id, "'" + id + "': '" + (o.kind == SideObjective::Item ? o.item : o.kind == SideObjective::Flag ? o.flag : o.counter) + "' is listed twice in 'objectives'");
             db.put(std::move(q));
             rep.lastWriter[id] = m.id;
         }

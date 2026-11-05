@@ -159,6 +159,7 @@ struct ScriptState
         std::function<void(bool)> answer;
     };
     std::deque<SayItem> sayQueue;
+    std::vector<std::string> sideComplete; // side quests a script asked to finish (quest.complete): ended on the next tick, once no dialogue is open
 };
 
 struct WalkState

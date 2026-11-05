@@ -5331,6 +5331,31 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 y += 14;
                 ++shown;
             }
+            for (const gp::SideQuestDef &q : db.sideQuests()) // the running side quests: a line per objective
+            {
+                if (gp::sideState(player, q) != gp::SideState::Active)
+                    continue;
+                if (q.timeLimit > 0) // the clock of a timed quest, top right like the story quest's
+                {
+                    const int left = int(std::ceil(gp::sideTimeLeft(player, q, gp::tuning().tickHz)));
+                    char t[16];
+                    std::snprintf(t, sizeof t, "%d:%02d", left / 60, left % 60);
+                    numbers.draw(t, 200, 34, 90, gp::Align::Right);
+                }
+                for (const gp::SideObjective &o : q.objectives)
+                {
+                    if (shown >= 3)
+                        return;
+                    if (o.kind == gp::SideObjective::Item && !db.item(o.item))
+                        continue;
+                    const std::string line = gp::sideLine(
+                        player, o, [&](const gp::Id &it) { return gp::fmtAll(db.textOr(db.item(it)->name, "?"), player.name); },
+                        [&](const gp::Id &t) { return gp::fmtAll(db.textOr(t, "?"), player.name); });
+                    numbers.draw(line, 8, y, 200, gp::Align::Left);
+                    y += 14;
+                    ++shown;
+                }
+            }
         };
         enterAreaEvents(*cur->def, true);
         refreshBits(); // add
@@ -5847,6 +5872,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     continue; // world frozen while the item screen is up
                 }
                 walk::showNextSay(svc); // text a script queued with say(), once nothing else is being said
+                walk::sideQuestTick(svc); // side quests that end by themselves, or that a script finished
                 if (dialogue.open())
                 {
                     gp::DialogueBox &b = *dialogue.box;

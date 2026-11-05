@@ -5,6 +5,7 @@
 // Include after walk_services.hpp.
 #pragma once
 #include "walk_services.hpp"
+#include "../side_quest.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -125,6 +126,90 @@ inline void bindScripts(WalkServices &svc)
     { return svc.player.clearObjective(id); };
     api.hasObjective = [&svc](const std::string &id)
     { return svc.player.objective(id) != nullptr; };
+
+    // ---- quest.* and counter.* ----
+    api.sideState = [&svc](const std::string &id) -> std::string
+    {
+        const gp::SideQuestDef *q = svc.db.sideQuest(id);
+        return q ? gp::sideStateName(gp::sideState(svc.player, *q)) : "";
+    };
+    api.sideStart = [&svc](const std::string &id)
+    {
+        const gp::SideQuestDef *q = svc.db.sideQuest(id);
+        if (!q || gp::sideState(svc.player, *q) == gp::SideState::Active)
+            return false;
+        gp::sideStart(svc.player, *q);
+        return true;
+    };
+    api.sideComplete = [&svc](const std::string &id)
+    {
+        const gp::SideQuestDef *q = svc.db.sideQuest(id);
+        if (!q || gp::sideState(svc.player, *q) != gp::SideState::Active)
+            return false;
+        auto &f = svc.S.script.sideComplete;
+        if (std::find(f.begin(), f.end(), id) == f.end())
+            f.push_back(id);
+        return true;
+    };
+    api.sideAbandon = [&svc](const std::string &id)
+    {
+        const gp::SideQuestDef *q = svc.db.sideQuest(id);
+        if (!q || gp::sideState(svc.player, *q) != gp::SideState::Active)
+            return false;
+        gp::sideAbandon(svc.player, *q);
+        return true;
+    };
+    api.sideActive = [&svc]
+    {
+        std::vector<std::string> ids;
+        for (const gp::SideQuestDef &q : svc.db.sideQuests())
+            if (gp::sideState(svc.player, q) == gp::SideState::Active)
+                ids.push_back(q.id);
+        return ids;
+    };
+    api.sideInfo = [&svc](const std::string &id)
+    {
+        gp::SideQuestInfo r;
+        const gp::SideQuestDef *q = svc.db.sideQuest(id);
+        if (!q)
+            return r;
+        const gp::Player &p = svc.player;
+        r.found = true;
+        r.id = q->id;
+        r.state = gp::sideStateName(gp::sideState(p, *q));
+        r.giver = q->giver;
+        r.receiver = q->receiver;
+        r.turnIn = q->turnIn;
+        r.offerText = q->offerText;
+        r.completeText = q->completeText;
+        r.rewardMoney = q->rewardMoney;
+        r.timeLimit = q->timeLimit;
+        r.timeLeft = gp::sideTimeLeft(p, *q, gp::tuning().tickHz);
+        for (const gp::SideObjective &o : q->objectives)
+        {
+            gp::SideQuestInfo::Objective x;
+            x.kind = o.kind == gp::SideObjective::Item ? "item" : o.kind == gp::SideObjective::Flag ? "flag" : "counter";
+            x.item = o.item;
+            x.flag = o.flag;
+            x.counter = o.counter;
+            x.text = o.text;
+            const auto pr = gp::sideProgress(p, o);
+            x.have = pr.first;
+            x.need = pr.second;
+            x.done = pr.first >= pr.second;
+            r.objectives.push_back(std::move(x));
+        }
+        return r;
+    };
+    api.counterGet = [&svc](const std::string &name)
+    { return gp::counterOf(svc.player, name); };
+    api.counterSet = [&svc](const std::string &name, int v)
+    {
+        if (v <= 0)
+            svc.player.counters.erase(name);
+        else
+            svc.player.counters[name] = v;
+    };
 
     // ---- rand.* ----
     // Scripts have their own stream, never the base game's. GP_SCRIPT_SEED=<number> makes it repeatable for tests;

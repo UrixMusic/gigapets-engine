@@ -1,6 +1,7 @@
 // side_quest_test.cpp - the `side_quest` record (fields, errors) and the state of a side quest on the player: offer rules, accept, hand-in, reward, repeat.
 #include "../src/mods/mod_loader.hpp"
 #include "../src/game/side_quest.hpp"
+#include "../src/game/save_player.hpp"
 #include <iostream>
 
 using namespace gp;
@@ -84,7 +85,7 @@ int main()
             std::cerr << e << std::endl;
         CHECK(errs.empty());
         const SideQuestDef *q = db.sideQuest("q:sidequest/gems");
-        CHECK(q && q->giver == "base:npc/12" && q->receiver == "base:npc/13" && q->objectives.size() == 2 && q->objectives[0].count == 3 && q->objectives[1].count == 1);
+        CHECK(q && q->giver == "base:npc/12" && q->receiver == "base:npc/13" && q->objectives.size() == 2 && q->objectives[0].count == 3 && q->objectives[1].count == 1 && q->turnIn == "npc");
         CHECK(q && q->rewardMoney == 50 && q->rewardItems.size() == 1 && q->questMin == 2 && q->questMax == 9 && q->requires_ == "q:met" && q->repeatable && q->acceptText == "q:str/ok");
 
         // the player's side of it
@@ -97,14 +98,13 @@ int main()
         CHECK(sideOfferable(p, *q) && sideState(p, *q) == SideState::Idle);
         sideStart(p, *q);
         CHECK(sideState(p, *q) == SideState::Active && !sideOfferable(p, *q));
-        CHECK(p.objectives.size() == 2 && p.objective("sq:q:sidequest/gems#0")->item == "base:item/173" && p.objective("sq:q:sidequest/gems#0")->need == 3);
         CHECK(!sideHasAll(p, *q));
         p.addItem("base:item/173", 3);
         CHECK(!sideHasAll(p, *q)); // the second item is missing
         p.addItem("base:item/174", 1);
         CHECK(sideHasAll(p, *q));
         sideFinish(p, *q);
-        CHECK(sideState(p, *q) == SideState::Done && p.objectives.empty() && p.itemCount("base:item/173") == 0 && p.itemCount("base:item/174") == 0);
+        CHECK(sideState(p, *q) == SideState::Done && p.itemCount("base:item/173") == 0 && p.itemCount("base:item/174") == 0);
         sideReward(p, *q, [](const Id &) { return 5; });
         CHECK(p.money == 50 && p.itemCount("base:item/174") == 2);
         CHECK(sideOfferable(p, *q)); // repeatable: offered again
@@ -119,6 +119,65 @@ int main()
         f.addItem("base:item/174", 4);
         sideReward(f, *q, [](const Id &) { return 5; });
         CHECK(f.itemCount("base:item/174") == 5);
+    }
+    { // flag and counter objectives, auto / script turn-in, no reward: a boss, a puzzle
+        ContentDB db = baseDb();
+        const auto errs = load("kinds", R"({"type":"side_quest","mode":"add","id":"q:sidequest/boss","giver":"base:npc/12","turn_in":"auto",
+            "objectives":[{"flag":"q:boss_dead","text":"q:str/ok"},{"counter":"q:slimes","need":3,"text":"q:str/ok"},{"item":"base:item/173"}],"offer_text":"q:str/offer"},
+          {"type":"side_quest","mode":"add","id":"q:sidequest/puzzle","giver":"base:npc/12","turn_in":"script","offer_text":"q:str/offer"})", db);
+        for (auto &e : errs)
+            std::cerr << e << std::endl;
+        CHECK(errs.empty());
+        const SideQuestDef *q = db.sideQuest("q:sidequest/boss"), *z = db.sideQuest("q:sidequest/puzzle");
+        CHECK(q && q->turnIn == "auto" && q->objectives.size() == 3 && q->objectives[0].kind == SideObjective::Flag && q->objectives[1].kind == SideObjective::Counter && q->objectives[1].count == 3);
+        CHECK(z && z->turnIn == "script" && z->objectives.empty() && z->completeText.empty() && z->rewardMoney == 0);
+        Player p;
+        p.setFlag("q:boss_dead"); // set before the quest was taken: starting it asks for the boss afresh
+        p.counters["q:slimes"] = 9;
+        sideStart(p, *q);
+        CHECK(!p.hasFlag("q:boss_dead") && counterOf(p, "q:slimes") == 0 && !sideHasAll(p, *q));
+        p.setFlag("q:boss_dead");
+        p.counters["q:slimes"] = 2;
+        p.addItem("base:item/173");
+        CHECK(!sideHasAll(p, *q) && sideProgress(p, q->objectives[1]) == std::make_pair(2, 3) && sideProgress(p, q->objectives[0]) == std::make_pair(1, 1));
+        p.counters["q:slimes"] = 40; // past the target still counts as done, shown as the target
+        CHECK(sideHasAll(p, *q) && sideProgress(p, q->objectives[1]) == std::make_pair(3, 3));
+        const auto name = [](const Id &) { return std::string("Gem"); };
+        CHECK(sideLine(p, q->objectives[2], name, name) == "1/1  Gem" && sideLine(p, q->objectives[1], name, name) == "3/3  Gem");
+        sideFinish(p, *q);
+        CHECK(sideState(p, *q) == SideState::Done && p.itemCount("base:item/173") == 0);
+        // abandon
+        sideStart(p, *z);
+        CHECK(sideState(p, *z) == SideState::Active && sideHasAll(p, *z)); // nothing asked: only a script ends it
+        sideAbandon(p, *z);
+        CHECK(sideState(p, *z) == SideState::Idle && sideOfferable(p, *z));
+        // counters are saved with the pet
+        SaveData sd;
+        p.counters["q:slimes"] = 7;
+        savePlayer(p, sd);
+        Player r;
+        loadPlayer(sd, r);
+        CHECK(counterOf(r, "q:slimes") == 7);
+    }
+    { // time limit
+        ContentDB db = baseDb();
+        const auto errs = load("timed", R"({"type":"side_quest","mode":"add","id":"q:sidequest/t","giver":"base:npc/12","turn_in":"script","time_limit":60,"fail_text":"q:str/ok","offer_text":"q:str/offer"})", db);
+        CHECK(errs.empty());
+        const SideQuestDef *q = db.sideQuest("q:sidequest/t");
+        CHECK(q && q->timeLimit == 60 && q->failText == "q:str/ok");
+        Player p;
+        CHECK(sideTimeLeft(p, *q, 30.0) == 60.0);
+        sideStart(p, *q);
+        p.counters[sideTimeKey(q->id)] = 30 * 45; // 45 s of steps at 30 Hz
+        CHECK(sideTimeLeft(p, *q, 30.0) == 15.0);
+        p.counters[sideTimeKey(q->id)] = 30 * 70;
+        CHECK(sideTimeLeft(p, *q, 30.0) == 0.0);
+        sideAbandon(p, *q);
+        CHECK(counterOf(p, sideTimeKey(q->id)) == 0 && sideOfferable(p, *q)); // offered again, a fresh clock
+        sideStart(p, *q);
+        CHECK(sideTimeLeft(p, *q, 30.0) == 60.0);
+        ContentDB db2 = baseDb();
+        CHECK(sideTimeLeft(p, SideQuestDef(), 30.0) == -1); // no limit
     }
     { // defaults: the receiver is the giver, no objectives, a one-shot
         ContentDB db = baseDb();
@@ -157,6 +216,15 @@ int main()
     bad("dupitem", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"objectives\":[{\"item\":\"base:item/173\"},{\"item\":\"base:item/173\"}]," + ok + "}", "listed twice");
     bad("badcount", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"objectives\":[{\"item\":\"base:item/173\",\"count\":0}]," + ok + "}", "'count' must be 1 to 99");
     bad("manyitems", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"objectives\":[{\"item\":\"base:item/173\"},{\"item\":\"base:item/174\"},{\"item\":\"base:item/173\"},{\"item\":\"base:item/173\"},{\"item\":\"base:item/173\"}]," + ok + "}", "up to 4");
+    bad("badturn", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"turn_in\":\"magic\"," + ok + "}", "'turn_in' must be");
+    bad("kinds2", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"objectives\":[{\"item\":\"base:item/173\",\"flag\":\"a\"}]," + ok + "}", "exactly one of");
+    bad("flagnotext", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"objectives\":[{\"flag\":\"q:a\"}]," + ok + "}", "needs a 'text'");
+    bad("flagspace", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"objectives\":[{\"flag\":\"q a\",\"text\":\"q:str/ok\"}]," + ok + "}", "without spaces");
+    bad("ctneed", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"objectives\":[{\"counter\":\"q:a\",\"need\":0,\"text\":\"q:str/ok\"}]," + ok + "}", "'need' must be 1 to 9999");
+    bad("ctcount", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"objectives\":[{\"counter\":\"q:a\",\"count\":2,\"text\":\"q:str/ok\"}]," + ok + "}", "use 'need'");
+    bad("autoneedscomplete", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"giver\":\"base:npc/12\",\"offer_text\":\"q:str/offer\"}", "'complete_text' is required");
+    bad("timelow", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"time_limit\":1," + ok + "}", "'time_limit' must be 5 to 86400");
+    bad("failtext", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"fail_text\":\"q:str/none\"," + ok + "}", "'fail_text' must be the id of a text");
     bad("window", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"quest_min\":5,\"quest_max\":5," + ok + "}", "'quest_max' must be greater");
     bad("money", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"reward_money\":100000," + ok + "}", "'reward_money' must be 0 to 99999");
     bad("flag", "{\"type\":\"side_quest\",\"mode\":\"add\",\"id\":\"q:sidequest/x\",\"requires\":\"a b\"," + ok + "}", "cannot contain spaces");
