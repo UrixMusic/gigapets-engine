@@ -52,8 +52,9 @@ def statements(L, first, last):
             depth = 0
             # a statement ends at the first line at indent 8 that ends with ';' or '}' (lambda) once braces balance
             while True:
-                depth += L[j].count('{') - L[j].count('}')
-                if depth <= 0 and (L[j].rstrip().endswith(';') or L[j].rstrip().endswith('};') or L[j].rstrip().endswith('}')) and j >= i:
+                code = re.sub(r'\s*//.*$', '', L[j])  # (a trailing comment is not code; strings with // in them do not occur here)
+                depth += code.count('{') - code.count('}')
+                if depth <= 0 and (code.rstrip().endswith(';') or code.rstrip().endswith('}')):
                     break
                 j += 1
             out.append((i, j, l))
@@ -125,6 +126,20 @@ def main():
         type_texts.append(NL.join(x[8:] if x.startswith('        ') else x for x in L[c:e0 + 1]))
         type_ranges.append((c, e0))
 
+    static_texts = []
+    for pre in spec.get('statics', []):
+        hit = [(a, b, h) for (a, b, h) in st if h.strip().startswith(pre)]
+        if not hit:
+            raise SystemExit('static not found: ' + pre)
+        a, b, h = hit[0]
+        c = a
+        while L[c - 1].strip().startswith('//'):
+            c -= 1
+        txt = [x[4:] if x.startswith('    ') else x for x in L[c:b + 1]]
+        txt[len(L[c:a])] = txt[len(L[c:a])].replace('static ', 'static inline ', 1)
+        static_texts.append(NL.join(txt))
+        type_ranges.append((c, b))
+
     methods = []
     methods_names = []
     assign_info = []
@@ -187,6 +202,9 @@ def main():
             args = ', '.join(re.sub(r'\s*=.*', '', p).split()[-1].lstrip('&*') for p in params.split(','))
             h.append('    void %s(%s) { %sFn(%s); }' % (n, params, n, args))
         h.append('')
+        for t in static_texts:
+            h.append(t)
+            h.append('')
         h.append((NL + NL).join(methods))
         h.append('};')
         return NL.join(h) + NL
@@ -246,7 +264,7 @@ def main():
     return spec, gen_header, gen_walk, env, cache_file, dry, defaults
 
 
-if __name__ == '__main__' and not (len(sys.argv) > 2 and sys.argv[1] == '--probe'):
+if __name__ == '__main__' and not (len(sys.argv) > 2 and sys.argv[1] in ('--probe', '--auto')):
     spec, gen_header, gen_walk, env, cache_file, dry, defaults = main()
     hdr_path = 'src/game/walk/' + spec['header']
     write(hdr_path, gen_header())
@@ -312,3 +330,44 @@ def probe(spec_path, names):
 if len(sys.argv) > 2 and sys.argv[1] == '--probe':
     probe(sys.argv[2], sys.argv[3:])
     sys.exit(0)
+
+
+# python tools/slice_walk.py --auto spec.json   : generate, compile, probe whatever is missing, regenerate (until it compiles, at most 5 rounds).  Needs walk.cpp committed (it is restored with git).
+def auto(spec_path):
+    spec = json.load(open(spec_path))
+    hdr = 'src/game/walk/' + spec['header']
+    for rnd in range(5):
+        subprocess.run(['git', 'checkout', SRC], capture_output=True)
+        if os.path.exists(hdr):
+            os.remove(hdr)
+        r = subprocess.run([sys.executable, __file__, spec_path], capture_output=True, text=True)
+        if r.returncode:
+            print(r.stdout + r.stderr)
+            return 1
+        c = subprocess.run(CXX + ['src/app/gigapets.cpp'], capture_output=True, text=True)
+        errs = [l for l in c.stderr.split(NL) if 'error' in l]
+        missing = sorted(set(re.findall(r"'([A-Za-z_0-9]+)' was not declared", c.stderr)))
+        if not errs:
+            print('round %d: compiles clean' % rnd)
+            return 0
+        if not missing:
+            print('round %d: errors that are not missing names:' % rnd)
+            print(NL.join(errs[:15]))
+            return 1
+        dflt = spec.get('defaults', {})
+        missing = sorted(set(m[:-2] if m.endswith('Fn') and m[:-2] in dflt else m for m in missing))  # (a helper with default arguments is probed under its own name)
+        print('round %d: missing %s' % (rnd, ' '.join(missing)))
+        subprocess.run(['git', 'checkout', SRC], capture_output=True)
+        os.remove(hdr)
+        p = subprocess.run([sys.executable, __file__, '--probe', spec_path] + missing, capture_output=True, text=True)
+        print(p.stdout[-1500:])
+        bad = [l for l in p.stdout.split(NL) if len(l.split(None, 1)) == 2 and l.split(None, 1)[1].startswith('?')]
+        if bad:
+            print('types the probe could not give (put them in the spec env):')
+            print(NL.join(bad))
+            return 1
+    return 1
+
+
+if len(sys.argv) > 2 and sys.argv[1] == '--auto':
+    sys.exit(auto(sys.argv[2]))
