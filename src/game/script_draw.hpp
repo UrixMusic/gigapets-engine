@@ -31,6 +31,7 @@ public:
 
     std::function<AnimRef(const std::string &id)> sprite; // a picture id -> its frames (empty AnimRef = unknown)
     std::function<void(const gp::DrawCmd &c)> text;       // writes a Text or Num command
+    std::function<void(const gp::DrawCmd &c)> shader;     // runs a Shader command over the picture so far (needs OpenGL; unset = ignored)
     int clearW = 320, clearH = 240;                        // what g.clear fills
     int frameDrawW = 320, frameDrawH = 240;                // the size "@frame" is drawn at by default (the logical screen now)
 
@@ -144,6 +145,10 @@ public:
             case gp::DrawCmd::Kind::Num:
                 if (text)
                     text(c);
+                break;
+            case gp::DrawCmd::Kind::Shader:
+                if (shader && !inCanvas)
+                    shader(c);
                 break;
             }
         }

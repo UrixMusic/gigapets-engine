@@ -2,6 +2,7 @@
 // What they need from the rest of the walk session comes in through WorldDrawEnv, under the names they had, so the bodies read as before.
 #pragma once
 #include "../script_draw.hpp" // ScriptDrawer: draws a script's draw list
+#include "../../engine/gl_shader.hpp" // fragment shaders of mods
 #include <functional>
 #include <map>
 #include <memory>
@@ -480,6 +481,7 @@ public:
     // The drawing calls a script made (scene or HUD): rects, pictures, texts and numbers on the 320 x 240 screen.
     // What a script drew (a DrawCmd list), drawn: the drawing itself is ScriptDrawer's (script_draw.hpp, shared with the front end); this gives it the game's pictures and text
     ScriptDrawer drawer_{ren};
+    GlShaderPass glPass_;
     bool drawerReady_ = false;
     auto drawScriptCmds(const std::vector<gp::DrawCmd> &cmds)
     {
@@ -531,6 +533,17 @@ public:
                     bx = c.align == 1 ? c.x - bw / 2 : c.align == 2 ? c.x - bw : c.x;
                 }
                 (c.font == 3 ? swiftTitle : text).draw(str, bx, c.y, bw, al);
+            };
+            drawer_.shader = [this](const gp::DrawCmd &c)
+            {
+                if (const std::string *src = db.shader(c.str))
+                    glPass_.apply(ren, c.str, *src, c.uniforms, float(SDL_GetTicks()) / 1000.f, gp::logicalW(), 240);
+                else
+                {
+                    static std::set<gp::Id> warned;
+                    if (warned.insert(c.str).second)
+                        std::fprintf(stderr, "shader: no shader '%s'\n", c.str.c_str());
+                }
             };
             drawer_.clearW = gp::kLogicalW;
             drawer_.clearH = gp::kLogicalH;

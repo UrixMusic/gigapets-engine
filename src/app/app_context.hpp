@@ -2,6 +2,9 @@
 #pragma once
 #include <SDL2/SDL.h>
 
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -22,6 +25,21 @@ namespace gp
         Rom *rom = nullptr;
     };
 
+    // Is there a mod with shaders (mods/<id>/shaders/*.frag)? Then the renderer should be the OpenGL one.
+    inline bool modsHaveShaders(const std::string &modsDir)
+    {
+        std::error_code ec;
+        for (const auto &m : std::filesystem::directory_iterator(modsDir, ec))
+        {
+            const auto sd = m.path() / "shaders";
+            if (m.is_directory(ec) && std::filesystem::is_directory(sd, ec))
+                for (const auto &f : std::filesystem::directory_iterator(sd, ec))
+                    if (f.path().extension() == ".frag")
+                        return true;
+        }
+        return false;
+    }
+
     // Owns the ROM, the SDL window and the renderer. Create one in main(); throws on failure.
     class AppHost
     {
@@ -35,7 +53,22 @@ namespace gp
                 throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
             ctx.win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 640, 480, SDL_WINDOW_RESIZABLE);
             if (ctx.win)
-                ctx.ren = SDL_CreateRenderer(ctx.win, -1, SDL_RENDERER_PRESENTVSYNC);
+            {
+                // Shaders from mods need the "opengl" driver of SDL's renderer. It is chosen when a mod has a shaders folder with a .frag in it (or GP_RENDERER=opengl); GP_RENDERER=default
+                // keeps SDL's own choice whatever the mods have. If opengl cannot be had the game carries on with the default (and shaders are skipped).
+                const char *want = std::getenv("GP_RENDERER");
+                const bool wantGl = want ? std::string(want) == "opengl" : modsHaveShaders("mods");
+                if (wantGl)
+                {
+                    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
+                    ctx.ren = SDL_CreateRenderer(ctx.win, -1, SDL_RENDERER_PRESENTVSYNC);
+                    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "");
+                    if (!ctx.ren)
+                        std::fprintf(stderr, "renderer: opengl could not be started (%s): using the default; mod shaders are skipped\n", SDL_GetError());
+                }
+                if (!ctx.ren)
+                    ctx.ren = SDL_CreateRenderer(ctx.win, -1, SDL_RENDERER_PRESENTVSYNC);
+            }
             if (!ctx.win || !ctx.ren)
             {
                 const std::string err = SDL_GetError();

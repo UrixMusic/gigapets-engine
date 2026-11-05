@@ -2184,6 +2184,35 @@ namespace gp
             rep.lastWriter[id] = m.id;
         }
 
+        // shader: a fragment shader (GLSL 1.20) a script runs over the finished frame with g.shader(id, { uniforms }). Only mode "add".
+        //   { type: "shader", mode: "add", id: "mymod:shader/wave", file: "shaders/wave.frag" }
+        // The file is the shader's body (`void main() { ... }`; see engine/gl_shader.hpp for what it is given). The game compiles it the first time it is used, so a mistake in it is
+        // reported then, in the log, and the pass is skipped. Shaders need the "opengl" render driver, which the game picks when any mod has a shaders folder.
+        inline void applyShader(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
+        {
+            static const std::set<std::string> allowed{"type", "mode", "id", "file"};
+            std::string id, why;
+            if (!beginAdd(m, file, rec, rep, "shader", allowed, [&](const std::string &i)
+                          { return db.shader(i) != nullptr; }, id))
+                return;
+            if (!rec.contains("file") || !rec["file"].is_string())
+                return err(rep, file, m.id, "'" + id + "': 'file' is required (the shader's .frag file)");
+            fs::path p;
+            if (!modFile(m, rec["file"].get<std::string>(), p, why))
+                return err(rep, file, m.id, "'" + id + "': " + why);
+            std::ifstream f(p, std::ios::binary);
+            std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            src.erase(std::remove(src.begin(), src.end(), '\r'), src.end()); // (a file made on Windows has CR LF line ends)
+            if (src.empty() || src.size() > 65536)
+                return err(rep, file, m.id, "'" + id + "': the shader file must be 1 byte to 64 KB of text");
+            if (src.find("void main") == std::string::npos)
+                return err(rep, file, m.id, "'" + id + "': the shader has no `void main()`");
+            if (src.find("#version") != std::string::npos)
+                return err(rep, file, m.id, "'" + id + "': leave out #version (the game adds it: GLSL 1.20, with uv, frame(), resolution and time)");
+            db.putShader(id, std::move(src));
+            rep.lastWriter[id] = m.id;
+        }
+
         // shop: what a shop can stock, and where. The stock is rolled from this table (see ShopDef): `rolls` weighted picks when the game starts, then one more
         // every restock. { type: "shop", mode: "add", id: "mymod:shop/store", area: "mymod:area/store", rolls: 10,
         //   items: [ { item: "mymod:item/pie", weight: 20, cap: 5 } ] }   // weight: 0..10000 (default 10), cap: the most offered at once, 1..99 (default 5)
@@ -3744,6 +3773,8 @@ namespace gp
                     applyQuestType(db, m, file, r, rep);
                 else if (type == "room")
                     applyRoom(db, m, file, r, rep);
+                else if (type == "shader")
+                    applyShader(db, m, file, r, rep);
                 else if (type == "species")
                     applySpecies(db, m, file, r, rep);
                 else

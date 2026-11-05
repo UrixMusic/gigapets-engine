@@ -455,6 +455,14 @@ namespace gp
         }
         const std::vector<QuestTypeDef> &questTypes() const { return questTypes_; }
 
+        // A mod's fragment shader (its GLSL text), by id (see engine/gl_shader.hpp)
+        void putShader(const Id &id, std::string source) { shaders_[id] = std::move(source); }
+        const std::string *shader(const Id &id) const
+        {
+            auto i = shaders_.find(id);
+            return i == shaders_.end() ? nullptr : &i->second;
+        }
+
         void put(MinigameDef m)
         {
             const Id k = m.id;
@@ -668,6 +676,7 @@ namespace gp
         QuestRomTables questTables_;
         BefriendRules befriend_;
         std::map<Id, MinigameDef> minigames_;
+        std::map<Id, std::string> shaders_;
         std::map<int, RoomDef> rooms_;
         std::map<Id, RoomArt> roomArt_;
         std::vector<ShopDef> shops_;

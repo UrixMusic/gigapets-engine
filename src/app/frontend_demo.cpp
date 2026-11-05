@@ -27,6 +27,7 @@
 #include <array>
 
 #include "../game/script_draw.hpp"
+#include "../engine/gl_shader.hpp"
 #include "../game/menu_draw.hpp"
 #include "../game/name_entry.hpp"
 #include "rom.hpp"
@@ -1568,6 +1569,12 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         };
         SpriteCache feSprites(ren, *uiDb); // the pictures a script draws in the front end
         ScriptDrawer feDrawer(ren);
+        GlShaderPass feGl;
+        feDrawer.shader = [&](const gp::DrawCmd &c)
+        {
+            if (const std::string *src = uiDb->shader(c.str))
+                feGl.apply(ren, c.str, *src, c.uniforms, float(SDL_GetTicks()) / 1000.f, gp::logicalW(), 240);
+        };
         feDrawer.sprite = [&](const std::string &id) -> AnimRef
         {
             AnimRef A;

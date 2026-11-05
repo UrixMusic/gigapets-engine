@@ -229,7 +229,8 @@ namespace gp
             Mesh,        // str = a canvas (or "@frame"); pts = 8 numbers a vertex: x, y, u, v, r, g, b, a (u, v 0..1); idx = triangles
             CanvasBegin, // str = name, w, h: what follows (to CanvasEnd) is drawn into that canvas, in its own pixels
             CanvasEnd,
-            Blit         // str = a canvas (or "@frame": the picture as it is so far); x, y, w, h = its place (0 = its own size)
+            Blit,         // str = a canvas (or "@frame": the picture as it is so far); x, y, w, h = its place (0 = its own size)
+            Shader       // str = a shader id (the shader record's); uniforms; runs over the picture so far
         };
         Kind kind = Kind::Clear;
         int x = 0, y = 0, w = 0, h = 0;
@@ -243,6 +244,7 @@ namespace gp
         int x2 = 0, y2 = 0, thick = 1;    // Line
         std::vector<float> pts;           // Poly, Mesh
         std::vector<int> idx;             // Mesh
+        std::vector<std::pair<std::string, std::vector<float>>> uniforms; // Shader
         std::string str;                  // Sprite: the picture's id; Text: the text id
         double num = 0;                   // Num: the number
         int frame = 0;                    // Sprite: frame number from 0
@@ -994,7 +996,7 @@ namespace gp
             drawing_ = true;
             runHook(sceneHooks_, 'S', sceneId_, "onDraw", [&]
                     {
-                        const std::pair<const char *, lua_CFunction> fns[] = {{"clear", l_gClear}, {"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}};
+                        const std::pair<const char *, lua_CFunction> fns[] = {{"clear", l_gClear}, {"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}, {"shader", l_gShader}};
                         for (const auto &[name, f] : fns)
                         {
                             lua_pushlightuserdata(L_, this);
@@ -1015,7 +1017,7 @@ namespace gp
                 return sceneCmds_;
             auto fns = [&]
             {
-                const std::pair<const char *, lua_CFunction> list[] = {{"clear", l_gClear}, {"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}};
+                const std::pair<const char *, lua_CFunction> list[] = {{"clear", l_gClear}, {"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}, {"shader", l_gShader}};
                 for (const auto &[name, f] : list)
                 {
                     lua_pushlightuserdata(L_, this);
@@ -1038,7 +1040,7 @@ namespace gp
                 return sceneCmds_;
             auto fns = [&]
             {
-                const std::pair<const char *, lua_CFunction> list[] = {{"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}};
+                const std::pair<const char *, lua_CFunction> list[] = {{"rect", l_gRect}, {"sprite", l_gSprite}, {"text", l_gText}, {"num", l_gNum}, {"line", l_gLine}, {"circle", l_gCircle}, {"poly", l_gPoly}, {"mesh", l_gMesh}, {"canvas", l_gCanvas}, {"blit", l_gBlit}, {"shader", l_gShader}};
                 for (const auto &[name, f] : list)
                 {
                     lua_pushlightuserdata(L_, this);
@@ -2603,6 +2605,59 @@ namespace gp
             {
                 luaL_checktype(L, 4, LUA_TTABLE);
                 d.blend = blendOf(L, 4);
+            }
+            self(L).sceneCmds_.push_back(std::move(d));
+            return 0;
+        }
+        // g.shader(id [, uniforms]): run a fragment shader (a `shader` record of a mod) over the picture drawn so far: the screen, in onPostDraw. uniforms = { name = number | { 2..4 numbers }, ... }
+        // (up to 16; the names are the shader's `uniform float / vec2 / vec3 / vec4`). It needs the "opengl" render driver (the game picks it when a mod has a shaders folder); without it,
+        // or if the shader does not compile, the call does nothing (the log says why). Meant for onPostDraw: that is where the finished frame is.
+        static int l_gShader(lua_State *L)
+        {
+            drawGuard(L);
+            const char *id = luaL_checkstring(L, 1);
+            luaL_argcheck(L, idCharsOk(id) && std::strlen(id) <= 100, 1, "a shader id");
+            DrawCmd d;
+            d.kind = DrawCmd::Kind::Shader;
+            d.str = id;
+            if (!lua_isnoneornil(L, 2))
+            {
+                luaL_checktype(L, 2, LUA_TTABLE);
+                lua_pushnil(L);
+                while (lua_next(L, 2))
+                {
+                    if (lua_type(L, -2) != LUA_TSTRING)
+                        luaL_error(L, "g.shader: uniform names are strings");
+                    const std::string name = lua_tostring(L, -2);
+                    bool nameOk = !name.empty() && name.size() <= 40 && !std::isdigit(static_cast<unsigned char>(name[0]));
+                    for (char c : name)
+                        nameOk = nameOk && (std::isalnum(static_cast<unsigned char>(c)) || c == '_');
+                    if (!nameOk)
+                        luaL_error(L, "g.shader: '%s' is not a uniform name (letters, digits, _)", name.c_str());
+                    if (d.uniforms.size() >= 16)
+                        luaL_error(L, "g.shader: at most 16 uniforms");
+                    std::vector<float> v;
+                    if (lua_isnumber(L, -1))
+                        v.push_back(float(lua_tonumber(L, -1)));
+                    else if (lua_istable(L, -1))
+                    {
+                        const lua_Integer n = lua_rawlen(L, -1);
+                        if (n < 1 || n > 4)
+                            luaL_error(L, "g.shader: '%s' must be a number or a list of 2 to 4 numbers", name.c_str());
+                        for (lua_Integer i = 1; i <= n; ++i)
+                        {
+                            lua_rawgeti(L, -1, i);
+                            if (!lua_isnumber(L, -1))
+                                luaL_error(L, "g.shader: '%s' holds numbers", name.c_str());
+                            v.push_back(float(lua_tonumber(L, -1)));
+                            lua_pop(L, 1);
+                        }
+                    }
+                    else
+                        luaL_error(L, "g.shader: '%s' must be a number or a list of numbers", name.c_str());
+                    d.uniforms.emplace_back(name, std::move(v));
+                    lua_pop(L, 1);
+                }
             }
             self(L).sceneCmds_.push_back(std::move(d));
             return 0;

@@ -247,6 +247,31 @@ int main()
         }
         CHECK(hh.drawPost().size() == 10); // (and it works again the next frame: nothing is left open)
     }
+    { // g.shader: uniforms as numbers or lists of 2..4 numbers; mistakes are script errors
+        gp::ScriptHost hh;
+        CHECK(hh.runString("m", "local G = Game.hooks(); function G:onPostDraw(g) g.shader('m:shader/a', { strength = 0.5, tint = { 1, 0.5, 0.25 } }); g.shader('m:shader/b') end"));
+        const std::vector<gp::DrawCmd> &c = hh.drawPost();
+        CHECK(c.size() == 2 && c[0].kind == gp::DrawCmd::Kind::Shader && c[0].str == "m:shader/a" && c[0].uniforms.size() == 2 && c[1].uniforms.empty());
+        if (c.size() == 2 && c[0].uniforms.size() == 2)
+        {
+            bool tintOk = false, strengthOk = false;
+            for (const auto &[name, v] : c[0].uniforms)
+            {
+                tintOk = tintOk || (name == "tint" && v.size() == 3 && v[1] == 0.5f);
+                strengthOk = strengthOk || (name == "strength" && v.size() == 1 && v[0] == 0.5f);
+            }
+            CHECK(tintOk && strengthOk);
+        }
+        const char *bad[] = {"g.shader('bad id!')", "g.shader('m:s', { [1] = 2 })", "g.shader('m:s', { ['1x'] = 2 })", "g.shader('m:s', { a = 'x' })", "g.shader('m:s', { a = { 1, 2, 3, 4, 5 } })",
+                             "g.shader('m:s', { a = {} })", "g.shader('m:s', { a = { 1, 'x' } })"};
+        for (const char *b : bad)
+        {
+            gp::ScriptHost bh;
+            CHECK(bh.runString("m", std::string("local G = Game.hooks(); function G:onPostDraw(g) ") + b + " end"));
+            bh.drawPost();
+            CHECK(!bh.errors().empty());
+        }
+    }
     { // with nothing wired the calls are harmless
         gp::ScriptHost h2;
         CHECK(h2.runString("m", "assert(player.pos() == nil and player.setPos(1, 2) == false and player.react('happy') == false and area.go('a:b', 1, 2) == false and area.current() == '')"));
