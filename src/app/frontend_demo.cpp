@@ -1517,6 +1517,12 @@ inline void drawButtonTest(Gfx &g, const gp::testmode::ButtonTest &t)
 // Returns the save slot (0..2) to play, or -1 if the window was closed.
 // launchGame = false keeps the old demo behaviour (after New/Load it just returns to the menu).
 // skipBoot   = true starts at the main menu (used when coming back from gameplay).
+// The keys the front end's scripts see: pressed since their last tick, or held now (Z, X, the arrows)
+struct FeKeys
+{
+    bool z = false, x = false, left = false, right = false, up = false, down = false;
+};
+
 int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFrames)
 {
     int chosenSlot = -1;
@@ -1604,10 +1610,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         // frontend.menu system), which take the keys and the whole screen while they are up.
         bool feSceneActive = false;
         long feTick = 0;
-        struct FeKeys
-        {
-            bool z = false, x = false, left = false, right = false, up = false, down = false;
-        } fePressed, feHeld; // pressed since the last script tick / held now
+        FeKeys fePressed, feHeld; // pressed since the last script tick / held now
         gp::DebugCode debugCode;
         bool showOutlines = false; // F8: the old white debug boxes
 
