@@ -142,12 +142,19 @@ inline void finishTrickLesson(WalkServices &svc, const gp::NpcDef &d, int level,
 {
     auto &db = svc.db;
     auto &player = svc.player;
+    // the engine system "trick.learn": the lesson is over. `won` (1 / 0) is the result and `known` what the pet will know (the level on a win, unchanged on a loss): a mod may
+    // change them (turn a loss into a win, teach a different count)
+    gp::SystemCtx lc;
+    lc.set("npc", d.id).set("level", level).set("won", won ? 1 : 0).set("known", won ? level : player.tricksKnown);
+    svc.scripts.system("trick.learn", lc, [] {});
+    won = lc.num("won") != 0;
+    const int newKnown = int(lc.num("known"));
     const std::string n = std::to_string(level);
     gp::DialogueBox b = gp::messageBox(db.textOr(std::string("base:str/") + (won ? "trick_learned_" : "trick_failed_") + n, "?"));
     b.portrait = gp::uiSpriteId(d.portraitSprite, d.portraitPalette);
+    player.tricksKnown = std::max(0, newKnown);
     if (won)
     {
-        player.tricksKnown = level; // SetTricksKnownAndRerollTraits(level)
         player.rerollTrickCode([&](int lo, int hi)
                                { return svc.S.world.npcRng.range(lo, hi); });
         player.lastEncounterTick = 0; // a success clears the cooldown
@@ -161,6 +168,7 @@ inline void finishTrickLesson(WalkServices &svc, const gp::NpcDef &d, int level,
 // TryBefriendNPC's friended branch: teacher 0x30 / 0x31 / 0x32 teaches a trick when the pet knows exactly the tricks
 // before it and the cooldown (10 minutes, shared by all three teachers) is over. The teacher shows the trick off, then
 // offers the lesson. Returns true if it took the talk, or false to fall through to the normal friend visit.
+inline bool teachLesson(WalkServices &svc, gp::NpcActor &n, const gp::NpcDef &d, int level);
 inline bool tryTrickTeacher(WalkServices &svc, gp::NpcActor &n)
 {
     auto &db = svc.db;
@@ -168,14 +176,26 @@ inline bool tryTrickTeacher(WalkServices &svc, gp::NpcActor &n)
     const gp::NpcDef &d = *n.def;
     const gp::MinigameDef &mg = db.minigameOr("base:minigame/trick_guess");
     const int level = d.index - mg.get("firstTeacher", 0x30) + 1;
-    if (level < 1 || level > 3 || player.tricksKnown != level - 1 || !svc.startTrickGame)
+    if (level < 1 || level > 3 || !svc.startTrickGame)
         return false;
+    // the engine system "trick.teach": a teacher is talked to (a friend of that teacher's level). `can` is whether the rules let a lesson happen now (the pet knows exactly the
+    // tricks before this one and the 10 minute cooldown is over): set it to decide. `can` 0 falls through to a normal friend visit; replace (or cancel) = the mod did the talk itself.
+    double cooldownLeft = 0;
     if (player.lastEncounterTick != 0) // 0 = never; else elapsed gameTicks / 59.94 must pass the cooldown
-    {
-        const double elapsed = double(svc.S.world.gameTicks - player.lastEncounterTick) / 59.94;
-        if (elapsed <= mg.get("cooldownSeconds", 600))
-            return false;
-    }
+        cooldownLeft = std::max(0.0, mg.get("cooldownSeconds", 600) - double(svc.S.world.gameTicks - player.lastEncounterTick) / 59.94);
+    const bool rulesAllow = player.tricksKnown == level - 1 && cooldownLeft <= 0.0;
+    gp::SystemCtx tc;
+    tc.set("npc", d.id).set("level", level).set("known", player.tricksKnown).set("cooldown", cooldownLeft).set("can", rulesAllow ? 1 : 0);
+    bool taken = true;
+    svc.scripts.system("trick.teach", tc, [&]
+                       { taken = tc.num("can") != 0 && teachLesson(svc, n, d, level); });
+    return taken;
+}
+// The lesson itself: the showcase, then the offer (tryTrickTeacher decided it may happen).
+inline bool teachLesson(WalkServices &svc, gp::NpcActor &n, const gp::NpcDef &d, int level)
+{
+    auto &db = svc.db;
+    auto &player = svc.player;
     if (!player.trickCodeRolled) // a fresh save: SetTricksKnownAndRerollTraits(0) isn't modelled at game start
         player.rerollTrickCode([&](int lo, int hi)
                                { return svc.S.world.npcRng.range(lo, hi); });

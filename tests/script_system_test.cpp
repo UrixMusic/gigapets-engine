@@ -32,6 +32,16 @@ static Run decay(gp::ScriptHost &h, double amount, std::string stat = "hunger")
 
 int main()
 {
+    { // the trick systems exist, and a mod can change what the engine reads back
+        gp::ScriptHost h;
+        CHECK(h.runString("a", "local P = System.hooks('trick.perform'); function P:before(ctx) if ctx.known == 0 then ctx.known = 1 end end; System.hooks('trick.teach'); System.hooks('trick.learn')"));
+        gp::SystemCtx c;
+        c.set("slot", 2).set("level", 3).set("known", 0);
+        int level = 0;
+        h.system("trick.perform", c, [&] { level = int(c.num("known")) * int(c.num("level")); });
+        CHECK(level == 3);
+        CHECK(h.errors().empty());
+    }
     { // no hooks: the default, untouched
         gp::ScriptHost h;
         const Run r = decay(h, 3);

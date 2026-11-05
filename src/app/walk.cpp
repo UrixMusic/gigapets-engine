@@ -2742,10 +2742,17 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             barAnim.visible = false;
             bar.forceClose();
             barBusy = 0;
-            if (player.tricksKnown <= slot)
-                startQuestion();
-            else
-                startTrick(slot + 1); // (the prize roll, RollPetPrizeId(3), isn't wired)
+            // the engine system "trick.perform": the player picked a slot on the tricks panel. `known` is 1 if the pet has learned it; the default is the trick (level slot + 1),
+            // or the "?" bubble if it is not known. Change `known` (a mod may let it do the trick anyway), cancel for nothing, or replace and do it with player.play.
+            gp::SystemCtx c;
+            c.set("slot", slot).set("level", slot + 1).set("known", player.tricksKnown > slot ? 1 : 0);
+            scripts.system("trick.perform", c, [&]
+                           {
+                if (c.num("known") == 0)
+                    startQuestion();
+                else
+                    startTrick(std::clamp(int(c.num("level")), 1, 3)); // (the prize roll, RollPetPrizeId(3), isn't wired)
+                           });
         };
         auto tickQuestion = [&]
         {
