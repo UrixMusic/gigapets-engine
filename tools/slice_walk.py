@@ -29,6 +29,18 @@ import json, re, subprocess, sys, os
 NL = chr(10)
 CR = chr(13)
 SRC = 'src/app/walk.cpp'
+FUNC = 'int runWalk('       # the function the lambdas are taken out of
+DIR = 'src/game/walk'      # where the generated headers go
+INCDIR = '../game/walk'    # how walk.cpp includes them
+INC_BEFORE = None          # insert the #include before this line (default: after the last include of INCDIR)
+_specs = [a for a in sys.argv[1:] if a.endswith('.json')]
+if _specs:
+    _sp = json.load(open(_specs[0]))
+    SRC = _sp.get('source', SRC)
+    FUNC = _sp.get('function', FUNC)
+    DIR = _sp.get('dir', DIR)
+    INCDIR = _sp.get('include_dir', INCDIR)
+    INC_BEFORE = _sp.get('include_before', INC_BEFORE)
 INC = ['-Isrc/engine', '-Isrc/loaders', '-Isrc/game', '-Ithird_party', '-ID:/libs/sdl2/x86_64-w64-mingw32/include']
 CXX = ['g++', '-std=c++17', '-w', '-fsyntax-only'] + INC
 
@@ -97,7 +109,7 @@ def split_params(params):
 
 
 def run_walk_range(L):
-    s = next(i for i, l in enumerate(L) if l.startswith('int runWalk('))
+    s = next(i for i, l in enumerate(L) if l.startswith(FUNC))
     e = next(i for i in range(s, len(L)) if L[i] == '}')
     return s, e
 
@@ -290,12 +302,15 @@ def main():
         init.append('        }')
         out[idx_last + 1:idx_last + 1] = init
         text = NL.join(out)
-        inc = '#include "../game/walk/%s"' % spec['header']
+        inc = '#include "%s/%s"' % (INCDIR, spec['header'])
         if inc not in text:
-            lines = text.split(NL)
-            last = max(i for i, l in enumerate(lines) if l.startswith('#include "../game/walk/'))   # after the last walk header: it may use their types
-            lines.insert(last + 1, inc)
-            text = NL.join(lines)
+            if INC_BEFORE and INC_BEFORE in text:
+                text = text.replace(INC_BEFORE, inc + NL + INC_BEFORE, 1)
+            else:
+                lines = text.split(NL)
+                last = max(i for i, l in enumerate(lines) if l.startswith('#include "%s/' % INCDIR))   # after the last walk header: it may use their types
+                lines.insert(last + 1, inc)
+                text = NL.join(lines)
         return text
 
     return spec, gen_header, gen_walk, env, cache_file, dry, defaults
@@ -303,7 +318,7 @@ def main():
 
 if __name__ == '__main__' and not (len(sys.argv) > 2 and sys.argv[1] in ('--probe', '--auto')):
     spec, gen_header, gen_walk, env, cache_file, dry, defaults = main()
-    hdr_path = 'src/game/walk/' + spec['header']
+    hdr_path = DIR + '/' + spec['header']
     write(hdr_path, gen_header())
     write(SRC, gen_walk())
     print('wrote', hdr_path, 'and edited', SRC)
@@ -360,8 +375,8 @@ def probe(spec_path, names):
     unknown = [n for n, t in result.items() if t.startswith('?')]
     sigs = {}
     for n in unknown:
-        for f in os.listdir('src/game/walk'):
-            txt = read('src/game/walk/' + f)
+        for f in os.listdir(DIR):
+            txt = read(DIR + '/' + f)
             m = re.search(r'\n    (?:auto|[\w:<>&\* ,]+?) %s(\(.*?\))\s*\n    \{' % re.escape(n), txt, re.S)
             if m:
                 ps = split_params(m.group(1))
@@ -395,7 +410,7 @@ if len(sys.argv) > 2 and sys.argv[1] == '--probe':
 # python tools/slice_walk.py --auto spec.json   : generate, compile, probe whatever is missing, regenerate (until it compiles, at most 5 rounds).  Needs walk.cpp committed (it is restored with git).
 def auto(spec_path):
     spec = json.load(open(spec_path))
-    hdr = 'src/game/walk/' + spec['header']
+    hdr = DIR + '/' + spec['header']
     for rnd in range(5):
         subprocess.run(['git', 'checkout', SRC], capture_output=True)
         if os.path.exists(hdr):

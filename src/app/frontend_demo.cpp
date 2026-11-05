@@ -1903,7 +1903,9 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
         }
         bootT0 = lastMs = SDL_GetTicks();
         bool run = true;
-        for (int frame = 0; run && (maxFrames < 0 || frame < maxFrames); ++frame)
+        int frame = 0; // (the loop counter: the sections below are lambdas now)
+        // The events of one frame: keys and the window
+        auto handleEvents = [&]
         {
             SDL_Event e;
             while (SDL_PollEvent(&e))
@@ -2450,7 +2452,10 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                     }
                 }
             }
-
+        };
+        // The rest of a frame: the 30 Hz ticks (fades, slides, scripts), the screen's own step and its drawing, then the picture is shown
+        auto stepAndDraw = [&]
+        {
             // ---- draw
             gp::useUiScreen(ren); // 16:9: the 320 x 240 screens sit in the middle
             gp::clearFrame(ren);
@@ -2805,6 +2810,11 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                 SDL_SetWindowTitle(win, title.c_str());
                 lastTitle = title;
             }
+        };
+        for (; run && (maxFrames < 0 || frame < maxFrames); ++frame)
+        {
+            handleEvents();
+            stepAndDraw();
         }
         app.clearCaches();
     }
