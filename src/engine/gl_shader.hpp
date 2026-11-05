@@ -25,6 +25,7 @@
 #ifdef far
 #undef far
 #endif
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -197,7 +198,7 @@ public:
 
     // One thing of the world (`entity`: its own picture on a transparent SDL texture) drawn again through the shader over `dst` (logical coordinates), blended over what is there.
     // Here `frame(p)` is that picture (same orientation as `uv`), `resolution` is the picture's size in the logical screen.
-    void applyEntity(SDL_Renderer *ren, const std::string &id, const std::string &source, const Uniforms &uniforms, float seconds, SDL_Texture *entity, const SDL_FRect &dst, int picW, int picH)
+    void applyEntity(SDL_Renderer *ren, const std::string &id, const std::string &source, const Uniforms &uniforms, float seconds, SDL_Texture *entity, const SDL_FRect &dst, int picW, int picH, bool toTarget = false)
     {
         if (!available(ren))
             return;
@@ -210,7 +211,14 @@ public:
         int lw = 0, lh = 0;
         SDL_RenderGetLogicalSize(ren, &lw, &lh);
         int x0 = 0, y0 = 0, x1 = ow, y1 = oh, xa = 0, ya = 0, xb = ow, yb = oh;
-        if (lw > 0 && lh > 0)
+        if (toTarget) // drawing into another picture of SDL's (the zoomed world): its pixels are the units, and SDL counts its rows from the bottom up (y is the GL row)
+        {
+            x0 = int(std::lround(dst.x));
+            y0 = int(std::lround(dst.y));
+            x1 = x0 + int(std::lround(dst.w));
+            y1 = y0 + int(std::lround(dst.h));
+        }
+        else if (lw > 0 && lh > 0)
         {
             SDL_RenderLogicalToWindow(ren, dst.x, dst.y, &xa, &ya);
             SDL_RenderLogicalToWindow(ren, dst.x + dst.w, dst.y + dst.h, &xb, &yb);
@@ -223,7 +231,7 @@ public:
         if (w < 1 || h < 1)
             return;
         glPushAttrib(GL_ALL_ATTRIB_BITS);
-        glViewport(x0, oh - y1, w, h);
+        glViewport(x0, toTarget ? y0 : oh - y1, w, h);
         glDisable(GL_SCISSOR_TEST);
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_CULL_FACE);
@@ -251,14 +259,15 @@ public:
                 else if (v.size() == 4)
                     glUniform4f_(l, v[0], v[1], v[2], v[3]);
             }
+            const float t0 = toTarget ? 1.f : 0.f, t1 = toTarget ? 0.f : 1.f; // (into a picture, the bottom row of the GL frame is the top of the drawing)
             glBegin(GL_TRIANGLE_STRIP);
-            glTexCoord2f(0.f, 0.f);
+            glTexCoord2f(0.f, t0);
             glVertex2f(-1.f, -1.f);
-            glTexCoord2f(1.f, 0.f);
+            glTexCoord2f(1.f, t0);
             glVertex2f(1.f, -1.f);
-            glTexCoord2f(0.f, 1.f);
+            glTexCoord2f(0.f, t1);
             glVertex2f(-1.f, 1.f);
-            glTexCoord2f(1.f, 1.f);
+            glTexCoord2f(1.f, t1);
             glVertex2f(1.f, 1.f);
             glEnd();
             glUseProgram_(0);

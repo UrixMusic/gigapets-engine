@@ -415,7 +415,7 @@ public:
             }
         };
         // A thing of the world drawn through its shader, if a script gave it one (world.shade): it is drawn alone onto a transparent picture with its feet at a fixed place, and the picture
-        // is drawn again over that place through the shader. Not while the world itself is drawn into a picture (a zoomed / turned camera), or without OpenGL: then it is drawn plainly.
+        // is drawn again over that place through the shader (also into the zoomed / turned world's picture). Without OpenGL it is drawn plainly.
         const auto shaded = [&](const std::string &key, float wx, float wy, const std::function<void()> &plain)
         {
             const gp::ScriptHost::EntityShade *es = scripts.anyEntityShade() ? scripts.entityShade(key) : nullptr;
@@ -426,7 +426,7 @@ public:
                 if (warned.insert(es->shader).second)
                     std::fprintf(stderr, "world.shade: no shader '%s'\n", es->shader.c_str());
             }
-            if (!src || SDL_GetRenderTarget(ren) != nullptr || !entityGl_.available(ren))
+            if (!src || !entityGl_.available(ren))
             {
                 plain();
                 return;
@@ -442,6 +442,7 @@ public:
                 plain();
                 return;
             }
+            SDL_Texture *outer = SDL_GetRenderTarget(ren); // (the zoomed world is a picture: the thing is put back into it)
             const float sx = camX, sy = camY;
             camX = wx - float(kEntityPic) * 0.5f;
             camY = wy - float(kEntityPic) * 0.75f;
@@ -450,11 +451,11 @@ public:
             SDL_SetRenderDrawColor(ren, 0, 0, 0, 0);
             SDL_RenderClear(ren);
             plain();
-            SDL_SetRenderTarget(ren, nullptr);
+            SDL_SetRenderTarget(ren, outer);
             camX = sx;
             camY = sy;
             const SDL_FRect dst{wx - sx - float(kEntityPic) * 0.5f, wy - sy - float(kEntityPic) * 0.75f, float(kEntityPic), float(kEntityPic)};
-            entityGl_.applyEntity(ren, es->shader, *src, es->uniforms, float(SDL_GetTicks()) / 1000.f, entityTex_, dst, kEntityPic, kEntityPic);
+            entityGl_.applyEntity(ren, es->shader, *src, es->uniforms, float(SDL_GetTicks()) / 1000.f, entityTex_, dst, kEntityPic, kEntityPic, outer != nullptr);
         };
         for (const Item &it : items)
         {
