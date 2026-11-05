@@ -102,6 +102,16 @@ namespace gp
         std::function<bool(const std::string &id, const std::string &objtype, int x, int y, int reachX, int reachY)> spawnObject;
         std::function<bool(const std::string &id, int x, int y)> moveObject;
         std::function<bool(const std::string &id)> removeObject;
+        // NPC behaviour (npc.walkTo / face / play / stop / release / info): for an NPC that is in the area. A script that gives one of these takes the NPC over: its own
+        // roll of activities stops and it does what the script says, until npc.release. walkTo walks it to x, y with its own pixel-exact walking (it does not look at
+        // walls: area.walkable is the script's to ask); face turns it (0 left, 1 right, 2 up, 3 down) and holds it still; play shows one of the db's anims on it ("" stops
+        // it); stop makes it stand where it is. The changes are made between ticks, so a call and the NPC's next step can be a tick apart. All return false for an
+        // NPC that is not here. npcInfo fills where it is, which way it faces and whether it is walking and whether a script drives it.
+        std::function<bool(const std::string &id, int x, int y)> npcWalkTo;
+        std::function<bool(const std::string &id, int facing)> npcFace;
+        std::function<bool(const std::string &id, const std::string &anim)> npcPlay;
+        std::function<bool(const std::string &id)> npcStop, npcRelease;
+        std::function<bool(const std::string &id, int &x, int &y, int &facing, bool &walking, bool &scripted)> npcInfo;
         std::function<bool(const std::string &id, const std::string &objtype)> setObjectType; // object.setType: the object is drawn as another type; false for an unknown object or type
         std::function<bool(const std::string &npc, int x, int y)> spawnNpc;
         std::function<bool(const std::string &npc, int x, int y)> moveNpc;
@@ -240,6 +250,12 @@ namespace gp
             bind("object", "move", l_oMove);
             bind("object", "remove", l_oRemove);
             bind("object", "setType", l_oSetType);
+            bind("npc", "walkTo", l_nWalkTo);
+            bind("npc", "face", l_nFace);
+            bind("npc", "play", l_nPlay);
+            bind("npc", "stop", l_nStop);
+            bind("npc", "release", l_nRelease);
+            bind("npc", "info", l_nInfo);
             bind("npc", "spawn", l_nSpawn);
             bind("npc", "move", l_nMove);
             bind("npc", "remove", l_nRemove);
@@ -452,7 +468,7 @@ namespace gp
             switch (kind)
             {
             case 'N':
-                return {"onTalkStart", "onTalk"};
+                return {"onTalkStart", "onTalk", "onTick"};
             case 'I':
                 return {"onItemUse"};
             case 'S':
@@ -823,6 +839,36 @@ namespace gp
                            nullptr);
         }
 
+        // Fires Npc.hooks(npcId).onTick once per game tick while the NPC is in the area the pet is in and the world is running. ctx.npc = { id, x, y, facing,
+        // walking, scripted }, ctx.tick as for an area. The script drives the NPC with npc.walkTo / face / play / stop / release (and reads the pet with player.pos).
+        // If the last onTick is still waiting (wait / ask) no new one starts. True if a script ran.
+        bool fireNpcTick(const std::string &npcId, int x, int y, int facing, bool walking, bool scripted, long tick)
+        {
+            if (npcHooks_.find(npcId) == npcHooks_.end() || routineActive(hookKey('N', npcId, "onTick")))
+                return false;
+            return runHook(npcHooks_, 'N', npcId, "onTick", [&]
+                           {
+                               lua_newtable(L_);
+                               lua_pushstring(L_, npcId.c_str());
+                               lua_setfield(L_, -2, "id");
+                               lua_pushinteger(L_, x);
+                               lua_setfield(L_, -2, "x");
+                               lua_pushinteger(L_, y);
+                               lua_setfield(L_, -2, "y");
+                               static const char *const names[] = {"left", "right", "up", "down"};
+                               lua_pushstring(L_, names[facing >= 0 && facing < 4 ? facing : 3]);
+                               lua_setfield(L_, -2, "facing");
+                               lua_pushboolean(L_, walking);
+                               lua_setfield(L_, -2, "walking");
+                               lua_pushboolean(L_, scripted);
+                               lua_setfield(L_, -2, "scripted");
+                               lua_setfield(L_, -2, "npc");
+                               lua_pushnumber(L_, 1.0 / 30.0);
+                               lua_setfield(L_, -2, "dt");
+                               lua_pushinteger(L_, tick);
+                               lua_setfield(L_, -2, "tick"); },
+                           nullptr);
+        }
         // Fires Area.hooks(areaId).onTick once per game tick (30 a second) while the pet is in that area and the world is running.
         // ctx.area = { id }, ctx.dt = seconds per tick (1/30), ctx.tick = ticks since the game started (30 a second, counting
         // the ones skipped while a menu or dialogue was open). If the previous onTick is still
@@ -2056,6 +2102,90 @@ namespace gp
             const char *id = luaL_checkstring(L, 1);
             lua_pushboolean(L, h.api_.removeObject && idCharsOk(id) && h.api_.removeObject(id));
             return 1;
+        }
+        // npc.walkTo(npcId, x, y) -> true if the NPC is here and the walk began. The script now drives that NPC (until npc.release): it walks there with its own walking
+        // animation (a stationary NPC walks too, with whatever art it has), and when it arrives it stands still. A new walkTo changes where it is going.
+        static int l_nWalkTo(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            const int x = coordArg(L, 2), y = coordArg(L, 3);
+            lua_pushboolean(L, h.api_.npcWalkTo && idCharsOk(id) && h.api_.npcWalkTo(id, x, y));
+            return 1;
+        }
+        static int facingArg(lua_State *L, int i)
+        {
+            static const char *const names[] = {"left", "right", "up", "down"};
+            const char *s = luaL_checkstring(L, i);
+            for (int k = 0; k < 4; ++k)
+                if (std::strcmp(s, names[k]) == 0)
+                    return k;
+            return luaL_argerror(L, i, "a facing: \"left\", \"right\", \"up\" or \"down\"");
+        }
+        // npc.face(npcId, "left" | "right" | "up" | "down") -> true if done: the NPC turns that way and stands still (the script drives it until npc.release).
+        static int l_nFace(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            const int f = facingArg(L, 2);
+            lua_pushboolean(L, h.api_.npcFace && idCharsOk(id) && h.api_.npcFace(id, f));
+            return 1;
+        }
+        // npc.play(npcId, animId) -> true if done: shows that anim (an anim record of a mod, or one of the game's) on the NPC instead of its own, looping; nil or "" stops it.
+        static int l_nPlay(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            const char *anim = lua_isnoneornil(L, 2) ? "" : luaL_checkstring(L, 2);
+            lua_pushboolean(L, h.api_.npcPlay && idCharsOk(id) && (!*anim || idCharsOk(anim)) && h.api_.npcPlay(id, anim));
+            return 1;
+        }
+        // npc.stop(npcId) -> true if done: the NPC stands where it is (the script still drives it).
+        static int l_nStop(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            lua_pushboolean(L, h.api_.npcStop && idCharsOk(id) && h.api_.npcStop(id));
+            return 1;
+        }
+        // npc.release(npcId) -> true if done: the NPC goes back to its own behaviour (wandering, idling, tricks).
+        static int l_nRelease(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            lua_pushboolean(L, h.api_.npcRelease && idCharsOk(id) && h.api_.npcRelease(id));
+            return 1;
+        }
+        // npc.info(npcId) -> { x, y, facing ("left" ...), walking, scripted } or nil if the NPC is not here. What it is doing now (a change asked for a moment ago may not be
+        // made yet).
+        static int l_nInfo(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const char *id = luaL_checkstring(L, 1);
+            int x = 0, y = 0, f = 3;
+            bool walking = false, scripted = false;
+            if (!h.api_.npcInfo || !idCharsOk(id) || !h.api_.npcInfo(id, x, y, f, walking, scripted))
+            {
+                lua_pushnil(L);
+                return 1;
+            }
+            pushNpcInfo(L, x, y, f, walking, scripted); // (onto the state the script runs in: a hook with wait() is a coroutine)
+            return 1;
+        }
+        static void pushNpcInfo(lua_State *L_, int x, int y, int f, bool walking, bool scripted)
+        {
+            static const char *const names[] = {"left", "right", "up", "down"};
+            lua_createtable(L_, 0, 5);
+            lua_pushinteger(L_, x);
+            lua_setfield(L_, -2, "x");
+            lua_pushinteger(L_, y);
+            lua_setfield(L_, -2, "y");
+            lua_pushstring(L_, names[f >= 0 && f < 4 ? f : 3]);
+            lua_setfield(L_, -2, "facing");
+            lua_pushboolean(L_, walking);
+            lua_setfield(L_, -2, "walking");
+            lua_pushboolean(L_, scripted);
+            lua_setfield(L_, -2, "scripted");
         }
         // npc.spawn(npcId, x, y) -> true if that NPC (a record of the db) is now in this area at x, y. False for an unknown NPC, one that
         // is already here, or when the area is full. Its look and lines come from its record.

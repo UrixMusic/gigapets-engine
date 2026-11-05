@@ -58,6 +58,58 @@ namespace gp
         };
         int settle = SettleNone; // turn-to-idle sequence after a wander stop (key 4, then key 5)
         bool locked = false;     // held by an encounter: settles, but never wanders or picks a new activity
+        // A script drives this NPC (npc.walkTo / face / play ...): the roll of activities is off, the NPC stands where it is, or walks to the goal the script gave it,
+        // with the same pixel-exact walking as a wanderer. A stationary NPC can be driven too. release() gives it back to its own behaviour.
+        bool scripted = false, scriptWalk = false, savedMoves = false;
+        PathPoint scriptGoal{0, 0};
+        void scriptWalkTo(int x, int y)
+        {
+            if (!scripted)
+            {
+                scripted = true;
+                savedMoves = moves;
+            }
+            settle = SettleNone;
+            facingPet = false;
+            forcedAnimId.clear();
+            scriptGoal = {x, y};
+            scriptWalk = !(x == body.x && y == body.y);
+            walk = WalkState{};
+        }
+        void scriptStop()
+        {
+            if (!scripted)
+                return;
+            scriptWalk = false;
+            walk = WalkState{};
+            moves = savedMoves;
+            activity = kActivityIdle;
+        }
+        void scriptRelease(Rng &rng)
+        {
+            if (!scripted)
+                return;
+            scriptStop();
+            scripted = false;
+            clearForced();
+            started = false;
+            startActivity(defaultActivity(def->behaviorFlags), rng);
+            activityTicks = 0;
+        }
+        void scriptFace(int facing)
+        {
+            if (!scripted)
+            {
+                scripted = true;
+                savedMoves = moves;
+            }
+            scriptWalk = false;
+            moves = savedMoves;
+            activity = kActivityIdle;
+            settle = SettleNone;
+            facingPet = false;
+            body.facing = facing;
+        }
         // TickAllPets: the NPC the pet can talk to stops, turns to face the pet and idles for as long as the pet stays
         // in range. walk.cpp sets `selected` and `petOnRight` before every tick(); `facingPet` is this file's state.
         bool selected = false;   // this NPC is the one in the talk box (the same test as pressing Z)
@@ -195,6 +247,25 @@ namespace gp
         // One game tick (30 Hz). Stationary NPCs do nothing here (they only animate).
         void tick(Rng &rng)
         {
+            if (scripted)
+            {
+                if (locked)
+                    return; // an encounter holds it
+                if (scriptWalk)
+                {
+                    moves = true; // (a stationary NPC walks for a script too)
+                    activity = kActivityWander;
+                    const bool done = tickWalk(body, walk, scriptGoal.dx, scriptGoal.dy);
+                    if (done)
+                    {
+                        scriptWalk = false;
+                        walk = WalkState{};
+                        moves = savedMoves;
+                        activity = kActivityIdle;
+                    }
+                }
+                return;
+            }
             if (def->stationary)
                 return;
             if (!started)

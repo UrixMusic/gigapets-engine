@@ -940,9 +940,10 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             std::vector<std::pair<gp::Id, gp::IPoint>> spawned;       // NPCs a script put here
             struct Op
             {
-                enum Kind { Spawn, Move, Remove } kind;
+                enum Kind { Spawn, Move, Remove, Walk, Face, Play, Stop, Release } kind;
                 gp::Id id;
                 gp::IPoint at;
+                std::string str; // Play: the anim ('' = stop playing); Face: at.x is the facing
             };
             std::vector<Op> pending;                                  // changes to the live actors, made at the start of a safe tick
         } scriptNpc;
@@ -4816,6 +4817,37 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                 scriptNpc.pending.push_back({ScriptNpcState::Op::Move, id, {x, y}});
                 return true;
             };
+            // npc.walkTo / face / play / stop / release / info: the changes are queued with the others and made between ticks; the answer reads the live actor
+            auto liveNpc = [&](const gp::Id &id) -> const gp::NpcActor *
+            {
+                for (const gp::NpcActor &n : npcs)
+                    if (n.def->id == id)
+                        return &n;
+                return nullptr;
+            };
+            sapi.npcWalkTo = [&, npcHere](const std::string &id, int x, int y) { if (!npcHere(id)) return false; scriptNpc.pending.push_back({ScriptNpcState::Op::Walk, id, {x, y}, ""}); return true; };
+            sapi.npcFace = [&, npcHere](const std::string &id, int f) { if (!npcHere(id)) return false; scriptNpc.pending.push_back({ScriptNpcState::Op::Face, id, {f, 0}, ""}); return true; };
+            sapi.npcStop = [&, npcHere](const std::string &id) { if (!npcHere(id)) return false; scriptNpc.pending.push_back({ScriptNpcState::Op::Stop, id, {0, 0}, ""}); return true; };
+            sapi.npcRelease = [&, npcHere](const std::string &id) { if (!npcHere(id)) return false; scriptNpc.pending.push_back({ScriptNpcState::Op::Release, id, {0, 0}, ""}); return true; };
+            sapi.npcPlay = [&, npcHere](const std::string &id, const std::string &anim)
+            {
+                if (!npcHere(id) || (!anim.empty() && !db.anim(anim)))
+                    return false;
+                scriptNpc.pending.push_back({ScriptNpcState::Op::Play, id, {0, 0}, anim});
+                return true;
+            };
+            sapi.npcInfo = [&, liveNpc](const std::string &id, int &x, int &y, int &f, bool &walking, bool &scripted)
+            {
+                const gp::NpcActor *n = liveNpc(id);
+                if (!n)
+                    return false;
+                x = n->x();
+                y = n->y();
+                f = n->body.facing;
+                walking = n->walking();
+                scripted = n->scripted;
+                return true;
+            };
             sapi.removeNpc = [&, npcHere](const std::string &id)
             {
                 if (!npcHere(id))
@@ -5574,7 +5606,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     for (const auto &op : scriptNpc.pending)
                     {
                         const long i = indexOf(op.id);
-                        std::printf("script npc %s %s at %d,%d\n", op.kind == ScriptNpcState::Op::Spawn ? "spawn" : op.kind == ScriptNpcState::Op::Move ? "move" : "remove",
+                        std::printf("script npc %s %s at %d,%d\n", op.kind == ScriptNpcState::Op::Spawn ? "spawn" : op.kind == ScriptNpcState::Op::Move ? "move" : op.kind == ScriptNpcState::Op::Remove ? "remove" : "drive",
                                     op.id.c_str(), op.at.x, op.at.y);
                         if (op.kind == ScriptNpcState::Op::Spawn)
                         {
@@ -5604,6 +5636,25 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                             a.activityTicks = 0;
                             a.settle = gp::NpcActor::SettleNone;
                             a.started = false;
+                        }
+                        else if (op.kind == ScriptNpcState::Op::Walk)
+                            npcs[size_t(i)].scriptWalkTo(op.at.x, op.at.y);
+                        else if (op.kind == ScriptNpcState::Op::Face)
+                            npcs[size_t(i)].scriptFace(op.at.x);
+                        else if (op.kind == ScriptNpcState::Op::Stop)
+                            npcs[size_t(i)].scriptStop();
+                        else if (op.kind == ScriptNpcState::Op::Release)
+                            npcs[size_t(i)].scriptRelease(npcRng);
+                        else if (op.kind == ScriptNpcState::Op::Play)
+                        {
+                            gp::NpcActor &a = npcs[size_t(i)];
+                            if (op.str.empty())
+                                a.clearForced();
+                            else
+                            {
+                                a.scriptFace(a.body.facing); // (a script that shows an anim holds the NPC still)
+                                a.forceAnim(op.str);
+                            }
                         }
                         else // Remove
                         {
@@ -6234,6 +6285,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     ain.heldUp = rawDirs & gp::DirUp;
                     ain.heldDown = rawDirs & gp::DirDown;
                     scripts.fireAreaTick(cur->def->id, scriptTicks, ain);
+                    for (size_t k = 0; k < npcs.size(); ++k) // Npc.hooks(id).onTick: the script that drives an NPC looks at it every tick
+                    {
+                        const gp::NpcActor &n = npcs[k];
+                        scripts.fireNpcTick(n.def->id, n.x(), n.y(), n.body.facing, n.walking(), n.scripted, scriptTicks);
+                    }
                 }
                 // scene.open(id) from a script: open it as soon as the world is free (not in a dialogue, a menu, a house room or a talk)
                 if (!sceneActive && !dialogue.open() && !im.open && !statsOpen && !room && !pendingScreen && !pendingExit && !enc && !showNpc && barBusy == 0)

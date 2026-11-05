@@ -19,7 +19,7 @@ struct Fake
     int x = 100, y = 200, lock = 0, shakes = 0, lastReact = -1, trips = 0;
     bool inRoom = false, busy = false;
     int w = 448, h = 288;
-    std::string lastObj, lastType;
+    std::string lastObj, lastType, npcCalls;
     std::string area = "base:area/0", tripArea;
     int tripX = 0, tripY = 0;
     void wire(gp::ScriptApi &a)
@@ -34,6 +34,13 @@ struct Fake
         a.cameraShake = [this] { ++shakes; };
         a.walkable = [this](int px, int py) { return !inRoom && px >= 32 && py >= 32 && px < w - 32 && py < h - 32; }; // a floor with a wall of one tile round it
         a.setObjectType = [this](const std::string &id, const std::string &type) { if (id != "m:obj/s1" || type.rfind("nope", 0) == 0) return false; lastObj = id; lastType = type; return true; };
+        auto here = [](const std::string &id) { return id == "m:npc/n"; };
+        a.npcWalkTo = [this, here](const std::string &id, int px, int py) { if (!here(id)) return false; npcCalls += "walk" + std::to_string(px) + "," + std::to_string(py) + ";"; return true; };
+        a.npcFace = [this, here](const std::string &id, int fc) { if (!here(id)) return false; npcCalls += "face" + std::to_string(fc) + ";"; return true; };
+        a.npcPlay = [this, here](const std::string &id, const std::string &an) { if (!here(id) || an == "nope:anim/x") return false; npcCalls += "play" + an + ";"; return true; };
+        a.npcStop = [this, here](const std::string &id) { if (!here(id)) return false; npcCalls += "stop;"; return true; };
+        a.npcRelease = [this, here](const std::string &id) { if (!here(id)) return false; npcCalls += "release;"; return true; };
+        a.npcInfo = [here](const std::string &id, int &px, int &py, int &fc, bool &walking, bool &scripted) { if (!here(id)) return false; px = 40; py = 50; fc = 1; walking = true; scripted = false; return true; };
         a.areaSize = [this](int &aw, int &ah) { if (inRoom) return false; aw = w; ah = h; return true; };
     }
 };
@@ -95,6 +102,28 @@ int main()
     CHECK(h.runString("m", "assert(area.walkable(100, 100) == false and area.size() == nil)"));
     f.inRoom = false;
     CHECK(h.runString("m", "assert(object.setType('m:obj/s1', 'm:objtype/hit') == true and object.setType('m:obj/zz', 'm:objtype/hit') == false and object.setType('m:obj/s1', 'nope:objtype/x') == false and object.setType('bad id,', 'm:objtype/hit') == false)") && f.lastObj == "m:obj/s1" && f.lastType == "m:objtype/hit");
+    { // npc.walkTo / face / play / stop / release / info, and Npc.hooks(id).onTick
+        f.npcCalls.clear();
+        CHECK(h.runString("m", R"(
+            assert(npc.walkTo('m:npc/n', 120, 80) == true and npc.walkTo('m:npc/zz', 1, 1) == false)
+            assert(npc.face('m:npc/n', 'up') == true and npc.face('m:npc/zz', 'up') == false)
+            assert(npc.play('m:npc/n', 'm:anim/dance') == true and npc.play('m:npc/n', nil) == true and npc.play('m:npc/n', 'nope:anim/x') == false)
+            assert(npc.stop('m:npc/n') == true and npc.release('m:npc/n') == true and npc.stop('m:npc/zz') == false and npc.release('bad id,') == false)
+            local i = npc.info('m:npc/n'); assert(i.x == 40 and i.y == 50 and i.facing == 'right' and i.walking == true and i.scripted == false)
+            assert(npc.info('m:npc/zz') == nil)
+        )"));
+        CHECK(f.npcCalls == "walk120,80;face2;playm:anim/dance;play;stop;release;");
+        CHECK(!h.runString("m", "npc.face('m:npc/n', 'sideways')")); // a facing that is not one
+        CHECK(!h.runString("m", "npc.walkTo('m:npc/n', 1.5, 2)"));
+        CHECK(h.runString("m", R"(
+            _G.npcSeen = {}
+            local N = Npc.hooks('m:npc/n')
+            function N:onTick(ctx) local n = ctx.npc; local i = npc.info('m:npc/n'); npcSeen = { n.id, n.x, n.y, n.facing, n.walking, n.scripted, ctx.tick, i and i.x } end
+        )"));
+        CHECK(h.fireNpcTick("m:npc/n", 33, 44, 2, true, false, 9));
+        CHECK(h.runString("m", "assert(npcSeen[1] == 'm:npc/n' and npcSeen[2] == 33 and npcSeen[3] == 44 and npcSeen[4] == 'up' and npcSeen[5] == true and npcSeen[6] == false and npcSeen[7] == 9 and npcSeen[8] == 40)")); // (npc.info inside a hook, which runs as a coroutine)
+        CHECK(!h.fireNpcTick("m:npc/other", 1, 2, 3, false, false, 1)); // no hook for that one
+    }
     { // the HUD: Game.hooks().onHud(g) and Area.hooks(id).onHud(g) draw over the world, the game's first; g.clear is for scenes only
         gp::ScriptHost hh;
         CHECK(hh.runString("m", R"(
@@ -120,7 +149,7 @@ int main()
         gp::ScriptHost h2;
         CHECK(h2.runString("m", "assert(player.pos() == nil and player.setPos(1, 2) == false and player.react('happy') == false and area.go('a:b', 1, 2) == false and area.current() == '')"));
         CHECK(h2.runString("m", "player.lock(); player.unlock(); camera.shake()"));
-        CHECK(h2.runString("m", "assert(area.walkable(1, 1) == false and area.size() == nil and object.setType('a', 'b') == false)"));
+        CHECK(h2.runString("m", "assert(area.walkable(1, 1) == false and area.size() == nil and object.setType('a', 'b') == false and npc.walkTo('a', 1, 2) == false and npc.info('a') == nil and npc.release('a') == false)"));
     }
     std::printf(fails ? "script_world_test: %d failure(s)\n" : "script_world_test: all passed\n", fails);
     return fails ? 1 : 0;
