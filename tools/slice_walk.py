@@ -188,7 +188,7 @@ def main():
     cache_file = 'build/slice_env_%s.json' % cls
     env = {}
     if os.path.exists(cache_file):
-        env = json.load(open(cache_file))
+        env = {k: v for k, v in json.load(open(cache_file)).items() if not v.startswith('?')}   # (a type the probe could not give is asked for again)
     env.update(env_types)
 
     def gen_header():
@@ -215,6 +215,9 @@ def main():
             elif t.startswith('?'):
                 raise SystemExit("type of %s is unknown (%s): put it in the spec env" % (n, t))
             else:
+                if '$' in t:                       # a declarator the spec spells out ('const int (&$)[3]')
+                    h.append('    %s;' % t.replace('$', n))
+                    continue
                 if not t.endswith('&') and not t.endswith('*'):
                     t += ' &'   # a variable of runWalk(): the Env refers to it
                 h.append('    %s%s;' % (t if t.endswith('&') or t.endswith('*') else t + ' ', n))
@@ -353,6 +356,28 @@ def probe(spec_path, names):
                 result[n] = '? ' + t
                 continue
             result[n] = 'fn:%s(%s)' % (mm.group(1).strip(), mm.group(3))
+    # forwarders of earlier slices are generic lambdas: take the parameters from the method they call, and ask the compiler what a call of the forwarder returns
+    unknown = [n for n, t in result.items() if t.startswith('?')]
+    sigs = {}
+    for n in unknown:
+        for f in os.listdir('src/game/walk'):
+            txt = read('src/game/walk/' + f)
+            m = re.search(r'\n    (?:auto|[\w:<>&\* ,]+?) %s(\(.*?\))\s*\n    \{' % re.escape(n), txt, re.S)
+            if m:
+                ps = split_params(m.group(1))
+                sigs[n] = [re.sub(r'\s*=.*$', '', t).strip() for t, nm in ps]
+                sigs[n] = [t[:len(t) - len(nm)].strip() if nm and t.endswith(nm) else t for t, nm in zip(sigs[n], [nm for _, nm in ps])]
+                break
+    if sigs:
+        lines = []
+        for n, types in sigs.items():
+            call = ', '.join('std::declval<%s>()' % t for t in types)
+            lines.append('        { slice_show<decltype(%s(%s))> probe_%s; }' % (n, call, n))
+        err = build(lines)
+        for n, types in sigs.items():
+            m = re.search(r"slice_show<(.*)> probe_%s" % re.escape(n), err)
+            if m:
+                result[n] = 'fn:%s(%s)' % (m.group(1).strip(), ', '.join(types))
     cache_file = 'build/slice_env_%s.json' % spec['class']
     env = json.load(open(cache_file)) if os.path.exists(cache_file) else {}
     env.update(result)
