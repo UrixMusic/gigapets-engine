@@ -6145,7 +6145,20 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     n.questSick = quests.q.def.typeMode == 2 && quests.q.phase != 0 && quests.q.def.receiver == n.def->index;
                     n.selected = &n == talkNpc;
                     n.petOnRight = n.x() <= pos.x;
-                    n.tick(npcRng);
+                    if (scripts.hasSystem("npc.tick")) // the engine system "npc.tick": wrap or replace the NPC's own brain (systems.hpp)
+                    {
+                        gp::SystemCtx nc;
+                        nc.set("id", n.def->id).set("x", n.x()).set("y", n.y()).set("activity", n.activity).set("stationary", n.def->stationary ? 1 : 0).set("scripted", n.scripted ? 1 : 0);
+                        scripts.system("npc.tick", nc, [&]
+                                       { n.tick(npcRng); });
+                        if (int(nc.num("x")) != n.x() || int(nc.num("y")) != n.y()) // a mod placed it
+                        {
+                            n.body.x = int(nc.num("x"));
+                            n.body.y = int(nc.num("y"));
+                        }
+                    }
+                    else
+                        n.tick(npcRng);
                     if (n.def->stationary && n.def->behaviorFlags != gp::kNoOverheadAnim) // TickAllPets: the overhead animation
                     {
                         if (n.overheadTick >= 0)

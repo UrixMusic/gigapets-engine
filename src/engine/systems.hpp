@@ -80,6 +80,8 @@ namespace gp
              "stat (\"hunger\" or \"tiredness\"), amount (how much it falls by, a positive number: change it, or set 0)"},
             {"pet.move", "the pet takes this tick's steps while a direction is held (not while it is locked, in a dialogue or in a house room)",
              "x, y (where it is: set them in replace to move it yourself), dx, dy (the way it goes: -1, 0 or 1; change them to reverse the controls, or set both 0 to hold it), steps (how many pixel steps this tick)"},
+            {"npc.tick", "an NPC's own brain takes one tick: it walks its path, or picks and runs an idle activity (the sequences of tricks and calls have their own code and still run)",
+             "id (the npc's id), x, y (set them in replace to move it yourself), activity (what it is doing: 0x17 = wandering), stationary, scripted (1 while a script drives it: npc.walkTo...)"},
         };
         return defs;
     }

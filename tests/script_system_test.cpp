@@ -107,6 +107,18 @@ int main()
         h.system("pet.move", c, [&] { c.set("x", 0).set("y", 0); });
         CHECK(c.num("x") == 7 && c.num("y") == 9);
     }
+    { // hasSystem, and an npc.tick that does not take the NPC over
+        gp::ScriptHost h;
+        CHECK(!h.hasSystem("npc.tick"));
+        CHECK(h.runString("a", "seen_ = {}; local S = System.hooks('npc.tick'); function S:before(ctx) seen_[#seen_ + 1] = ctx.id .. ':' .. ctx.x .. ',' .. ctx.y .. ':' .. ctx.stationary end"));
+        CHECK(h.hasSystem("npc.tick"));
+        gp::SystemCtx c;
+        c.set("id", "base:npc/3").set("x", 40).set("y", 60).set("activity", 23).set("stationary", 0).set("scripted", 0);
+        bool ran = false;
+        h.system("npc.tick", c, [&] { ran = true; });
+        CHECK(ran && c.str("id") == "base:npc/3" && c.num("x") == 40);
+        CHECK(h.runString("m", "assert(seen_[1] == 'base:npc/3:40,60:0', seen_[1])"));
+    }
     { // unknown system names are an error at registration; System.list shows the real ones
         gp::ScriptHost h;
         CHECK(!h.runString("a", "System.hooks('care.decya')"));

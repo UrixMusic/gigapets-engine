@@ -707,17 +707,22 @@ namespace gp
             runHook(gameHooks_, 'G', "", "onQuestFail", [&] { fillQuestCtx(q); }, nullptr);
         }
 
+        // Whether any mod hooks the system (a call site that is costly to describe can skip it when nobody does).
+        bool hasSystem(const std::string &name) const
+        {
+            if (!L_)
+                return false;
+            const std::string prefix = name + '\x1e';
+            const auto it = systemHooks_.lower_bound(prefix);
+            return systemHooks_.count(name) || (it != systemHooks_.end() && it->first.compare(0, prefix.size(), prefix) == 0);
+        }
+
         // Runs an engine system (see systems.hpp). `ctx` carries the values in and out; `defaultFn` is the engine's own version, called here when no mod replaces it. Returns
         // true if the default ran. With no mod hooking `name` it just runs the default.
         template <class Default>
         bool system(const std::string &name, SystemCtx &ctx, Default &&defaultFn)
         {
-            const bool hooked = L_ && [&]
-            {
-                const std::string prefix = name + '\x1e';
-                return systemHooks_.count(name) || systemHooks_.lower_bound(prefix) != systemHooks_.end() && systemHooks_.lower_bound(prefix)->first.compare(0, prefix.size(), prefix) == 0;
-            }();
-            if (!hooked)
+            if (!hasSystem(name))
             {
                 defaultFn();
                 return true;
