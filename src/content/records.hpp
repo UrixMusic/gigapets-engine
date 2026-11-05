@@ -54,6 +54,9 @@ namespace gp
     {
         Id id;
         std::vector<SpriteFrame> frames;
+        // A mod's animation drawn with a game palette (a pet's, usually): the pictures are in that palette's colours, and the game recolours them with the palette the
+        // pet wears (potions, washes, the colour machine). -1 = the pictures are used as they are.
+        int refPalette = -1;
     };
 
     struct TextDef

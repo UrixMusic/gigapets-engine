@@ -11,6 +11,7 @@
 #include "walk.cpp"
 #include "frontend_demo.cpp"
 #include "../mods/export_base.hpp"
+#include "../mods/export_frames.hpp"
 #include "../engine/instrument_export.hpp"
 #include "../engine/midi_export.hpp"
 #include "../engine/midi.hpp"
@@ -104,6 +105,31 @@ int main(int argc, char **argv)
                     return 1;
                 }
                 std::printf("exported the instruments and drums to %s (see instruments.txt)\n", argv[i + 1]);
+                return 0;
+            }
+            catch (const std::exception &e)
+            {
+                std::fprintf(stderr, "export failed: %s\n", e.what());
+                return 1;
+            }
+        }
+
+    // `--export-pet-frames <folder> [mod id]`: the pets' animation frames as PNGs plus matching anim records, to paint over and use in a mod; then quit
+    for (int i = 2; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--export-pet-frames"))
+        {
+            try
+            {
+                gp::Rom rom(romPath);
+                gp::ContentDB db;
+                gp::importRom(rom, db, 0);
+                const std::string modId = i + 2 < argc && argv[i + 2][0] != '-' ? argv[i + 2] : "mymod";
+                const std::string why = gp::exportPetFrames(rom, db, argv[i + 1], modId);
+                if (!why.empty())
+                {
+                    std::fprintf(stderr, "export failed: %s\n", why.c_str());
+                    return 1;
+                }
                 return 0;
             }
             catch (const std::exception &e)

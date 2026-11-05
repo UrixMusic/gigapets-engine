@@ -214,6 +214,21 @@ int main()
         CHECK(!r.ok() && mentions(r.errors, "duplicate"));
         CHECK(db.item("dup:item/a") && db.item("dup:item/a")->price == 1 && db.items().size() == 2);
     }
+    { // an anim drawn with a game palette (the pet takes its own colours instead): "palette" is a game palette number
+        TmpMods t("anim_palette");
+        t.mod("skin", R"([
+          {"type":"anim","mode":"add","id":"skin:anim/ok","palette":479,"frames":[{"png":"assets/dot.png"}]},
+          {"type":"anim","mode":"add","id":"skin:anim/plain","frames":[{"png":"assets/dot.png"}]},
+          {"type":"anim","mode":"add","id":"skin:anim/low","palette":5,"frames":[{"png":"assets/dot.png"}]},
+          {"type":"anim","mode":"add","id":"skin:anim/text","palette":"dog","frames":[{"png":"assets/dot.png"}]},
+          {"type":"anim","mode":"add","id":"skin:anim/big","palette":99999,"frames":[{"png":"assets/dot.png"}]}])");
+        writePng(t, "skin");
+        ContentDB db = itemDb();
+        ModReport r = importMods(db, t.root);
+        CHECK(db.anim("skin:anim/ok") && db.anim("skin:anim/ok")->refPalette == 479 && db.anim("skin:anim/plain")->refPalette == -1);
+        CHECK(!db.hasAnim("skin:anim/low") && !db.hasAnim("skin:anim/text") && !db.hasAnim("skin:anim/big"));
+        CHECK(mentions(r.errors, "game palette number"));
+    }
     { // every kind of mistake is a loud error and adds nothing
         TmpMods t("item_bad");
         t.mod("bad", R"([

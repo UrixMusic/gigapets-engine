@@ -192,6 +192,20 @@ namespace gp
     }
 
     constexpr int kModAnimBase = 0x30000;
+    // The roles of a pet species by the word scripts use ("sit", "eat", "dig"...): which animation field of its SpeciesArt each is. (player.play and --export-pet-frames.)
+    inline const std::vector<std::pair<const char *, int SpeciesArt::*>> &speciesRoles()
+    {
+        static const std::vector<std::pair<const char *, int SpeciesArt::*>> roles = {
+            {"walk_up", &SpeciesArt::walkUp}, {"walk_down", &SpeciesArt::walkDown}, {"walk_side", &SpeciesArt::walkSide}, {"sit", &SpeciesArt::sitDown},
+            {"sit_idle", &SpeciesArt::sitAlt}, {"eat", &SpeciesArt::eat}, {"bowl_bite", &SpeciesArt::bowlBite}, {"bed_in", &SpeciesArt::bedGetIn},
+            {"sleep", &SpeciesArt::sleepCycle}, {"bed_out", &SpeciesArt::bedGetOut}, {"idle", &SpeciesArt::idleBase}, {"idle_side", &SpeciesArt::idleSide},
+            {"turn_180", &SpeciesArt::turn180}, {"turn_90", &SpeciesArt::turn90}, {"settled", &SpeciesArt::settled}, {"call_front", &SpeciesArt::callFront},
+            {"call_side", &SpeciesArt::callSide}, {"happy_side", &SpeciesArt::posSide}, {"happy_down", &SpeciesArt::posDown}, {"excited_side", &SpeciesArt::emoSide},
+            {"excited_down", &SpeciesArt::emoDown}, {"shocked_side", &SpeciesArt::shkSide}, {"shocked_down", &SpeciesArt::shkDown}, {"no1", &SpeciesArt::neg1},
+            {"no2", &SpeciesArt::neg2}, {"sad", &SpeciesArt::sad}, {"bored", &SpeciesArt::bored}, {"dig", &SpeciesArt::dig}};
+        return roles;
+    }
+
     inline std::vector<std::string> &modAnimNames()
     {
         static std::vector<std::string> v;

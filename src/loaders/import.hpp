@@ -29,10 +29,140 @@ namespace gp
 
     // Decode an animation (anim table word 0x8ad1, 5 words/record) into coloured frames.
     // palOverride < 0 uses the animation's own default palette (record word 2).
+    // The colours a palette is drawn in when its pictures are exported for a mod and read back. They are the palette's own, except that an index with the same colour as an
+    // earlier one has its blue raised a step or two (one in 255, not to be seen), so every index has a colour of its own and a picture made from them says which index each
+    // pixel is (two palette entries that look alike in one colouring are often different in another: a potion's). `ok` is false for index 0 and transparent colours.
+    struct RefColor
+    {
+        bool ok = false;
+        uint8_t r = 0, g = 0, b = 0;
+    };
+    inline std::vector<RefColor> referenceColors(const Palette &p)
+    {
+        std::vector<RefColor> out(p.colors.size());
+        std::map<uint32_t, int> seen;
+        for (size_t k = 1; k < p.colors.size(); ++k)
+        {
+            const uint16_t w = p.colors[k];
+            if (w & 0x8000)
+                continue;
+            RefColor c;
+            c.ok = true;
+            c.r = uint8_t(((w >> 10) & 31) * 255 / 31);
+            c.g = uint8_t(((w >> 5) & 31) * 255 / 31);
+            c.b = uint8_t((w & 31) * 255 / 31);
+            const int n = seen[uint32_t(c.r) << 16 | uint32_t(c.g) << 8 | uint32_t(c.b)]++; // how many before it had this colour
+            c.b = uint8_t(c.b + n <= 255 ? c.b + n : c.b - n);
+            out[k] = c;
+        }
+        return out;
+    }
+
+    // A mod's animation drawn with the game palette `src.refPalette`, shown in palette `pal`: every pixel is matched to its colour in the palette it was drawn with
+    // (an exact colour, else the nearest one, so a soft brush or a scaled picture still works), that index is looked up in `pal`. Made once, under the id "<anim>@<pal>".
+    inline Id importRecoloredAnim(const Rom &rom, ContentDB &db, const Anim &src, int pal)
+    {
+        char suffix[16];
+        std::snprintf(suffix, sizeof suffix, "@%x", pal);
+        const Id key = src.id + suffix;
+        if (db.anim(key))
+            return key;
+        Palette from, to;
+        if (!readPalette(rom, src.refPalette, from) || !readPalette(rom, pal, to))
+            return src.id;
+        struct Entry
+        {
+            int idx, r, g, b;
+        };
+        std::vector<Entry> entries;
+        std::map<uint32_t, int> exact;
+        auto rgb = [](uint16_t w, int &r, int &g, int &b) { r = ((w >> 10) & 31) * 255 / 31; g = ((w >> 5) & 31) * 255 / 31; b = (w & 31) * 255 / 31; };
+        const std::vector<RefColor> ref = referenceColors(from);
+        for (size_t k = 1; k < ref.size(); ++k) // (index 0 is transparent, and so is a colour with bit 15)
+        {
+            if (!ref[k].ok)
+                continue;
+            Entry e{int(k), ref[k].r, ref[k].g, ref[k].b};
+            entries.push_back(e);
+            exact.emplace(uint32_t(e.r) << 16 | uint32_t(e.g) << 8 | uint32_t(e.b), e.idx);
+        }
+        Anim out;
+        out.id = key;
+        for (const SpriteFrame &f : src.frames)
+        {
+            SpriteFrame g = f;
+            g.rgba.assign(f.rgba.size(), 0);
+            for (size_t i = 0; i + 3 < f.rgba.size(); i += 4)
+            {
+                if (f.rgba[i + 3] < 128 || entries.empty())
+                    continue;
+                const int r = f.rgba[i], gg = f.rgba[i + 1], b = f.rgba[i + 2];
+                int idx = -1;
+                const auto ex = exact.find(uint32_t(r) << 16 | uint32_t(gg) << 8 | uint32_t(b));
+                if (ex != exact.end())
+                    idx = ex->second;
+                else
+                {
+                    long best = -1;
+                    for (const Entry &e : entries)
+                    {
+                        const long d = long(e.r - r) * (e.r - r) * 3 + long(e.g - gg) * (e.g - gg) * 4 + long(e.b - b) * (e.b - b) * 2;
+                        if (best < 0 || d < best)
+                        {
+                            best = d;
+                            idx = e.idx;
+                        }
+                    }
+                }
+                if (idx <= 0 || size_t(idx) >= to.colors.size() || (to.colors[size_t(idx)] & 0x8000))
+                    continue;
+                int cr, cg, cb;
+                rgb(to.colors[size_t(idx)], cr, cg, cb);
+                g.rgba[i] = uint8_t(cr);
+                g.rgba[i + 1] = uint8_t(cg);
+                g.rgba[i + 2] = uint8_t(cb);
+                g.rgba[i + 3] = 255;
+            }
+            out.frames.push_back(std::move(g));
+        }
+        db.put(std::move(out));
+        return key;
+    }
+
+    // The game's animation `animId` as it is stored: the sprites with their palette indices, and each frame's offset (dx, dy). False for an animation that is not there.
+    inline bool decodeAnimIndexed(const Rom &rom, int animId, std::vector<DecodedSprite> &sprites, std::vector<std::pair<int, int>> &offsets)
+    {
+        const uint32_t rec = kAnimTable + uint32_t(animId) * 5;
+        if (animId < 0 || rec + 5 > rom.sizeWords())
+            return false;
+        const int start = rom.u16(rec), end = rom.u16(rec + 1);
+        if (end <= start || end - start > 256)
+            return false;
+        const uint32_t tbl = rom.u16(rec + 4);
+        for (int sid = start; sid < end; ++sid)
+        {
+            DecodedSprite s;
+            if (!decodeSprite(rom, sid, s))
+                continue;
+            const int k = sid - start;
+            sprites.push_back(std::move(s));
+            offsets.push_back({int16_t(rom.u16(tbl + k * 4)), int16_t(rom.u16(tbl + k * 4 + 1))});
+        }
+        return !sprites.empty();
+    }
+
     inline Id importAnim(const Rom &rom, ContentDB &db, int animId, int palOverride = -1, int fallbackPal = -1)
     {
-        if (isModAnim(animId)) // a mod's own frames: coloured already, nothing to decode
-            return db.anim(modAnimName(animId)) ? Id(modAnimName(animId)) : Id();
+        if (isModAnim(animId)) // a mod's own frames: coloured already, or drawn with a game palette and recoloured with the one asked for
+        {
+            const Anim *src = db.anim(modAnimName(animId));
+            if (!src)
+                return {};
+            const int want = palOverride >= 0 ? palOverride : fallbackPal;
+            if (src->refPalette < 0 || want < 0 || want == src->refPalette)
+                return src->id;
+            return importRecoloredAnim(rom, db, *src, want);
+        }
         const Id id = animKey(animId, palOverride);
         if (db.anim(id))
             return id;

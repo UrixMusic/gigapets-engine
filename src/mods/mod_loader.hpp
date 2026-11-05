@@ -240,7 +240,7 @@ namespace gp
 
         inline void applyAnim(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
         {
-            static const std::set<std::string> allowed{"type", "mode", "id", "frames"};
+            static const std::set<std::string> allowed{"type", "mode", "id", "frames", "palette"};
             static const std::set<std::string> frameAllowed{"png", "anchorX", "anchorY", "dx", "dy"};
             for (auto it = rec.begin(); it != rec.end(); ++it)
                 if (!allowed.count(it.key()))
@@ -285,6 +285,12 @@ namespace gp
 
             Anim a;
             a.id = id;
+            if (rec.contains("palette")) // the game palette the pictures are drawn with: they take the pet's colours instead of staying as drawn
+            {
+                if (!rec["palette"].is_number_integer() || rec["palette"].get<int>() < 0x101 || rec["palette"].get<int>() > 0xfff)
+                    return err(rep, file, m.id, "'" + id + "': 'palette' must be a game palette number, like 479 (0x1df, the dog's colours)");
+                a.refPalette = rec["palette"].get<int>();
+            }
             for (const json &f : rec["frames"])
             {
                 if (!f.is_object())

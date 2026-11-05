@@ -886,8 +886,11 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
 
         auto petAnimId = [&](int n) -> gp::Id
         {
-            if (gp::isModAnim(n))
-                return gp::modAnimName(n);
+            if (gp::isModAnim(n)) // a mod's own frames; drawn with a game palette they are recoloured with the pet's
+            {
+                const gp::Id key = gp::importAnim(rom, db, n, petPal);
+                return key.empty() ? gp::modAnimName(n) : key;
+            }
             gp::Id withPal = gp::animKey(n, petPal);
             return db.anim(withPal) ? withPal : gp::Id("base:anim/" + std::to_string(n));
         };
@@ -5159,14 +5162,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                         return n;
                     return db.hasAnim(what) ? gp::modAnimNumber(what) : -1;
                 }
-                static const std::pair<const char *, int gp::SpeciesArt::*> roles[] = {
-                    {"walk_up", &gp::SpeciesArt::walkUp}, {"walk_down", &gp::SpeciesArt::walkDown}, {"walk_side", &gp::SpeciesArt::walkSide}, {"sit", &gp::SpeciesArt::sitDown},
-                    {"sit_idle", &gp::SpeciesArt::sitAlt}, {"eat", &gp::SpeciesArt::eat}, {"bowl_bite", &gp::SpeciesArt::bowlBite}, {"bed_in", &gp::SpeciesArt::bedGetIn},
-                    {"sleep", &gp::SpeciesArt::sleepCycle}, {"bed_out", &gp::SpeciesArt::bedGetOut}, {"idle", &gp::SpeciesArt::idleBase}, {"idle_side", &gp::SpeciesArt::idleSide},
-                    {"turn_180", &gp::SpeciesArt::turn180}, {"turn_90", &gp::SpeciesArt::turn90}, {"settled", &gp::SpeciesArt::settled}, {"call_front", &gp::SpeciesArt::callFront},
-                    {"call_side", &gp::SpeciesArt::callSide}, {"happy_side", &gp::SpeciesArt::posSide}, {"happy_down", &gp::SpeciesArt::posDown}, {"excited_side", &gp::SpeciesArt::emoSide},
-                    {"excited_down", &gp::SpeciesArt::emoDown}, {"shocked_side", &gp::SpeciesArt::shkSide}, {"shocked_down", &gp::SpeciesArt::shkDown}, {"no1", &gp::SpeciesArt::neg1},
-                    {"no2", &gp::SpeciesArt::neg2}, {"sad", &gp::SpeciesArt::sad}, {"bored", &gp::SpeciesArt::bored}, {"dig", &gp::SpeciesArt::dig}};
+                const auto &roles = gp::speciesRoles();
                 for (const auto &r : roles)
                     if (what == r.first)
                         return art.*(r.second);
