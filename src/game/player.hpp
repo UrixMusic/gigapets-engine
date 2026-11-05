@@ -58,7 +58,15 @@ namespace gp
     {
         std::array<int, kNumPersonality> personality{};
         std::array<int, kNumCare> care{};
-        int tricksKnown = 0; // g_tricksKnownCount
+        int tricksKnown = 0; // g_tricksKnownCount: how many tricks it knows (always the number of bits in trickMask; set both with setTrickMask)
+        int trickMask = 0;   // which tricks it knows: bit 0 = slot 1 (left) .. bit 2 (right). In the game they come in order (1, then 2, then 3); a mod may teach them in any order
+        bool knowsTrick(int slot) const { return slot >= 0 && slot < 31 && (trickMask >> slot & 1) != 0; }
+        void setTrickMask(int m)
+        {
+            trickMask = m < 0 ? 0 : m & 7;
+            tricksKnown = (trickMask & 1) + (trickMask >> 1 & 1) + (trickMask >> 2 & 1);
+        }
+        void setTricksInOrder(int n) { setTrickMask((1 << std::clamp(n, 0, 3)) - 1); } // the first n tricks
         // g_petTraits: the Trick Teacher's secret code, 5 values 0..3. Not rolled until the first lesson is offered.
         std::array<int, 5> trickCode{};
         bool trickCodeRolled = false;

@@ -2746,7 +2746,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             // the engine system "trick.perform": the player picked a slot on the tricks panel. `known` is 1 if the pet has learned it; the default is the trick (level slot + 1),
             // or the "?" bubble if it is not known. Change `known` (a mod may let it do the trick anyway), cancel for nothing, or replace and do it with player.play.
             gp::SystemCtx c;
-            c.set("slot", slot).set("level", slot + 1).set("known", player.tricksKnown > slot ? 1 : 0);
+            c.set("slot", slot).set("level", slot + 1).set("known", player.knowsTrick(slot) ? 1 : 0);
             scripts.system("trick.perform", c, [&]
                            {
                 if (c.num("known") == 0)
@@ -7127,7 +7127,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             if (barBusy == 4 && !panelClosing && !im.open && !statsOpen)
                 for (int slot = 0; slot < gp::kTrickSlots; ++slot)
                 {
-                    const gp::TrickIcon ic = gp::trickIcon(sp, slot, player.tricksKnown, trickLay);
+                    const gp::TrickIcon ic = gp::trickIcon(sp, slot, player.trickMask, trickLay);
                     barGfx.tile(ic.sprite, 0x28c, ic.x, ic.y);
                 }
             if (bar.isOpen() && barBusy == 2)

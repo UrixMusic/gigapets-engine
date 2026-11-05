@@ -32,6 +32,15 @@ static Run decay(gp::ScriptHost &h, double amount, std::string stat = "hunger")
 
 int main()
 {
+    { // player.tricks / setTricks: the mask of known tricks, in any order
+        gp::ScriptHost h;
+        int mask = 1;
+        h.api().getTricks = [&] { return mask; };
+        h.api().setTricks = [&](int m) { mask = m; };
+        CHECK(h.runString("a", "assert(player.tricks() == 1); player.setTricks(5); assert(player.tricks() == 5)"));
+        CHECK(mask == 5);
+        CHECK(!h.runString("b", "player.setTricks(9)")); // out of range is a script error
+    }
     { // the trick systems exist, and a mod can change what the engine reads back
         gp::ScriptHost h;
         CHECK(h.runString("a", "local P = System.hooks('trick.perform'); function P:before(ctx) if ctx.known == 0 then ctx.known = 1 end end; System.hooks('trick.teach'); System.hooks('trick.learn')"));

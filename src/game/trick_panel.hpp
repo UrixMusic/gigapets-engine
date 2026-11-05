@@ -66,10 +66,10 @@ namespace gp
     };
 
     // The tile drawn for slot 0..2 (left, top, right). `known` is the pet's tricksKnown.
-    inline TrickIcon trickIcon(int species, int slot, int known, const TrickLayout &L)
+    inline TrickIcon trickIcon(int species, int slot, int knownMask, const TrickLayout &L) // knownMask: Player::trickMask
     {
         const int i = slot < 0 ? 0 : slot > 2 ? 2 : slot;
-        const bool have = known > i;
+        const bool have = (knownMask >> i & 1) != 0;
         return {have ? artOf(species).trickIcons[i] : L.unknown[i], have ? L.knownX[i] : L.unknownX[i], have ? L.knownY[i] : L.unknownY[i]};
     }
     inline TrickIcon trickIcon(int species, int slot, int known)

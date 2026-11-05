@@ -65,6 +65,9 @@ namespace gp
         // Money (0..99999). adjustMoney returns the change actually made, like the stats.
         std::function<int()> getMoney;
         std::function<int(int delta)> adjustMoney;
+        // The tricks the pet knows, as a mask: bit 0 = trick 1 (left on the panel) .. bit 2 = trick 3 (right). setTricks changes it (any order).
+        std::function<int()> getTricks;
+        std::function<void(int mask)> setTricks;
         // The pet's illness as the ROM's illness number (the index into illnessNames()), -1 = healthy.
         std::function<int()> getIllness;
         std::function<void(int illness)> setIllness; // -1 = healthy
@@ -278,6 +281,8 @@ namespace gp
             bind("player", "adjustPersonality", l_pAdjustPersonality);
             bind("player", "money", l_pMoney);
             bind("player", "adjustMoney", l_pAdjustMoney);
+            bind("player", "tricks", l_pTricks);
+            bind("player", "setTricks", l_pSetTricks);
             bind("player", "illness", l_pIllness);
             bind("player", "setIllness", l_pSetIllness);
             bind("player", "cure", l_pCure);
@@ -3135,6 +3140,23 @@ namespace gp
             luaL_argcheck(L, n >= -99999 && n <= 99999, 1, "amount must be between -99999 and 99999");
             lua_pushinteger(L, h.api_.adjustMoney ? h.api_.adjustMoney(int(n)) : 0);
             return 1;
+        }
+        // player.tricks() -> the mask of tricks the pet knows (bit 0 = trick 1 .. bit 2 = trick 3)
+        static int l_pTricks(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            lua_pushinteger(L, h.api_.getTricks ? h.api_.getTricks() : 0);
+            return 1;
+        }
+        // player.setTricks(mask): which tricks the pet knows, in any order (0..7)
+        static int l_pSetTricks(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const lua_Integer m = luaL_checkinteger(L, 1);
+            luaL_argcheck(L, m >= 0 && m <= 7, 1, "mask must be 0..7 (bit 0 = trick 1, bit 1 = trick 2, bit 2 = trick 3)");
+            if (h.api_.setTricks)
+                h.api_.setTricks(int(m));
+            return 0;
         }
         // player.illness() -> the pet's illness id ("panda_pox", ...), or nil when healthy
         static int l_pIllness(lua_State *L)

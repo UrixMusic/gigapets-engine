@@ -2,6 +2,7 @@
 #include <cstdio>
 #include "../src/game/trick_panel.hpp"
 #include "../src/content/records.hpp"
+#include "../src/game/player.hpp"
 using namespace gp;
 
 int main()
@@ -29,6 +30,16 @@ int main()
         m.num = {{"knownXTop", 10}, {"unknownTop", 0x77}, {"questionWaitMs", 1000}, {"click", 5}};
         d = TrickLayout::from(m);
         check("a record moves the icon, swaps the placeholder, changes the wait and click", trickIcon(1, 1, 3, d).x == 10 && trickIcon(1, 1, 0, d).sprite == 0x77 && d.questionWait == 1.0 && d.click == 5);
+    }
+    { // which tricks the pet knows: a mask, in any order; the count follows
+        Player p;
+        p.setTricksInOrder(2);
+        check("two in order: tricks 1 and 2, count 2", p.trickMask == 3 && p.tricksKnown == 2 && p.knowsTrick(0) && p.knowsTrick(1) && !p.knowsTrick(2));
+        p.setTrickMask(4);
+        check("only trick 3: count 1, and the panel shows its icon and the others' placeholders", p.tricksKnown == 1 && !p.knowsTrick(0) && p.knowsTrick(2) &&
+                                                                                                         trickIcon(0, 2, p.trickMask, TrickLayout()).sprite == trickIcon(0, 2, 3).sprite && trickIcon(0, 0, p.trickMask, TrickLayout()).sprite == 0x5f);
+        p.setTrickMask(-5);
+        check("a bad mask is nothing", p.trickMask == 0 && p.tricksKnown == 0);
     }
     std::printf(fails ? "trick_panel_test: %d failure(s)\n" : "trick_panel_test: all passed\n", fails);
     return fails ? 1 : 0;

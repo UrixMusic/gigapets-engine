@@ -328,6 +328,10 @@ inline void bindScripts(WalkServices &svc)
     { return svc.player.money; };
     api.adjustMoney = [&svc](int delta)
     { return svc.player.adjustMoney(delta); };
+    api.getTricks = [&svc]
+    { return svc.player.trickMask; };
+    api.setTricks = [&svc](int mask)
+    { svc.player.setTrickMask(mask); };
     // Illness: the host's illnessNames() order is the ROM illness number 0..9, and Player::illnessId uses the same
     // numbers (kHealthy = 10 for none), so no name table is needed here. The pet's sick / medicine animations are not
     // started from here; they belong to the use / eat flows in walk.cpp.

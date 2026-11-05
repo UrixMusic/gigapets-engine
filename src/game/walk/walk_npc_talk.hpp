@@ -145,14 +145,14 @@ inline void finishTrickLesson(WalkServices &svc, const gp::NpcDef &d, int level,
     // the engine system "trick.learn": the lesson is over. `won` (1 / 0) is the result and `known` what the pet will know (the level on a win, unchanged on a loss): a mod may
     // change them (turn a loss into a win, teach a different count)
     gp::SystemCtx lc;
-    lc.set("npc", d.id).set("level", level).set("won", won ? 1 : 0).set("known", won ? level : player.tricksKnown);
+    lc.set("npc", d.id).set("level", level).set("won", won ? 1 : 0).set("mask", won ? (player.trickMask | 1 << (level - 1)) : player.trickMask);
     svc.scripts.system("trick.learn", lc, [] {});
     won = lc.num("won") != 0;
-    const int newKnown = int(lc.num("known"));
+    const int newMask = int(lc.num("mask"));
     const std::string n = std::to_string(level);
     gp::DialogueBox b = gp::messageBox(db.textOr(std::string("base:str/") + (won ? "trick_learned_" : "trick_failed_") + n, "?"));
     b.portrait = gp::uiSpriteId(d.portraitSprite, d.portraitPalette);
-    player.tricksKnown = std::max(0, newKnown);
+    player.setTrickMask(newMask);
     if (won)
     {
         player.rerollTrickCode([&](int lo, int hi)
@@ -183,9 +183,9 @@ inline bool tryTrickTeacher(WalkServices &svc, gp::NpcActor &n)
     double cooldownLeft = 0;
     if (player.lastEncounterTick != 0) // 0 = never; else elapsed gameTicks / 59.94 must pass the cooldown
         cooldownLeft = std::max(0.0, mg.get("cooldownSeconds", 600) - double(svc.S.world.gameTicks - player.lastEncounterTick) / 59.94);
-    const bool rulesAllow = player.tricksKnown == level - 1 && cooldownLeft <= 0.0;
+    const bool rulesAllow = player.tricksKnown == level - 1 && player.trickMask == (1 << (level - 1)) - 1 && cooldownLeft <= 0.0; // the tricks before this one, and no more
     gp::SystemCtx tc;
-    tc.set("npc", d.id).set("level", level).set("known", player.tricksKnown).set("cooldown", cooldownLeft).set("can", rulesAllow ? 1 : 0);
+    tc.set("npc", d.id).set("level", level).set("known", player.tricksKnown).set("mask", player.trickMask).set("cooldown", cooldownLeft).set("can", rulesAllow ? 1 : 0);
     bool taken = true;
     svc.scripts.system("trick.teach", tc, [&]
                        { taken = tc.num("can") != 0 && teachLesson(svc, n, d, level); });

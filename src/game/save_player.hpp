@@ -48,6 +48,7 @@ namespace gp
         s.setInt("appearance", p.appearance);
         s.setInt("illness", p.illnessId);
         s.setInt("tricksKnown", p.tricksKnown);
+        s.setInt("trickMask", p.trickMask);
         if (p.trickCodeRolled)
             s.setList("trickCode", std::vector<int>(p.trickCode.begin(), p.trickCode.end()));
         s.setList("personality", std::vector<int>(p.personality.begin(), p.personality.end()));
@@ -94,8 +95,10 @@ namespace gp
             p.money = std::clamp(s.getInt("money"), 0, tuning().maxMoney);
         if (s.has("illness"))
             p.illnessId = std::clamp(s.getInt("illness", kHealthy), 0, kHealthy);
-        if (s.has("tricksKnown"))
-            p.tricksKnown = std::max(0, s.getInt("tricksKnown"));
+        if (s.has("trickMask")) // (a save from before that has only the count: the first n tricks)
+            p.setTrickMask(s.getInt("trickMask"));
+        else if (s.has("tricksKnown"))
+            p.setTricksInOrder(std::max(0, s.getInt("tricksKnown")));
         const std::vector<int> code = s.getList("trickCode");
         if (code.size() == p.trickCode.size())
         {
