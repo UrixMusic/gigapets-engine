@@ -6191,17 +6191,33 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                     settleTicks = 0;
                     // speedMul is a setting a mod can change (engine.set "pet.speedMul"); the debug sprint multiplies it
                     const int steps = std::clamp(speedMul, 0, 256) * ((gp::debugMode() && (SDL_GetModState() & KMOD_SHIFT)) ? 4 : 1);
-                    for (int rep = 0; rep < steps; ++rep)
-                        pos = gp::stepPlayer(*world, pos, dirs).pos;
+                    // the engine system "pet.move" (systems.hpp): a mod can change which way and how far the pet steps, do the move itself (set ctx.x / ctx.y), or cancel it
+                    gp::SystemCtx mc;
+                    mc.set("x", pos.x).set("y", pos.y).set("steps", steps);
+                    mc.set("dx", (dirs & gp::DirRight ? 1 : 0) - (dirs & gp::DirLeft ? 1 : 0)).set("dy", (dirs & gp::DirDown ? 1 : 0) - (dirs & gp::DirUp ? 1 : 0));
+                    const auto dirsOf = [&]
+                    {
+                        const int dx = int(mc.num("dx")), dy = int(mc.num("dy"));
+                        return uint8_t((dx > 0 ? gp::DirRight : 0) | (dx < 0 ? gp::DirLeft : 0) | (dy > 0 ? gp::DirDown : 0) | (dy < 0 ? gp::DirUp : 0));
+                    };
+                    scripts.system("pet.move", mc, [&]
+                                   {
+                                       const uint8_t d = dirsOf();
+                                       gp::Point p{int(mc.num("x")), int(mc.num("y"))};
+                                       for (int rep = 0, n = std::clamp(int(mc.num("steps")), 0, 256); rep < n && d; ++rep)
+                                           p = gp::stepPlayer(*world, p, d).pos;
+                                       mc.set("x", p.x).set("y", p.y); });
+                    pos = {std::clamp(int(mc.num("x")), 0, std::max(0, cur->room.width - 1)), std::clamp(int(mc.num("y")), 0, std::max(0, cur->room.height - 1))};
+                    const uint8_t moved = dirsOf(); // the way it went, after the mods: the pet faces that way
                     const int oldFacing = facing;
                     const bool oldLeft = faceLeft;
-                    if (dirs & (gp::DirLeft | gp::DirRight))
+                    if (moved & (gp::DirLeft | gp::DirRight))
                     {
                         facing = 2;
-                        faceLeft = (dirs & gp::DirLeft) != 0;
+                        faceLeft = (moved & gp::DirLeft) != 0;
                     }
-                    else
-                        facing = (dirs & gp::DirUp) ? 0 : 1;
+                    else if (moved)
+                        facing = (moved & gp::DirUp) ? 0 : 1;
                     // The game only calls UpdateActorSpriteFrame (which restarts the walk loop via
                     // PlaySpriteAnimation) when walking starts or the direction changes, not every tick.
                     if (facing != oldFacing || faceLeft != oldLeft)

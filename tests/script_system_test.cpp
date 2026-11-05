@@ -3,6 +3,7 @@
 #include "../src/mods/script_host.hpp"
 #include "../src/mods/script_check.hpp"
 #include <cstdio>
+#include <tuple>
 
 static int fails = 0;
 #define CHECK(c)                                                       \
@@ -84,6 +85,27 @@ int main()
         CHECK(h.runString("a", "local S = System.hooks('care.decay'); function S:replace(ctx) player.adjustCare(ctx.stat, -1) end"));
         const Run r = decay(h, 9);
         CHECK(!r.defaulted && care == 49);
+    }
+    { // pet.move: reverse the controls, hold the pet, or move it your own way
+        gp::ScriptHost h;
+        CHECK(h.runString("a", "local S = System.hooks('pet.move'); function S:before(ctx) ctx.dx = -ctx.dx; if ctx.dy ~= 0 then return false end end"));
+        auto move = [&](int dx, int dy)
+        {
+            gp::SystemCtx c;
+            c.set("x", 100).set("y", 50).set("dx", dx).set("dy", dy).set("steps", 2);
+            int nx = -1, ny = -1;
+            const bool def = h.system("pet.move", c, [&] { nx = int(c.num("x") + c.num("dx") * c.num("steps")); ny = int(c.num("y")); });
+            return std::make_tuple(def, nx, int(c.num("dx")));
+        };
+        auto [d1, x1, dx1] = move(1, 0);
+        CHECK(d1 && x1 == 98 && dx1 == -1); // right became left
+        auto [d2, x2, dx2] = move(0, 1);
+        CHECK(!d2 && x2 == -1); // cancelled by a vertical move
+        CHECK(h.runString("b", "local S = System.hooks('pet.move'); function S:replace(ctx) ctx.x = 7; ctx.y = 9 end"));
+        gp::SystemCtx c;
+        c.set("x", 100).set("y", 50).set("dx", 1).set("dy", 0).set("steps", 2);
+        h.system("pet.move", c, [&] { c.set("x", 0).set("y", 0); });
+        CHECK(c.num("x") == 7 && c.num("y") == 9);
     }
     { // unknown system names are an error at registration; System.list shows the real ones
         gp::ScriptHost h;
