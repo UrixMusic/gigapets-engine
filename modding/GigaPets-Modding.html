@@ -415,6 +415,14 @@ extern "C" __declspec(dllexport) void gp_mod_init(const GpNativeApi *api)
     api-&gt;detour("_ZN2gp14sickBubbleStepERNS_12ThoughtTimerEbbb", (void *)mySick, (void **)&amp;origSick);
 }</code></pre>
 <p><code>native/build.bat</code> builds it with g++ against the game's <code>src</code> folder.</p>
+<h3 id="g-native-mods-c-a-second-example-the-mouse">A second example: the mouse</h3>
+<p><code>modding/examples/native_mouse/</code> adds mouse control to a game that only reads the keyboard, with one replaced function. The game reads held keys through <code>gp::KeyBinds::held(state, action)</code>; the mod answers "yes" when the keyboard says so <strong>or</strong> the mouse asks for that action: left button = Z, middle button = X, and holding the right button walks toward the cursor.</p>
+<pre class="code"><code>static bool (*origHeld)(const gp::KeyBinds *, const Uint8 *, gp::Action);
+static bool myHeld(const gp::KeyBinds *self, const Uint8 *state, gp::Action a)
+{ return origHeld(self, state, a) || mouseWants(a); }      // a member function takes the object as its first argument
+...
+api-&gt;detour("_ZNK2gp8KeyBinds4heldEPKhNS_6ActionE", (void *)myHeld, (void **)&amp;origHeld);</code></pre>
+<p>Tested by holding the right button toward a door: the pet walked out of its home. A controller works the same way (<code>SDL_GameController</code> in place of <code>SDL_GetMouseState</code>).</p>
 <h3 id="g-native-mods-c-the-api-gpnativeapi">The API (<code>GpNativeApi</code>)</h3>
 <table><thead><tr><th>Call</th><th>What it does</th></tr></thead><tbody><tr><td><code>detour(symbol, replacement, &amp;original)</code></td><td>Replace the function with this <strong>mangled name</strong>. <code>original</code> becomes a pointer to the game's own version, so your function can call it, change its arguments, or ignore it. Returns false (and logs) if there is no such function.</td></tr><tr><td><code>symbol(name)</code></td><td>The address of any function or variable the game exports, or null.</td></tr><tr><td><code>log(text)</code></td><td>Writes to the game's log, tagged with the mod.</td></tr></tbody></table>
 <p>Find a function's mangled name with <code>nm build/gigapets-native.exe | grep sickBubbleStep</code> (or <code>nm -C</code> to read them back). Two mods that replace the same function chain: the second one's <code>original</code> leads to the first one's replacement.</p>
