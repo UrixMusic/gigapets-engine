@@ -13,6 +13,7 @@
 #include <SDL2/SDL.h>
 #include <deque>
 #include "keybinds.hpp"
+#include "mouse_state.hpp"
 
 namespace gp
 {
@@ -41,6 +42,7 @@ namespace gp
         // rewritten) is for the game. The releases of taps wait in takePending().
         bool translate(SDL_Event &e)
         {
+            trackMouse(e); // for scripts (input.mouse()): the mouse as it is, whether or not it plays the game
             switch (e.type)
             {
             case SDL_CONTROLLERDEVICEADDED:
@@ -178,6 +180,40 @@ namespace gp
             }
         }
 
+        // ---- the mouse for scripts ----
+        SDL_Renderer *renderer = nullptr; // the game's, to turn a window position into the picture's
+        // A position in the window (pixels) as a position in the game picture (320 x 240), however the window is scaled and bordered.
+        static void pictureFromWindow(SDL_Renderer *ren, int wx, int wy, float &x, float &y)
+        {
+            int lw = 0, lh = 0;
+            SDL_RenderGetLogicalSize(ren, &lw, &lh);
+            SDL_RenderSetLogicalSize(ren, 320, 240); // the game picture, whatever the 16:9 mode has set for the border
+            SDL_RenderWindowToLogical(ren, wx, wy, &x, &y);
+            SDL_RenderSetLogicalSize(ren, lw, lh);
+        }
+        // The mouse now, in the picture's pixels (320 x 240), and what happened since the last call (a press, the wheel); the "since" part starts over.
+        MouseState takeMouse()
+        {
+            MouseState m;
+            m.left = rawDown_[0];
+            m.middle = rawDown_[1];
+            m.right = rawDown_[2];
+            m.pressedLeft = rawPressed_[0];
+            m.pressedMiddle = rawPressed_[1];
+            m.pressedRight = rawPressed_[2];
+            m.wheel = rawWheel_;
+            rawPressed_[0] = rawPressed_[1] = rawPressed_[2] = false;
+            rawWheel_ = 0;
+            SDL_Window *w = SDL_GetMouseFocus();
+            if (!w || !renderer)
+                return m;
+            int wx = 0, wy = 0;
+            SDL_GetMouseState(&wx, &wy);
+            pictureFromWindow(renderer, wx, wy, m.x, m.y);
+            m.inside = m.x >= 0 && m.x < 320 && m.y >= 0 && m.y < 240;
+            return m;
+        }
+
         // ---- controllers ----
         void openPad(int index)
         {
@@ -205,6 +241,8 @@ namespace gp
 
     private:
         bool pad_[kActionCount]{}, mouse_[kActionCount]{}, stick_[kActionCount]{}, dpad_[kActionCount]{};
+        bool rawDown_[3]{}, rawPressed_[3]{}; // left, middle, right
+        int rawWheel_ = 0;
         bool rightDown_ = false;
         Uint32 rightSince_ = 0;
         std::deque<SDL_Event> pending_;
@@ -222,6 +260,20 @@ namespace gp
             SDL_GetMouseState(&mx, &my);
             SDL_GetWindowSize(w, &ww, &wh);
             return walkWants(a, mx, my, ww, wh);
+        }
+        void trackMouse(const SDL_Event &e)
+        {
+            if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP)
+            {
+                const int i = e.button.button == SDL_BUTTON_LEFT ? 0 : e.button.button == SDL_BUTTON_MIDDLE ? 1 : e.button.button == SDL_BUTTON_RIGHT ? 2 : -1;
+                if (i < 0)
+                    return;
+                rawDown_[i] = e.type == SDL_MOUSEBUTTONDOWN;
+                if (rawDown_[i])
+                    rawPressed_[i] = true;
+            }
+            else if (e.type == SDL_MOUSEWHEEL)
+                rawWheel_ += e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -e.wheel.y : e.wheel.y;
         }
         // The key event of an action: the key the player has bound to it
         static void makeKey(SDL_Event &e, Action a, bool down)

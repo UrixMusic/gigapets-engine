@@ -213,6 +213,7 @@ int main(int argc, char **argv)
             gp::inputBridge().controllerOn = s.controller; // (input_bridge.hpp)
             gp::inputBridge().mouseOn = s.mouse;
             gp::inputBridge().openAll();
+            gp::inputBridge().renderer = host.ctx.ren; // (for the mouse position scripts read)
             gp::audio().setRom(*host.ctx.rom);
             gp::audio().setVolume(s.volume);
             gp::audio().setMusicVolume(s.musicVolume);

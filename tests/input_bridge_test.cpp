@@ -156,6 +156,76 @@ int main()
     CHECK(!InputBridge::walkWants(Action::Left, 320, 290, 640, 480) && !InputBridge::walkWants(Action::Up, 320, 290, 640, 480)); // on the pet: none
     CHECK(!InputBridge::walkWants(Action::Select, 600, 290, 640, 480));
 
+    // the mouse for scripts: held buttons, a press and the wheel since the last look, whether or not the mouse plays the game
+    {
+        InputBridge s;
+        s.mouseOn = false; // (off: it does not play, but scripts still see it)
+        SDL_Event d = mouse(SDL_MOUSEBUTTONDOWN, SDL_BUTTON_LEFT);
+        CHECK(!s.translate(d));
+        d = mouse(SDL_MOUSEBUTTONDOWN, SDL_BUTTON_RIGHT);
+        s.translate(d);
+        SDL_Event w;
+        SDL_zero(w);
+        w.type = SDL_MOUSEWHEEL;
+        w.wheel.y = 2;
+        s.translate(w);
+        w.wheel.y = -1;
+        s.translate(w);
+        MouseState m = s.takeMouse();
+        CHECK(m.left && m.right && !m.middle && m.pressedLeft && m.pressedRight && !m.pressedMiddle && m.wheel == 1);
+        CHECK(!m.inside); // (no window or renderer here)
+        d = mouse(SDL_MOUSEBUTTONUP, SDL_BUTTON_LEFT);
+        s.translate(d);
+        m = s.takeMouse();
+        CHECK(!m.left && m.right && !m.pressedLeft && !m.pressedRight && m.wheel == 0); // still held, but no longer new
+    }
+
+    // window position -> picture position (a window of the dummy video driver with a software renderer stands in for the real one)
+    SDL_setenv("SDL_VIDEODRIVER", "dummy", 1);
+    if (SDL_Init(SDL_INIT_VIDEO) == 0)
+    {
+        auto near = [](float a, float b) { return a > b - 0.6f && a < b + 0.6f; };
+        SDL_Window *w1 = SDL_CreateWindow("t", 0, 0, 640, 480, 0);
+        SDL_Renderer *r1 = w1 ? SDL_CreateRenderer(w1, -1, SDL_RENDERER_SOFTWARE) : nullptr;
+        if (r1)
+            SDL_RenderSetLogicalSize(r1, 320, 240);
+        CHECK(r1 != nullptr);
+        if (r1)
+        {
+            float x = 0, y = 0;
+            InputBridge::pictureFromWindow(r1, 320, 240, x, y);
+            CHECK(near(x, 160) && near(y, 120));
+            InputBridge::pictureFromWindow(r1, 0, 0, x, y);
+            CHECK(near(x, 0) && near(y, 0));
+            InputBridge::pictureFromWindow(r1, 639, 479, x, y);
+            CHECK(near(x, 320) && near(y, 240));
+            SDL_DestroyRenderer(r1);
+        }
+        if (w1)
+            SDL_DestroyWindow(w1);
+        SDL_Window *w2 = SDL_CreateWindow("t", 0, 0, 852, 480, 0); // 16:9: bars either side of the picture
+        SDL_Renderer *r2 = w2 ? SDL_CreateRenderer(w2, -1, SDL_RENDERER_SOFTWARE) : nullptr;
+        CHECK(r2 != nullptr);
+        if (r2)
+        {
+            SDL_RenderSetLogicalSize(r2, 427, 240); // what the wide mode leaves set
+            float x = 0, y = 0;
+            InputBridge::pictureFromWindow(r2, 426, 240, x, y);
+            CHECK(near(x, 160) && near(y, 120));
+            InputBridge::pictureFromWindow(r2, 106 + 640 / 2, 120, x, y); // in the middle of the picture, a quarter of the way down
+            CHECK(near(x, 160) && near(y, 60));
+            InputBridge::pictureFromWindow(r2, 0, 240, x, y); // over the left bar: left of the picture
+            CHECK(x < 0);
+            int lw = 0, lh = 0;
+            SDL_RenderGetLogicalSize(r2, &lw, &lh);
+            CHECK(lw == 427 && lh == 240); // the border setting is put back
+            SDL_DestroyRenderer(r2);
+        }
+        if (w2)
+            SDL_DestroyWindow(w2);
+        SDL_Quit();
+    }
+
     // other events pass through untouched
     e = SDL_Event{};
     e.type = SDL_KEYDOWN;

@@ -23,6 +23,7 @@ extern "C"
 #include <string>
 #include <vector>
 #include "../engine/audio_registry.hpp" // a mod's sound and music ids
+#include "../engine/mouse_state.hpp"    // input.mouse() / ctx.mouse
 #include "../engine/registry.hpp"
 #include "../engine/systems.hpp" // the engine's named systems a mod can wrap or replace
 
@@ -298,6 +299,7 @@ namespace gp
             bind("world", "drop", l_drop);
             bind("options", "add", l_optionsAdd);
             bind("world", "shade", l_worldShade);
+            bind("input", "mouse", l_inputMouse);
             bind("rand", "int", l_randInt);
             bind("rand", "pick", l_randPick);
             bind("player", "give", l_pGive);
@@ -393,6 +395,8 @@ namespace gp
 
         // The engine values scripts can reach through engine.get / engine.set / engine.list. The registry must outlive the host's use.
         void setRegistry(EngineRegistry *r) { registry_ = r; }
+        // The game calls this once a step with what the mouse is doing (input.mouse(), and ctx.mouse of the tick hooks).
+        void setMouse(const MouseState &m) { mouse_ = m; }
 
         // What a mod keeps in the save (save.get / save.set). The game hands over the loaded slot's key/values (keys starting with
         // "mod.") when it starts, fires fireGameSave, then writes modSaveKv() into the slot.
@@ -985,6 +989,8 @@ namespace gp
                                              lua_setfield(L_, -2, k);
                                          }
                                          lua_setfield(L_, -2, "held");
+                                         pushMouseTable(L_);
+                                         lua_setfield(L_, -2, "mouse");
                                          lua_pushinteger(L_, sceneTicks_);
                                          lua_setfield(L_, -2, "tick");
                                          lua_pushnumber(L_, 1.0 / 30.0);
@@ -1264,6 +1270,45 @@ namespace gp
                 lua_setfield(L_, -2, k);
             }
             lua_setfield(L_, -2, "held");
+            pushMouseTable(L_);
+            lua_setfield(L_, -2, "mouse");
+        }
+        MouseState mouse_;
+        // the table input.mouse() returns and the tick hooks get as ctx.mouse
+        void pushMouseTable(lua_State *L) const
+        {
+            lua_newtable(L);
+            lua_pushboolean(L, mouse_.inside);
+            lua_setfield(L, -2, "inside");
+            lua_pushnumber(L, mouse_.x);
+            lua_setfield(L, -2, "x");
+            lua_pushnumber(L, mouse_.y);
+            lua_setfield(L, -2, "y");
+            lua_pushboolean(L, mouse_.left);
+            lua_setfield(L, -2, "left");
+            lua_pushboolean(L, mouse_.right);
+            lua_setfield(L, -2, "right");
+            lua_pushboolean(L, mouse_.middle);
+            lua_setfield(L, -2, "middle");
+            lua_newtable(L);
+            lua_pushboolean(L, mouse_.pressedLeft);
+            lua_setfield(L, -2, "left");
+            lua_pushboolean(L, mouse_.pressedRight);
+            lua_setfield(L, -2, "right");
+            lua_pushboolean(L, mouse_.pressedMiddle);
+            lua_setfield(L, -2, "middle");
+            lua_setfield(L, -2, "pressed");
+            lua_pushinteger(L, mouse_.wheel);
+            lua_setfield(L, -2, "wheel");
+        }
+        // input.mouse() -> { x, y, inside, left, right, middle, pressed = { left, right, middle }, wheel }: the mouse as of the latest step. x and y are in the picture's pixels (0..320
+        // across, 0..240 down); inside says the cursor is over the picture (outside it, x and y go past those ends). left / right / middle are true while the button is held; pressed.*
+        // is true in the one step the button went down; wheel is the notches since the last step (up is positive). It works whatever the Mouse option says: that option is
+        // only whether the mouse also plays the game (walks the pet, picks menu entries).
+        static int l_inputMouse(lua_State *L)
+        {
+            self(L).pushMouseTable(L);
+            return 1;
         }
 
         // Fires Item.hooks(itemId).onItemUse: the player chose "use" on the item in the menu, before the game's own

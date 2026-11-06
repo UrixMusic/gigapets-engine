@@ -328,6 +328,7 @@ public:
         prevMenu = menuDown;
         prevX = xDown;
         prevZ = zDown;
+        scripts.setMouse(gp::inputBridge().takeMouse()); // input.mouse() and ctx.mouse for this step
         lastKeys = gp::SceneInput(); // what a game-wide tick hook sees as the keys
         lastKeys.z = zPressed;
         lastKeys.x = xPressed;

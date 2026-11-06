@@ -112,6 +112,7 @@ public:
         if (hitch)
             --fadeSkip;
         const int gt = hitch ? 0 : std::min(ticks, 3); // ticks for fades and the menu slide
+        feScripts.setMouse(gp::inputBridge().takeMouse()); // input.mouse() and ctx.mouse
         for (int ti = 0; ti < std::min(ticks, 4); ++ti) // the scripts' ticks (30 a second)
         {
             const auto keysOf = [&]
