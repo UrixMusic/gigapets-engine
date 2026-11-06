@@ -206,17 +206,22 @@ int main()
             float mx = -1, my = -1;
             bool onThing = false;
             int clicks = 0;
+            int curX = 320, curY = 240; // where the (pretend) cursor is, in window pixels
+            p.cursor = [&](int *x, int *y) { *x = curX; *y = curY; };
             p.onMove = [&](float x, float y) { mx = x; my = y; };
             p.onClick = [&](float, float) { ++clicks; return onThing; };
             SDL_Event m;
             SDL_zero(m);
             m.type = SDL_MOUSEMOTION;
-            m.motion.x = 320;
-            m.motion.y = 240;
+            m.motion.x = 160; // what the renderer would have put in the event: logical coordinates, which are not used
+            m.motion.y = 120;
             CHECK(p.translate(m) && near(mx, 160) && near(my, 120));
+            curX = 640;
+            curY = 480;
+            CHECK(p.translate(m) && near(mx, 320) && near(my, 240)); // it follows the cursor, not the event
             SDL_Event d = mouse(SDL_MOUSEBUTTONDOWN, SDL_BUTTON_LEFT);
-            d.button.x = 10;
-            d.button.y = 10;
+            curX = 10;
+            curY = 10;
             CHECK(!p.translate(d) && clicks == 1 && !p.held(Action::Select)); // on nothing: no Select
             d = mouse(SDL_MOUSEBUTTONUP, SDL_BUTTON_LEFT);
             CHECK(!p.translate(d) && !p.takePending(d)); // and no release for it either

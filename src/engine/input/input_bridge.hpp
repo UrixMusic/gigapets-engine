@@ -164,7 +164,7 @@ namespace gp
                 if (down && r == MouseRole::Select && pointingOn && onClick && renderer)
                 {
                     float px = 0, py = 0;
-                    pictureFromWindow(renderer, e.button.x, e.button.y, px, py);
+                    cursorPicture(px, py); // (not the event's own x, y: the renderer has already turned those into its logical coordinates)
                     if (!onClick(px, py))
                     {
                         swallowed_[b] = true;
@@ -191,7 +191,7 @@ namespace gp
                 if (mouseOn && pointingOn && onMove && renderer)
                 {
                     float px = 0, py = 0;
-                    pictureFromWindow(renderer, e.motion.x, e.motion.y, px, py);
+                    cursorPicture(px, py);
                     onMove(px, py);
                 }
                 return true;
@@ -284,6 +284,17 @@ namespace gp
 
         // ---- the mouse for scripts ----
         SDL_Renderer *renderer = nullptr; // the game's, to turn a window position into the picture's
+        // Where the cursor is, in window pixels (SDL_GetMouseState); a test sets this to put it somewhere
+        std::function<void(int *, int *)> cursor;
+        void cursorPicture(float &x, float &y) const
+        {
+            int wx = 0, wy = 0;
+            if (cursor)
+                cursor(&wx, &wy);
+            else
+                SDL_GetMouseState(&wx, &wy);
+            pictureFromWindow(renderer, wx, wy, x, y);
+        }
         // A position in the window (pixels) as a position in the game picture (320 x 240), however the window is scaled and bordered.
         static void pictureFromWindow(SDL_Renderer *ren, int wx, int wy, float &x, float &y)
         {
@@ -309,9 +320,7 @@ namespace gp
             SDL_Window *w = SDL_GetMouseFocus();
             if (!w || !renderer)
                 return m;
-            int wx = 0, wy = 0;
-            SDL_GetMouseState(&wx, &wy);
-            pictureFromWindow(renderer, wx, wy, m.x, m.y);
+            cursorPicture(m.x, m.y);
             m.inside = m.x >= 0 && m.x < 320 && m.y >= 0 && m.y < 240;
             return m;
         }
