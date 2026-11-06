@@ -238,6 +238,10 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
         {{-1, -1, -1}, 0x1e, "opt_live"},
         {{-1, -1, -1}, 0x1e, "opt_controller"},
         {{-1, -1, -1}, 0x1e, "opt_mouse"},
+        {{-1, -1, -1}, 0x1e, "opt_mouse_left"},
+        {{-1, -1, -1}, 0x1e, "opt_mouse_right"},
+        {{-1, -1, -1}, 0x1e, "opt_mouse_middle"},
+        {{-1, -1, -1}, 0x1e, "opt_mouse_wheel"},
         {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, // the key rows: named below
         {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""},
         {{0x9d7, 0x9dd, 0x9ed}, 0x82, nullptr},
@@ -324,6 +328,18 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
             break;
         case gp::kOptMouse:
             value(i, y, gp::fe::feText(o.mouse ? "on" : "off"), true);
+            break;
+        case gp::kOptMouseLeft:
+        case gp::kOptMouseRight:
+        case gp::kOptMouseMiddle:
+        {
+            static const char *const roleNames[] = {"role_none", "role_select", "role_cancel", "role_menu", "role_walk", "role_cancel_walk"};
+            const int v = r == gp::kOptMouseLeft ? o.mouseLeft : r == gp::kOptMouseRight ? o.mouseRight : o.mouseMiddle;
+            value(i, y, gp::fe::feText(roleNames[std::clamp(v, 0, 5)]), true);
+            break;
+        }
+        case gp::kOptMouseWheel:
+            value(i, y, gp::fe::feText(o.mouseWheel ? "on" : "off"), true);
             break;
         case gp::kOptWindowMode:
             value(i, y, kWindowNames[std::clamp(o.windowMode, 0, gp::kWindowModeCount - 1)], true);

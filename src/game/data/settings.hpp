@@ -36,6 +36,9 @@ namespace gp
         bool retroAudio = false;   // the sounds without blending between samples, like the sound chip (rom_audio.hpp)
         bool liveMusic = true;     // Music Playback: Live (songs made of notes are played as they go) or Baked (rendered first); audio.hpp setLive
         bool controller = true;    // a game controller plays the game (engine/input_bridge.hpp)
+        // what each mouse button does while the mouse plays (MouseRole in engine/input/input_bridge.hpp: 0 nothing, 1 Select, 2 Cancel, 3 Menu, 4 Walk, 5 Cancel / Walk)
+        int mouseLeft = 1, mouseMiddle = 3, mouseRight = 5;
+        bool mouseWheel = true;    // the wheel is Up / Down in menus
         bool mouse = false;        // the mouse plays the game: left button Select, middle Menu, right tap Cancel, right hold walks toward the cursor, wheel Up / Down
         std::array<int, 7> keys{}; // the SDL scancodes of Up, Down, Left, Right, Select, Cancel and Menu; 0 = the default key
     };
@@ -97,6 +100,14 @@ namespace gp
             s.controller = d.getInt("controller") != 0;
         if (d.has("mouse"))
             s.mouse = d.getInt("mouse") != 0;
+        if (d.has("mouseLeft"))
+            s.mouseLeft = std::clamp(d.getInt("mouseLeft", 1), 0, 5);
+        if (d.has("mouseMiddle"))
+            s.mouseMiddle = std::clamp(d.getInt("mouseMiddle", 3), 0, 5);
+        if (d.has("mouseRight"))
+            s.mouseRight = std::clamp(d.getInt("mouseRight", 5), 0, 5);
+        if (d.has("mouseWheel"))
+            s.mouseWheel = d.getInt("mouseWheel") != 0;
         if (d.has("windowMode"))
             s.windowMode = std::clamp(d.getInt("windowMode", 0), 0, kWindowModeCount - 1);
         static const char *const kKeyNames[7] = {"key_up", "key_down", "key_left", "key_right", "key_select", "key_cancel", "key_menu"};
@@ -122,6 +133,10 @@ namespace gp
         d.setInt("liveMusic", s.liveMusic ? 1 : 0);
         d.setInt("controller", s.controller ? 1 : 0);
         d.setInt("mouse", s.mouse ? 1 : 0);
+        d.setInt("mouseLeft", s.mouseLeft);
+        d.setInt("mouseMiddle", s.mouseMiddle);
+        d.setInt("mouseRight", s.mouseRight);
+        d.setInt("mouseWheel", s.mouseWheel ? 1 : 0);
         static const char *const kKeyNames[7] = {"key_up", "key_down", "key_left", "key_right", "key_select", "key_cancel", "key_menu"};
         for (int a = 0; a < 7; ++a)
             d.setInt(kKeyNames[a], s.keys[size_t(a)]);
@@ -130,11 +145,12 @@ namespace gp
 
     // ---- the options screen's rules ----
     // The list: music volume, sound effects volume, master volume, tutorials, interpolation, scale, scale mode, window mode,
-    // aspect ratio, retro audio, music playback, controller, mouse, the seven key bindings, Done. Only kOptVisible rows fit under the logo; the list scrolls to keep the selected row in view.
+    // aspect ratio, retro audio, music playback, controller, mouse, the three mouse buttons and the wheel, the seven key bindings, Done. Only kOptVisible rows fit under the logo; the list scrolls to keep the selected row in view.
     constexpr int kOptMusic = 0, kOptSfx = 1, kOptVolume = 2, kOptTutorials = 3, kOptInterpolate = 4, kOptScale = 5, kOptScaleMode = 6,
-                  kOptWindowMode = 7, kOptAspect = 8, kOptRetro = 9, kOptLive = 10, kOptController = 11, kOptMouse = 12, kOptKeyFirst = 13, kOptKeyLast = 19, kOptDone = 20, kOptRows = 21;
+                  kOptWindowMode = 7, kOptAspect = 8, kOptRetro = 9, kOptLive = 10, kOptController = 11, kOptMouse = 12, kOptMouseLeft = 13, kOptMouseRight = 14, kOptMouseMiddle = 15, kOptMouseWheel = 16,
+                  kOptKeyFirst = 17, kOptKeyLast = 23, kOptDone = 24, kOptRows = 25;
     // One more row after Done, only with debug mode on (game/debug_mode.hpp): the ROM's test mode (game/test_mode.hpp).
-    constexpr int kOptTestMode = 21, kOptRowsDebug = 22;
+    constexpr int kOptTestMode = 25, kOptRowsDebug = 26;
     constexpr int kOptVisible = 5;
     // Rows a mod added (options.add) sit between the last key row and Done, so Done and the debug row move down by their number `n`.
     constexpr int optDone(int n) { return kOptDone + n; }
@@ -147,8 +163,8 @@ namespace gp
     constexpr bool isKeyRow(int row) { return row >= kOptKeyFirst && row <= kOptKeyLast; }
     constexpr int keyRowAction(int row) { return row - kOptKeyFirst; }
     constexpr bool isSliderRow(int row) { return row == kOptMusic || row == kOptVolume || row == kOptSfx; }
-    constexpr bool isToggleRow(int row) { return row == kOptTutorials || row == kOptInterpolate || row == kOptScaleMode || row == kOptRetro || row == kOptLive || row == kOptController || row == kOptMouse; }
-    constexpr bool isChoiceRow(int row) { return row == kOptScale || row == kOptWindowMode || row == kOptAspect; }
+    constexpr bool isToggleRow(int row) { return row == kOptTutorials || row == kOptInterpolate || row == kOptScaleMode || row == kOptRetro || row == kOptLive || row == kOptController || row == kOptMouse || row == kOptMouseWheel; }
+    constexpr bool isChoiceRow(int row) { return row == kOptScale || row == kOptWindowMode || row == kOptAspect || (row >= kOptMouseLeft && row <= kOptMouseMiddle); }
     // The first visible row that keeps `sel` on screen, moving the list as little as it can.
     constexpr int optionsScroll(int sel, int scroll, int rows = kOptRows)
     {

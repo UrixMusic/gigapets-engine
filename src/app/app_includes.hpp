@@ -6,6 +6,7 @@
 #include <windows.h>
 #include "../engine/tuning.hpp"
 #include "../engine/input/input_bridge.hpp"
+#include "../game/data/input_settings.hpp"
 #include "../game/frontend/fe_strings.hpp" // the front end's words are texts a mod may replace: they exist in every db the mods load into
 #include <SDL2/SDL.h>
 #include "../loaders/import.hpp"

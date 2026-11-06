@@ -226,6 +226,70 @@ int main()
         SDL_Quit();
     }
 
+    // the buttons can be given other roles: left = Select, right = Cancel (not a walk), middle = Menu; or a button that only walks, or does nothing
+    {
+        InputBridge r;
+        r.mouseOn = true;
+        r.role[0] = MouseRole::Select;
+        r.role[1] = MouseRole::Menu;
+        r.role[2] = MouseRole::Cancel;
+        SDL_Event d = mouse(SDL_MOUSEBUTTONDOWN, SDL_BUTTON_RIGHT, 100);
+        CHECK(r.translate(d) && isKey(d, true, Action::Cancel) && r.held(Action::Cancel)); // at once, no waiting to tell a tap from a hold
+        d = mouse(SDL_MOUSEBUTTONUP, SDL_BUTTON_RIGHT, 900);
+        CHECK(r.translate(d) && isKey(d, false, Action::Cancel) && !r.held(Action::Cancel));
+        r.role[1] = MouseRole::None;
+        d = mouse(SDL_MOUSEBUTTONDOWN, SDL_BUTTON_MIDDLE);
+        CHECK(!r.translate(d) && !r.held(Action::Menu));
+        r.role[0] = MouseRole::Walk; // a walking button gives no key events and holds nothing but directions (which need a cursor over a window: none here)
+        d = mouse(SDL_MOUSEBUTTONDOWN, SDL_BUTTON_LEFT);
+        CHECK(!r.translate(d) && !r.held(Action::Select));
+        d = mouse(SDL_MOUSEBUTTONUP, SDL_BUTTON_LEFT);
+        CHECK(!r.translate(d) && !r.takePending(up));
+        r.role[0] = MouseRole::Menu; // two actions on two buttons at once
+        r.role[2] = MouseRole::Select;
+        d = mouse(SDL_MOUSEBUTTONDOWN, SDL_BUTTON_LEFT);
+        CHECK(r.translate(d) && isKey(d, true, Action::Menu));
+        d = mouse(SDL_MOUSEBUTTONDOWN, SDL_BUTTON_RIGHT);
+        CHECK(r.translate(d) && isKey(d, true, Action::Select) && r.held(Action::Menu) && r.held(Action::Select));
+        // the wheel can be turned off
+        r.wheelOn = false;
+        SDL_Event w;
+        SDL_zero(w);
+        w.type = SDL_MOUSEWHEEL;
+        w.wheel.y = 1;
+        CHECK(!r.translate(w));
+    }
+
+    // scripts steering the input: a Select press from a script (then its release), actions held for a few steps, the mouse blocked for a step
+    {
+        InputBridge s;
+        s.mouseOn = true;
+        auto st = s.stepInject();
+        CHECK(!st.press && !st.release);
+        s.injectSelect();
+        st = s.stepInject();
+        CHECK(st.press && !st.release);
+        st = s.stepInject();
+        CHECK(!st.press && st.release);
+        st = s.stepInject();
+        CHECK(!st.press && !st.release);
+        CHECK(!s.held(Action::Menu));
+        s.injectAction(Action::Menu, 2);
+        CHECK(s.held(Action::Menu));
+        s.tickInject();
+        CHECK(s.held(Action::Menu));
+        s.tickInject();
+        CHECK(!s.held(Action::Menu));
+        // blocking: the mouse's left button gives no Select for the step, the keyboard-side sources are untouched
+        SDL_Event d = mouse(SDL_MOUSEBUTTONDOWN, SDL_BUTTON_LEFT);
+        s.translate(d);
+        CHECK(s.held(Action::Select));
+        s.blockMouse(Action::Select);
+        CHECK(!s.held(Action::Select));
+        s.clearBlocks();
+        CHECK(s.held(Action::Select));
+    }
+
     // other events pass through untouched
     e = SDL_Event{};
     e.type = SDL_KEYDOWN;

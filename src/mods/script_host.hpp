@@ -24,6 +24,7 @@ extern "C"
 #include <vector>
 #include "../engine/audio/audio_registry.hpp" // a mod's sound and music ids
 #include "../engine/input/mouse_state.hpp"    // input.mouse() / ctx.mouse
+#include "../engine/ui_targets.hpp"           // ui.targets() / focus() / activate()
 #include "../engine/registry.hpp"
 #include "../engine/systems.hpp" // the engine's named systems a mod can wrap or replace
 
@@ -300,6 +301,10 @@ namespace gp
             bind("options", "add", l_optionsAdd);
             bind("world", "shade", l_worldShade);
             bind("input", "mouse", l_inputMouse);
+            bind("input", "block", l_inputBlock);
+            bind("ui", "targets", l_uiTargets);
+            bind("ui", "focus", l_uiFocus);
+            bind("ui", "activate", l_uiActivate);
             bind("rand", "int", l_randInt);
             bind("rand", "pick", l_randPick);
             bind("player", "give", l_pGive);
@@ -397,6 +402,7 @@ namespace gp
         void setRegistry(EngineRegistry *r) { registry_ = r; }
         // The game calls this once a step with what the mouse is doing (input.mouse(), and ctx.mouse of the tick hooks).
         void setMouse(const MouseState &m) { mouse_ = m; }
+        void setUi(UiHooks h) { ui_ = std::move(h); }
 
         // What a mod keeps in the save (save.get / save.set). The game hands over the loaded slot's key/values (keys starting with
         // "mod.") when it starts, fires fireGameSave, then writes modSaveKv() into the slot.
@@ -1274,6 +1280,7 @@ namespace gp
             lua_setfield(L_, -2, "mouse");
         }
         MouseState mouse_;
+        UiHooks ui_;
         // the table input.mouse() returns and the tick hooks get as ctx.mouse
         void pushMouseTable(lua_State *L) const
         {
@@ -1300,6 +1307,63 @@ namespace gp
             lua_setfield(L, -2, "pressed");
             lua_pushinteger(L, mouse_.wheel);
             lua_setfield(L, -2, "wheel");
+        }
+        // ui.targets() -> nil, or { kind, selected, items }: what the game is showing that can be pointed at, as of now. kind is "bar" (the menu bar's buttons), "items" (the cells of the
+        // item screen that hold an item), "tabs" (its category tabs, while the list is open) or "dialogue" (the Yes / No buttons, the OK button of a box, or the whole screen for a box
+        // that has no button). items is a list of { x, y, w, h } in the picture's pixels (the same as input.mouse()), selected is the 1-based number of the highlighted one (0 for none).
+        static int l_uiTargets(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const UiScreen s = h.ui_.screen ? h.ui_.screen() : UiScreen();
+            if (!s.any())
+            {
+                lua_pushnil(L);
+                return 1;
+            }
+            lua_newtable(L);
+            lua_pushstring(L, s.kind.c_str());
+            lua_setfield(L, -2, "kind");
+            lua_pushinteger(L, s.selected + 1);
+            lua_setfield(L, -2, "selected");
+            lua_newtable(L);
+            for (size_t i = 0; i < s.items.size(); ++i)
+            {
+                lua_newtable(L);
+                const std::pair<const char *, int> f[] = {{"x", s.items[i].x}, {"y", s.items[i].y}, {"w", s.items[i].w}, {"h", s.items[i].h}};
+                for (const auto &[k, v] : f)
+                {
+                    lua_pushinteger(L, v);
+                    lua_setfield(L, -2, k);
+                }
+                lua_rawseti(L, -2, lua_Integer(i + 1));
+            }
+            lua_setfield(L, -2, "items");
+            return 1;
+        }
+        // ui.focus(i) -> true if it moved the highlight to item i (1-based) of ui.targets(); false if there is no such item or nothing to point at. It makes no sound.
+        static int l_uiFocus(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            const int i = int(luaL_checkinteger(L, 1)) - 1;
+            lua_pushboolean(L, h.ui_.focus && i >= 0 && h.ui_.focus(i));
+            return 1;
+        }
+        // ui.activate(): presses Select on the highlighted item, as if the player had (the next step sees the press, the one after the release). Only the game's own screens react: a
+        // script's own scene has to read the mouse itself.
+        static int l_uiActivate(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            if (h.ui_.activate)
+                h.ui_.activate();
+            return 0;
+        }
+        // input.block(action): for this one step the mouse does not give the action "select", "cancel" or "menu" (the keyboard and controller still do). A mod that handles a click
+        // itself (ui.activate()) calls it in a tick hook so the game's own click-is-Select does not press as well. Returns false for any other name.
+        static int l_inputBlock(lua_State *L)
+        {
+            ScriptHost &h = self(L);
+            lua_pushboolean(L, h.ui_.block && h.ui_.block(luaL_checkstring(L, 1)));
+            return 1;
         }
         // input.mouse() -> { x, y, inside, left, right, middle, pressed = { left, right, middle }, wheel }: the mouse as of the latest step. x and y are in the picture's pixels (0..320
         // across, 0..240 down); inside says the cursor is over the picture (outside it, x and y go past those ends). left / right / middle are true while the button is held; pressed.*

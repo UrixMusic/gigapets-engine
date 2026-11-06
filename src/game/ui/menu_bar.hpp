@@ -118,6 +118,15 @@ namespace menubar
         bool isOpen() const { return open_; }
         void forceClose() { open_ = false; } // the tricks panel took over and has finished with the bar
         int selected() const { return selected_; }
+        // Moves the highlight to button i without a sound (a script pointing at it: ui.focus)
+        void select(int i)
+        {
+            if (open_ && i >= 0 && i < buttonCount() && i != selected_)
+            {
+                selected_ = i;
+                host_.requestRedraw();
+            }
+        }
         int buttonCount() const { return inHouse_ ? 8 : 7; }
 
         // Call once per input event while g_isPetBusy == 2 (original gate).

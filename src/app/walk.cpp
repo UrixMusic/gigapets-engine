@@ -193,6 +193,7 @@ static void grantStarterItems(gp::Player &p, const std::vector<gp::ItemDef> &def
 #include "../game/walk/walk_world_actions.hpp"
 #include "../game/walk/walk_draw.hpp"
 #include "../game/walk/walk_items.hpp"
+#include "../game/walk/walk_ui_targets.hpp"
 #include "../game/walk/walk_pet_activities.hpp" // the player homes and hotels (RoomController, RoomView): needs the types above
 #include "../game/walk/walk_quest_bindings.hpp"
 
@@ -1182,6 +1183,34 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             const AnimRef A = animRefById(gp::uiSpriteId(s));
             return A.size() ? A.anim->frames[0].h : 0;
         };
+
+        // What a mouse (or any pointer) can be pointed at: ui.targets() / focus() / activate() and input.block() for scripts (walk_ui_targets.hpp)
+        UiTargets uiTargets(UiTargetsEnv{[&](int sprite, int pal, int x, int y)
+                                         {
+                                             const AnimRef A = animRefById(gp::uiSpriteId(sprite, pal));
+                                             if (!A.size())
+                                                 return gp::UiRect{x, y, 0, 0};
+                                             const gp::SpriteFrame &f = A.anim->frames[0];
+                                             return gp::UiRect{x + f.dx, y + f.dy, f.w, f.h};
+                                         },
+                                         bar, barInHouse, rom, im, dialogue, statsOpen});
+        {
+            gp::UiHooks uh;
+            uh.screen = [&]
+            { return uiTargets.screen(); };
+            uh.focus = [&](int i)
+            { return uiTargets.focus(i); };
+            uh.activate = [] { gp::inputBridge().injectSelect(); };
+            uh.block = [](const std::string &name)
+            {
+                const gp::Action a = name == "select" ? gp::Action::Select : name == "cancel" ? gp::Action::Cancel : gp::Action::Menu;
+                if (name != "select" && name != "cancel" && name != "menu")
+                    return false;
+                gp::inputBridge().blockMouse(a);
+                return true;
+            };
+            scripts.setUi(std::move(uh));
+        }
 
         // Swift Pick, wishing wells (Three in a Row) and Memory Match / game tents live in minigame_ui.hpp.
         TextDrawer swiftTitle(ren, db.font(gp::fontId(3, 0x104))); // minigame titles: font 3, palette 0x104

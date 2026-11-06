@@ -17,10 +17,28 @@
 
 namespace gp
 {
+    // What a mouse button does while the mouse plays the game
+    enum class MouseRole : int
+    {
+        None = 0,
+        Select,     // the Select action (Z)
+        Cancel,     // Cancel (X)
+        Menu,       // Menu (C)
+        Walk,       // held: the pet walks toward the cursor
+        CancelWalk, // a quick press is Cancel; held, the pet walks toward the cursor
+        kCount
+    };
+    constexpr int actionOfRole(MouseRole r)
+    {
+        return r == MouseRole::Select ? int(Action::Select) : r == MouseRole::Cancel ? int(Action::Cancel) : r == MouseRole::Menu ? int(Action::Menu) : -1;
+    }
+
     class InputBridge
     {
     public:
         bool controllerOn = true, mouseOn = false;
+        MouseRole role[3] = {MouseRole::Select, MouseRole::Menu, MouseRole::CancelWalk}; // left, middle, right button
+        bool wheelOn = true;                                                           // the wheel is Up / Down
         static constexpr Uint32 kHoldMs = 200;                   // a right button held this long is a walk, shorter is a tap (Cancel)
         static constexpr int kStickOn = 16000, kStickOff = 8000; // the stick presses past the first and releases below the second
 
@@ -28,13 +46,26 @@ namespace gp
         bool held(Action a) const
         {
             const int i = int(a);
+            if (injectSteps_[i] > 0)
+                return true;
             if (controllerOn && pad_[i])
                 return true;
             if (!mouseOn)
                 return false;
-            if (mouse_[i])
-                return true;
-            return rightDown_ && a != Action::Select && a != Action::Cancel && a != Action::Menu && walking(a);
+            const bool direction = a != Action::Select && a != Action::Cancel && a != Action::Menu;
+            for (int b = 0; b < 3; ++b)
+            {
+                if (!playDown_[b] || (direction ? false : (blocked_ & (1u << i)) != 0))
+                    continue;
+                if (!direction)
+                {
+                    if (actionOfRole(role[b]) == i)
+                        return true;
+                }
+                else if ((role[b] == MouseRole::Walk || (role[b] == MouseRole::CancelWalk && SDL_GetTicks() - playSince_[b] >= kHoldMs)) && cursorWants(a))
+                    return true;
+            }
+            return false;
         }
 
         // ---- events ----
@@ -113,35 +144,30 @@ namespace gp
                 if (!mouseOn)
                     return false;
                 const bool down = e.type == SDL_MOUSEBUTTONDOWN;
-                if (e.button.button == SDL_BUTTON_RIGHT)
+                const int b = e.button.button == SDL_BUTTON_LEFT ? 0 : e.button.button == SDL_BUTTON_MIDDLE ? 1 : e.button.button == SDL_BUTTON_RIGHT ? 2 : -1;
+                if (b < 0)
+                    return false;
+                const MouseRole r = role[b];
+                const bool wasDown = playDown_[b];
+                const Uint32 since = playSince_[b];
+                playDown_[b] = down && r != MouseRole::None;
+                if (down)
+                    playSince_[b] = e.common.timestamp; // when it happened, not when we got round to it
+                if (const int a = actionOfRole(r); a >= 0)
                 {
-                    if (down)
-                    {
-                        rightDown_ = true;
-                        rightSince_ = e.common.timestamp; // when it happened, not when we got round to it
-                        return false; // not yet known to be a tap or a walk
-                    }
-                    const bool tap = rightDown_ && e.common.timestamp - rightSince_ < kHoldMs;
-                    rightDown_ = false;
-                    if (!tap)
-                        return false;
-                    tapKey(e, Action::Cancel);
+                    makeKey(e, Action(a), down);
                     return true;
                 }
-                int a = -1;
-                if (e.button.button == SDL_BUTTON_LEFT)
-                    a = int(Action::Select);
-                else if (e.button.button == SDL_BUTTON_MIDDLE)
-                    a = int(Action::Menu);
-                if (a < 0)
-                    return false;
-                mouse_[a] = down;
-                makeKey(e, Action(a), down);
-                return true;
+                if (r == MouseRole::CancelWalk && !down && wasDown && e.common.timestamp - since < kHoldMs)
+                {
+                    tapKey(e, Action::Cancel); // a quick press was a tap
+                    return true;
+                }
+                return false; // Walk and the start of a CancelWalk: the held state is all that matters
             }
             case SDL_MOUSEWHEEL:
             {
-                if (!mouseOn || e.wheel.y == 0)
+                if (!mouseOn || !wheelOn || e.wheel.y == 0)
                     return false;
                 tapKey(e, e.wheel.y > 0 ? Action::Up : Action::Down);
                 return true;
@@ -178,6 +204,40 @@ namespace gp
             default:
                 return false;
             }
+        }
+
+        // ---- scripts steering the input (ui.activate(), input.block()) ----
+        // A script pressed Select on something it can see (the menu bar, a box): the next step sees a press, and the step after a release.
+        void injectSelect() { injectStage_ = 2; }
+        struct Inject
+        {
+            bool press = false, release = false;
+        };
+        Inject stepInject() // once a step
+        {
+            Inject r;
+            if (injectStage_ == 2)
+            {
+                r.press = true;
+                injectStage_ = 1;
+            }
+            else if (injectStage_ == 1)
+            {
+                r.release = true;
+                injectStage_ = 0;
+            }
+            return r;
+        }
+        // For this step the mouse does not give this action (a script is handling the click itself). The controller and keyboard are not affected.
+        void blockMouse(Action a) { blocked_ |= 1u << int(a); }
+        void clearBlocks() { blocked_ = 0; }
+        // Holds an action for this many steps (the debug harness GP_WALK_KEYS uses it to press buttons in a test run)
+        void injectAction(Action a, int steps = 2) { injectSteps_[int(a)] = steps; }
+        void tickInject()
+        {
+            for (int &n : injectSteps_)
+                if (n > 0)
+                    --n;
         }
 
         // ---- the mouse for scripts ----
@@ -240,19 +300,20 @@ namespace gp
         }
 
     private:
-        bool pad_[kActionCount]{}, mouse_[kActionCount]{}, stick_[kActionCount]{}, dpad_[kActionCount]{};
+        bool pad_[kActionCount]{}, stick_[kActionCount]{}, dpad_[kActionCount]{};
         bool rawDown_[3]{}, rawPressed_[3]{}; // left, middle, right
         int rawWheel_ = 0;
-        bool rightDown_ = false;
-        Uint32 rightSince_ = 0;
+        int injectSteps_[kActionCount]{};
+        unsigned blocked_ = 0;    // actions the mouse does not give this step
+        int injectStage_ = 0;     // 2: a Select press is due, 1: its release
+        bool playDown_[3]{};      // the buttons held, while the mouse plays (left, middle, right)
+        Uint32 playSince_[3]{};   // when each went down
         std::deque<SDL_Event> pending_;
         SDL_GameController *padHandle_ = nullptr;
         SDL_JoystickID padId_ = -1;
 
-        bool walking(Action a) const
+        bool cursorWants(Action a) const
         {
-            if (SDL_GetTicks() - rightSince_ < kHoldMs)
-                return false;
             SDL_Window *w = SDL_GetMouseFocus();
             if (!w)
                 return false;

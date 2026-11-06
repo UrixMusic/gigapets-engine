@@ -193,9 +193,43 @@ public:
             return t;
         };
         ++gameTickN;
+        {   // debug harness: GP_WALK_KEYS="40:menu,80:right,120:select" presses those actions at those steps (for screenshots of the menus)
+            static const std::vector<std::pair<long, int>> keyScript = []
+            {
+                std::vector<std::pair<long, int>> v;
+                if (const char *e = std::getenv("GP_WALK_KEYS"))
+                {
+                    std::string s = e;
+                    for (size_t at = 0; at < s.size();)
+                    {
+                        size_t end = s.find(',', at);
+                        if (end == std::string::npos)
+                            end = s.size();
+                        const std::string item = s.substr(at, end - at);
+                        const size_t c = item.find(':');
+                        if (c != std::string::npos)
+                        {
+                            const std::string name = item.substr(c + 1);
+                            static const char *const names[] = {"up", "down", "left", "right", "select", "cancel", "menu"};
+                            for (int a = 0; a < 7; ++a)
+                                if (name == names[a])
+                                    v.push_back({std::atol(item.c_str()), a});
+                        }
+                        at = end + 1;
+                    }
+                }
+                return v;
+            }();
+            for (const auto &[at, a] : keyScript)
+                if (gameTickN == at)
+                    gp::inputBridge().injectAction(gp::Action(a), 2);
+            gp::inputBridge().tickInject();
+        }
         if (const char *r = std::getenv("GP_ENTER_ROOM")) // debug: go into that home / hotel location (0..2, 4..7) after 20 steps, for screenshots (with GP_WALK_SHOT)
             if (gameTickN == 20 && svc.enterRoom)
                 svc.enterRoom(std::atoi(r));
+        gp::inputBridge().clearBlocks(); // (a script blocks what it handles itself, in the tick hook below)
+        scripts.setMouse(gp::inputBridge().takeMouse()); // input.mouse() and ctx.mouse for this step, before the tick hook sees them
         scripts.fireGameTick(false, tickInfo());
         struct TickEnd
         {
@@ -318,8 +352,9 @@ public:
         // Z is read once per tick, as an edge. prevZ updates even while a box is open, so the press
         // that opens a box can never also close it.
         const bool zDown = gp::keys().held(k, gp::Action::Select);
-        const bool zPressed = zDown && !prevZ;
-        const bool zReleased = !zDown && prevZ;
+        const auto inject = gp::inputBridge().stepInject(); // ui.activate(): a Select press from a script, then its release
+        const bool zPressed = (zDown && !prevZ) || inject.press;
+        const bool zReleased = (!zDown && prevZ) || inject.release;
         const bool xDown = gp::keys().held(k, gp::Action::Cancel);
         const bool xPressed = xDown && !prevX;
         static bool prevMenu = false;
@@ -328,7 +363,6 @@ public:
         prevMenu = menuDown;
         prevX = xDown;
         prevZ = zDown;
-        scripts.setMouse(gp::inputBridge().takeMouse()); // input.mouse() and ctx.mouse for this step
         lastKeys = gp::SceneInput(); // what a game-wide tick hook sees as the keys
         lastKeys.z = zPressed;
         lastKeys.x = xPressed;

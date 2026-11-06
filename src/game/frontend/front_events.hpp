@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <vector>
+#include "../data/input_settings.hpp"
 #include "../../engine/input/input_bridge.hpp" // gp::pollEvent: controller and mouse input as key events
 
 struct FrontEventsEnv
@@ -438,11 +439,24 @@ public:
                         break;
                     case gp::kOptController:
                         opts.controller = !opts.controller;
-                        gp::inputBridge().controllerOn = opts.controller;
+                        gp::applyInputSettings(opts);
                         break;
                     case gp::kOptMouse:
                         opts.mouse = !opts.mouse;
-                        gp::inputBridge().mouseOn = opts.mouse;
+                        gp::applyInputSettings(opts);
+                        break;
+                    case gp::kOptMouseLeft:
+                    case gp::kOptMouseRight:
+                    case gp::kOptMouseMiddle:
+                    {
+                        int &v = optSel == gp::kOptMouseLeft ? opts.mouseLeft : optSel == gp::kOptMouseRight ? opts.mouseRight : opts.mouseMiddle;
+                        v = (v + (forward ? 1 : 5)) % 6; // the six roles, round either way
+                        gp::applyInputSettings(opts);
+                        break;
+                    }
+                    case gp::kOptMouseWheel:
+                        opts.mouseWheel = !opts.mouseWheel;
+                        gp::applyInputSettings(opts);
                         break;
                     default:
                         break;
@@ -452,9 +466,9 @@ public:
                 // "window_mode", "aspect", "retro", "live", a mod row's id, or "" (a key row); cancel or replace and the game's own change is not made
                 auto change = [&](bool forward, bool byZ)
                 {
-                    static const char *const names[] = {"music", "sfx", "volume", "tutorials", "interpolate", "scale", "scale_mode", "window_mode", "aspect", "retro", "live", "controller", "mouse"};
+                    static const char *const names[] = {"music", "sfx", "volume", "tutorials", "interpolate", "scale", "scale_mode", "window_mode", "aspect", "retro", "live", "controller", "mouse", "mouse_left", "mouse_right", "mouse_middle", "mouse_wheel"};
                     std::string rowName;
-                    if (optSel >= 0 && optSel <= gp::kOptMouse)
+                    if (optSel >= 0 && optSel <= gp::kOptMouseWheel)
                         rowName = names[optSel];
                     else if (gp::isModRow(optSel, nMod))
                         if (const auto *mr = feScripts.optionRow(size_t(gp::modRowIndex(optSel))))
