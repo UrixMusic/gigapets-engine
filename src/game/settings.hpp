@@ -56,6 +56,7 @@ namespace gp
 
     constexpr int kDefaultVolume = 80, kMaxVolume = 100;
     inline std::string settingsPath() { return dataDir() + "settings.txt"; }
+    inline std::string modStatePath() { return dataDir() + "mods.txt"; } // the Mods screen: which mods are off, their order (mods/mod_state.hpp)
 
     inline int sanitizeVolume(int v) { return v < 0 || v > kMaxVolume ? kDefaultVolume : v; }
     inline int sanitizePercent(int v, int fallback) { return v < 0 || v > kMaxVolume ? fallback : v; }

@@ -22,6 +22,8 @@ namespace gp
     struct ModManifest
     {
         std::string id, version, gameApi;
+        std::string name, description;      // "name" (what the Mods screen shows; the id if there is none) and "description"
+        bool hasIcon = false;               // dir/icon.png exists (a 32x32 picture for the Mods screen)
         std::vector<std::string> needs;     // "requires" is a C++20 keyword
         std::vector<std::string> loadAfter; // soft ordering, ignored if that mod isn't installed
         bool trusted = false;               // "trusted": true: its Lua runs without the sandbox (io, os, require, load ...); the player is told at start
@@ -75,6 +77,9 @@ namespace gp
             m.needs = j.value("requires", std::vector<std::string>{});
             m.loadAfter = j.value("load_after", std::vector<std::string>{});
             m.trusted = j.value("trusted", false);
+            m.name = j.value("name", m.id);
+            m.description = j.value("description", std::string());
+            m.hasIcon = fs::exists(dir / "icon.png");
         }
         catch (const json::exception &e)
         {
@@ -101,8 +106,20 @@ namespace gp
 
     // Dependency order: every mod after what it requires / load_after. Ties break alphabetically so the order
     // is the same on every machine. Returns false (with errors) on a missing dependency or a cycle.
-    inline bool sortMods(std::vector<ModManifest> &mods, std::vector<std::string> &errs)
+    // `order`: the player's order (Mods screen); a mod that comes earlier in it loads earlier when nothing else decides, the ones not in it follow alphabetically.
+    inline bool sortMods(std::vector<ModManifest> &mods, std::vector<std::string> &errs, const std::vector<std::string> *order = nullptr)
     {
+        std::map<std::string, size_t> rank;
+        if (order)
+            for (size_t i = 0; i < order->size(); ++i)
+                rank.emplace((*order)[i], i);
+        std::vector<std::string> keys; // the ids in the order they are tried
+        for (const ModManifest &m : mods)
+            keys.push_back(m.id);
+        std::sort(keys.begin(), keys.end(), [&](const std::string &a, const std::string &b)
+                  {
+            const size_t ra = rank.count(a) ? rank[a] : size_t(-1), rb = rank.count(b) ? rank[b] : size_t(-1);
+            return ra != rb ? ra < rb : a < b; });
         std::map<std::string, size_t> at;
         for (size_t i = 0; i < mods.size(); ++i)
             at[mods[i].id] = i;
@@ -136,8 +153,9 @@ namespace gp
         while (done.size() < mods.size())
         {
             std::string pick;
-            for (const auto &kv : deps) // std::map iterates alphabetically
+            for (const std::string &key : keys)
             {
+                const auto &kv = *deps.find(key);
                 if (done.count(kv.first))
                     continue;
                 bool ready = true;

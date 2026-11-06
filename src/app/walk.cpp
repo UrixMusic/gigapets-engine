@@ -320,7 +320,8 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         gp::importRom(rom, db, playerSpecies); // line 290
 
         gp::fe::importFeStrings(db);
-        gp::ModReport rep = gp::importMods(db, "mods"); // <- new, after all base content
+        const gp::ModState modState = gp::loadModState(gp::modStatePath()); // the Mods screen's choices
+        gp::ModReport rep = gp::importMods(db, "mods", &modState); // <- new, after all base content
         gp::ScriptHost scripts;
         gp::EngineRegistry engineValues; // what engine.get / engine.set reach; filled in below, once the variables exist
         scripts.setRegistry(&engineValues);

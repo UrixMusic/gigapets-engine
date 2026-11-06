@@ -10,6 +10,7 @@
 #include "../game/menu_draw.hpp" // kMenuPalette
 #include "../loaders/font.hpp"   // registerUiArt
 #include "manifest.hpp"
+#include "mod_state.hpp"
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC // static functions, so including this from two .cpp files can't collide
 #define STBI_ONLY_PNG
@@ -3785,7 +3786,7 @@ namespace gp
 
     // Call once after importRom. Errors don't stop other records from loading; the caller decides whether
     // a non-ok report means "refuse to start" or "warn and continue" (--validate-mods should print and exit).
-    inline ModReport importMods(ContentDB &db, const fs::path &modsDir)
+    inline ModReport importMods(ContentDB &db, const fs::path &modsDir, const ModState *state = nullptr)
     {
         ModReport rep;
         forgetModAudio();
@@ -3805,7 +3806,9 @@ namespace gp
             else
                 rep.errors.push_back(e);
         }
-        if (!sortMods(mods, rep.errors))
+        if (state)
+            applyModState(mods, *state, &rep.warnings); // the mods the player switched off are not loaded
+        if (!sortMods(mods, rep.errors, state ? &state->order : nullptr))
             return rep; // dependency problems: load nothing rather than a half-working set
 
         for (const ModManifest &m : mods)

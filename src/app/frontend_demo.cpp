@@ -26,6 +26,7 @@
 #include <tuple>
 #include <array>
 
+#include "../game/frontend/fe_mods.hpp" // the Mods screen
 #include "../game/frontend/fe_strings.hpp" // the front end's words (reworded by text records)
 #include "../game/script_draw.hpp"
 #include "../engine/gl_shader.hpp"
@@ -127,6 +128,8 @@ struct MenuView
     bool ready = true; // false while sprites are still sliding in
 };
 
+inline gp::fe::ModsUi gModsUi; // the Mods screen's state (fe_mods.hpp)
+
 inline void drawMainMenu(FrontGfx &g, const MenuView &v)
 {
     constexpr int P = 0x4d5, L = 0x3000, BP = 0x4c7;
@@ -152,6 +155,8 @@ inline void drawMainMenu(FrontGfx &g, const MenuView &v)
         const int st = (i == v.cursor) ? (v.pressed ? 2 : 1) : 0;
         g.drawTileF(btns[i].t[st], BP, btns[i].x, btns[i].y, L);
     }
+    // Mods: no art in the game for it, so it is a line of text under Options
+    g.drawTextBox(v.cursor == 3 ? 5 : 4, 0x4c7, 0, 0xd8, gp::fe::feText("mods"), 0x140, 1, L);
 }
 
 inline void drawIntro(Gfx &g, const MenuView &m)
@@ -1459,7 +1464,8 @@ enum class Screen
     Name,
     Browse,
     Options,
-    TestMode
+    TestMode,
+    Mods
 };
 
 // The ROM's test mode screens (game/test_mode.hpp). Coordinates and strings are from TestModeMenu (0x045d9d) and the loops it starts.
@@ -1569,8 +1575,9 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             gp::importRom(rom, *uiDb, 0);
             // A pet that wears a mod's colour needs that palette to be drawn in the slot list: load the mods (their palette records are what
             // matter here) and fill the palette registry the sprite code looks mod colours up in. The game does the same when it starts.
+            const gp::ModState modState = gp::loadModState(gp::modStatePath());
             gp::fe::importFeStrings(*uiDb); // the front end's words, as texts a mod can replace
-            gp::ModReport feRep = gp::importMods(*uiDb, "mods");
+            gp::ModReport feRep = gp::importMods(*uiDb, "mods", &modState);
             gp::fe::feDb() = uiDb.get();
             for (const std::string &w : feRep.errors) // (a mod that did not load: its folder name must be its id, and so on)
                 std::fprintf(stderr, "front end: mod error: %s\n", w.c_str());
@@ -1580,7 +1587,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             // Every (font style, palette) pair the front end draws with, imported up front so the db never
             // changes once a TextDrawer holds a pointer into it. drawTextBox's first two arguments are
             // exactly (fontIndex, palette): the palette is baked into the glyphs by importFont.
-            static const int kFrontFonts[][2] = {{0, 0x28c}, {2, 0x28c}, {3, 0x104}, {4, 0x4c7}, {5, 0x4c7}, {6, 0x4c7}, {4, 0x105}, {5, 0x106}};
+            static const int kFrontFonts[][2] = {{0, 0x28c}, {2, 0x28c}, {3, 0x104}, {4, 0x4c7}, {5, 0x4c7}, {6, 0x4c7}, {4, 0x105}, {5, 0x106}, {2, 0x105}};
             for (const auto &f : kFrontFonts)
                 if (!uiDb->font(gp::fontId(f[0], f[1])))
                     gp::importFont(*uiDb, rom, f[0], f[1]);
@@ -1948,7 +1955,7 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                 if (colon == std::string::npos)
                     continue;
                 const std::string name = item.substr(colon + 1);
-                const SDL_Keycode key = name == "z" ? SDLK_z : name == "x" ? SDLK_x : name == "up" ? SDLK_UP : name == "down" ? SDLK_DOWN : name == "left" ? SDLK_LEFT : name == "right" ? SDLK_RIGHT : name == "enter" ? SDLK_RETURN : name == "escape" ? SDLK_ESCAPE : SDLK_UNKNOWN;
+                const SDL_Keycode key = name == "z" ? SDLK_z : name == "x" ? SDLK_x : name == "c" ? SDLK_c : name == "up" ? SDLK_UP : name == "down" ? SDLK_DOWN : name == "left" ? SDLK_LEFT : name == "right" ? SDLK_RIGHT : name == "enter" ? SDLK_RETURN : name == "escape" ? SDLK_ESCAPE : SDLK_UNKNOWN;
                 if (key != SDLK_UNKNOWN)
                     testKeys.emplace_back(std::atoi(item.c_str()), key);
             }

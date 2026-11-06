@@ -215,7 +215,7 @@ public:
                 {
                     if (k == SDLK_UP && menu.cursor > 0)
                         --menu.cursor, feSound(gp::fe::kSfxMove, 0x7f);
-                    if (k == SDLK_DOWN && menu.cursor < 2)
+                    if (k == SDLK_DOWN && menu.cursor < 3)
                         ++menu.cursor, feSound(gp::fe::kSfxMove, 0x7f);
                     if (k == SDLK_z && !rep)
                         menu.pressed = true, feSound(gp::fe::kSfxConfirm, 0x7f); // ShowMainMenuScreen: 0x2d / 0x59 at volume 0x7f
@@ -243,11 +243,11 @@ public:
                 else if (k == SDLK_z && menu.pressed)
                 {
                     menu.pressed = false;
-                    static const char *names[3] = {"New -> state 6 (intro), demo jumps to name entry", "Load -> state 8", "Options -> state 5"};
+                    static const char *names[4] = {"New -> state 6 (intro), demo jumps to name entry", "Load -> state 8", "Options -> state 5", "Mods"};
                     std::printf("%s\n", names[menu.cursor]);
                     // the engine system "frontend.menu": the player chose on the title menu (choice "new", "load" or "options"); cancel or replace and nothing happens
                     gp::SystemCtx mc;
-                    mc.set("choice", menu.cursor == 0 ? "new" : menu.cursor == 1 ? "load" : "options");
+                    mc.set("choice", menu.cursor == 0 ? "new" : menu.cursor == 1 ? "load" : menu.cursor == 2 ? "options" : "mods");
                     const int cursor = menu.cursor;
                     feScripts.system("frontend.menu", mc, [&]
                                      {
@@ -260,6 +260,11 @@ public:
                     {
                         loadStart();
                         setScreenNoFade(Screen::Load);
+                    }
+                    else if (cursor == 3)
+                    {
+                        gModsUi.open("mods", gp::modStatePath());
+                        setScreenNoFade(Screen::Mods);
                     }
                     else if (cursor == 2)
                     {
@@ -328,6 +333,23 @@ public:
                             loadPicked = true;
                             loadPickedAt = SDL_GetTicks(); });
                     }
+                }
+            }
+            else if (screen == Screen::Mods && down && !rep)
+            {
+                // Up / Down move (or carry the picked up mod in order mode), Z (Select) switches the mod on / off (order mode: picks it up / puts it down), the Menu key is the order mode, X (Cancel) leaves
+                if (k == SDLK_UP)
+                    gModsUi.moveCursor(-1), feSound(gp::fe::kSfxMove, 0x7f);
+                else if (k == SDLK_DOWN)
+                    gModsUi.moveCursor(1), feSound(gp::fe::kSfxMove, 0x7f);
+                else if (k == SDLK_z)
+                    gModsUi.press(), feSound(gp::fe::kSfxConfirm, 0x7f);
+                else if (k == SDLK_RETURN) // the Menu key (a rebound one reads as Enter)
+                    gModsUi.toggleOrder(), feSound(gp::fe::kSfxMove, 0x7f);
+                else if (k == SDLK_x)
+                {
+                    gModsUi.held = false;
+                    setScreenNoFade(Screen::Menu);
                 }
             }
             else if (screen == Screen::Options && down && !optPressed)

@@ -383,6 +383,10 @@ public:
             }
             break;
         }
+        case Screen::Mods:
+            app.drawBackground(0, 0x5c3);
+            gp::fe::drawMods(gfx, ren, gModsUi);
+            break;
         case Screen::House:
             app.drawBackground(2, 0x5c5);
             drawHouse(gfx, houseCur, slotName, slotFull);
