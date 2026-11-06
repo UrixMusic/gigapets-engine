@@ -29,9 +29,10 @@ static gp::EncounterHost makeHost(Fake &f)
     h.petWalkToY = [&](int)
     { return !f.neverArrive && ++f.calls % 3 == 0; };
     h.petFace = [](bool) {};
-    h.petNoise = [] {};
-    h.petSad = [] {};
-    h.petReact = [](int) {};
+    h.petEngage = [] {};
+    h.petIdle = [] {};
+    h.npcIdle = [] {};
+    h.npcFacePet = [] {};
     h.npcSettled = []
     { return true; };
     h.npcUnlock = [] {};
@@ -40,6 +41,17 @@ static gp::EncounterHost makeHost(Fake &f)
     h.markFriended = [&]
     { return ++f.friends; };
     h.event = [](const char *, int) {};
+    for (gp::ActorIO *a : {&h.pet, &h.npc})
+    {
+        a->play = [](gp::ReactAnim, int)
+        { return false; }; // no art: every animation is skipped
+        a->busy = [] { return false; };
+        a->sound = [](int, int) {};
+        a->bubble = [](int) {};
+        a->settle = [] { return true; };
+        a->rand = [](int lo, int)
+        { return lo; };
+    }
     return h;
 }
 

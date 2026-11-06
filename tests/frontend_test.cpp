@@ -16,7 +16,7 @@ static int fails = 0;
         }                                                         \
     } while (0)
 
-static SlotInfo full(const char *n) { SlotInfo s; s.valid = true; s.name = n; return s; }
+static fe::SlotInfo full(const char *n) { fe::SlotInfo s; s.valid = true; s.name = n; return s; }
 
 int main()
 {
@@ -53,14 +53,14 @@ int main()
 
     // ---- load screen
     {
-        SlotInfo none[3];
+        fe::SlotInfo none[3];
         LoadScreen l(none);
         CHECK(l.cursor == 3);
         CHECK(l.onButton(Btn::Confirm)->next == State::MainMenu); // Back
         CHECK(l.label(0) == "Empty" && l.label(3) == "Back");
     }
     {
-        SlotInfo s[3] = {{}, full("doogie"), full("rex")};
+        fe::SlotInfo s[3] = {{}, full("doogie"), full("rex")};
         LoadScreen l(s);
         CHECK(l.cursor == 1);                  // first valid
         l.onButton(Btn::Up);
@@ -76,7 +76,7 @@ int main()
         CHECK(l.onButton(Btn::Back)->next == State::MainMenu);
     }
     {
-        SlotInfo s[3] = {full("a"), {}, full("c")};
+        fe::SlotInfo s[3] = {full("a"), {}, full("c")};
         LoadScreen l(s);
         l.onButton(Btn::Down);
         CHECK(l.cursor == 2);                  // skipped the empty slot 1
@@ -86,7 +86,7 @@ int main()
 
     // ---- house select
     {
-        SlotInfo s[3] = {full("doogie"), {}, full("rex")};
+        fe::SlotInfo s[3] = {full("doogie"), {}, full("rex")};
         HouseSelect h(s);
         CHECK(h.cursor == 1);                  // first empty
         auto r = h.onButton(Btn::Confirm);
@@ -104,7 +104,7 @@ int main()
         CHECK(h.onButton(Btn::Confirm)->slot == -1);
     }
     {
-        SlotInfo s[3] = {full("a"), full("b"), full("c")};
+        fe::SlotInfo s[3] = {full("a"), full("b"), full("c")};
         HouseSelect h(s);
         CHECK(h.cursor == 3);                  // all full -> Back
     }
@@ -120,7 +120,7 @@ int main()
         env.randRange = [](int lo, int) { return lo; };
         env.rollIllness = [](int) { return 7; };
         SaveData s = newGame(p, "doogie", 2, env);
-        CHECK(s.getInt("version") == 2 && s.getInt("species") == 1 && s.getInt("house") == 2);
+        CHECK(s.getInt("version") == 3 && s.getInt("species") == 1 && s.getInt("house") == 2);
         CHECK(s.getStr("name") == "doogie");
         CHECK(s.getInt("money") == 0x28);
         CHECK((s.getList("care") == std::vector<int>{0x34, 0x41, 0, 0x50, 0x4b, 0x4b}));
