@@ -1,8 +1,8 @@
 // pool_tables_test.cpp - the friend pools (gifts, advice, default lines) and the colour machine presets: the base records hold what the
 // old constants did, the db-fed overloads draw the same, and a mod's lists are what gets used.
-#include "../game/befriend.hpp"
-#include "../game/color_machine.hpp"
-#include "../game/minigame_defs.hpp"
+#include "../src/game/pet/befriend.hpp"
+#include "../src/game/pet/color_machine.hpp"
+#include "../src/game/minigames/minigame_defs.hpp"
 #include <cstdio>
 
 static int fails = 0;

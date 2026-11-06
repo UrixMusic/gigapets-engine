@@ -1,6 +1,6 @@
 // tests/stat_notify_test.cpp - the stat / money change panel (game/stat_notify.hpp).
 #include <cstdio>
-#include "../src/game/stat_notify.hpp"
+#include "../src/game/pet/stat_notify.hpp"
 using namespace gp;
 
 int main()

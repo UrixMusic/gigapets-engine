@@ -1,5 +1,5 @@
 // A save remembers where the pet was only in an area that asks for it, and forgets it everywhere else.
-#include "../src/game/resume_area.hpp"
+#include "../src/game/data/resume_area.hpp"
 #include <cstdio>
 #include <iostream>
 

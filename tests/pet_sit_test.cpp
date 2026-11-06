@@ -1,7 +1,7 @@
 // tests/pet_sit_test.cpp - a sitting pet gets up (activity 8) before it moves; it can't be controlled while sitting down
 // or getting up.
 #include <cstdio>
-#include "../src/game/pet_sit.hpp"
+#include "../src/game/pet/pet_sit.hpp"
 using namespace gp;
 
 int main()

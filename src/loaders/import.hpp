@@ -6,17 +6,17 @@
 #include "objects.hpp"
 #include "exits.hpp"
 #include "../content/db.hpp"
-#include "../game/npc_anim_ids.hpp" // pure constants; add at the top of import.hpp
-#include "../game/fixed_spawn.hpp"
-#include "../game/npc_spawn.hpp" // kQuestGatedPoolEntry
-#include "../game/quest_strings.hpp"
-#include "../game/quest_types.hpp"
-#include "../game/befriend_rules.hpp"
-#include "../game/minigame_defs.hpp"
+#include "../game/npc/npc_anim_ids.hpp" // pure constants; add at the top of import.hpp
+#include "../game/npc/fixed_spawn.hpp"
+#include "../game/npc/npc_spawn.hpp" // kQuestGatedPoolEntry
+#include "../game/quests/quest_strings.hpp"
+#include "../game/quests/quest_types.hpp"
+#include "../game/pet/befriend_rules.hpp"
+#include "../game/minigames/minigame_defs.hpp"
 #include "quest_import.hpp"
-#include "../game/item.hpp"
-#include "../game/item_effects.hpp"
-#include "../game/stat_gate.hpp"
+#include "../game/items/item.hpp"
+#include "../game/items/item_effects.hpp"
+#include "../game/pet/stat_gate.hpp"
 #include "../loaders/fixed_spots.hpp"
 #include "shops.hpp"
 #include <array>

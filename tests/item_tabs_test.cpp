@@ -1,5 +1,5 @@
 #define SDL_MAIN_HANDLED
-#include "../src/game/item_tabs.hpp"
+#include "../src/game/items/item_tabs.hpp"
 #include <cstdio>
 
 static int fails = 0;

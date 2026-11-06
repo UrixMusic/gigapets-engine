@@ -1,7 +1,7 @@
 // walk_draw.hpp - sliced out of runWalk() by tools/slice_walk.py: the lambdas of walk.cpp listed in the tool's spec are the methods of WorldDraw.
 // What they need from the rest of the walk session comes in through WorldDrawEnv, under the names they had, so the bodies read as before.
 #pragma once
-#include "../script_draw.hpp" // ScriptDrawer: draws a script's draw list
+#include "../ui/script_draw.hpp" // ScriptDrawer: draws a script's draw list
 #include "../../engine/gl_shader.hpp" // fragment shaders of mods
 #include <functional>
 #include <map>

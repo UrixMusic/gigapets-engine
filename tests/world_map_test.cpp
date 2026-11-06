@@ -1,6 +1,6 @@
 // tests/world_map_test.cpp - where the island map's marker goes (game/world_map.hpp).
 #include <cstdio>
-#include "../src/game/world_map.hpp"
+#include "../src/game/world/world_map.hpp"
 using namespace gp;
 
 int main()

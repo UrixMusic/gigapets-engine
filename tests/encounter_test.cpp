@@ -1,4 +1,4 @@
-#include "../src/game/encounter.hpp"
+#include "../src/game/npc/encounter.hpp"
 #include <cstdio>
 
 struct Case { const char *name; int pet, npc, player, animal; bool friends; };

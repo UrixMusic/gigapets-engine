@@ -1,0 +1,212 @@
+// fixed_spawn.hpp - the fixed placements Game_ProcessTick makes on area entry (hidden quest items, lost-and-found
+// items, legacy ground items), the "item 196 granted -> spawn 194 now" hook, and the quest-count spawns from
+// ProcessQuestTurnIn. Spots are data (FixedSpotDef in ContentDB), so mods add spots with the same gates.
+//
+// Order on area entry: events.enterArea(area, rnd) first (clear + random flowers), then spawnFixedSpots.
+// The ROM only does the fixed spawns on area transitions (Game_ProcessTick param_1 != 0), never on a plain tick.
+#pragma once
+#include <array>
+#include <functional>
+#include <string>
+#include <vector>
+#include "../../content/records.hpp"
+#include "pending_event.hpp"
+#include "../pet/player.hpp"
+
+namespace gp
+{
+
+    // What the gates need to know about the player. Adapter for Player below.
+    struct FixedSpawnEnv
+    {
+        std::function<int(int)> held;              // GetItemsHeld(item)
+        std::function<bool(int)> offered;          // HasItemBeenOffered(item): returned to the King
+        std::function<bool(int)> legacy;           // IsLegacyFlagSet(item)
+        std::function<bool(int)> triggered;        // HasEventBeenTriggered(n)
+        std::function<int(const Id &)> itemNumber; // item id -> item number, -1 if the db doesn't know it
+    };
+
+    inline bool fixedSpotAllowed(const FixedSpotDef &s, const FixedSpawnEnv &env)
+    {
+        const int item = env.itemNumber(s.item);
+        if (item < 0)
+            return false; // the db doesn't know this item (a removed mod): skip the spot
+        if (!s.prereqItem.empty())
+        {
+            const int pre = env.itemNumber(s.prereqItem);
+            if (pre < 0 || env.held(pre) <= 0)
+                return false;
+        }
+        if (s.notWhileHeld && env.held(item) > 0)
+            return false;
+        if (s.notOffered && env.offered(item))
+            return false;
+        if (s.notLegacyFlag && env.legacy(item))
+            return false;
+        if (s.trigger >= 0 && env.triggered(s.trigger))
+            return false;
+        return true;
+    }
+
+    // Game_ProcessTick(param_1 != 0) for one area. `spots` = db.fixedSpotsIn(area). Returns how many were placed.
+    // All are non-persistent (cleared and re-placed on each entry), category 0, no spawn slot. The trigger rides
+    // along so digging the spot sets it (WorldItems::dig).
+    inline int spawnFixedSpots(WorldItems &t, int area, const std::vector<const FixedSpotDef *> &spots,
+                               const FixedSpawnEnv &env)
+    {
+        int placed = 0;
+        for (const FixedSpotDef *s : spots)
+        {
+            if (!s || s->area != area)
+                continue;
+            if (!fixedSpotAllowed(*s, env))
+                continue;
+            const int item = env.itemNumber(s->item);
+            if (t.hasFixedEvent(area, item, s->x, s->y))
+                continue;
+            if (t.spawn(area, 0xffff, item, s->x, s->y, static_cast<EventState>(s->state),
+                        false, false, s->trigger) >= 0)
+                ++placed;
+        }
+        return placed;
+    }
+
+    // GrantItemOrEvent hook (0x2d6bd): granting item 196 in area 1 spawns 194 at once, so no re-entry is needed.
+    // Generalised through FixedSpotDef::spawnOnGrantItem. Like the ROM it checks only the trigger, not the prereq.
+    // Call it from wherever walk.cpp grants items, after the grant.
+    inline int onItemGranted(WorldItems &t, int area, int grantedItem,
+                             const std::vector<const FixedSpotDef *> &spots, const FixedSpawnEnv &env)
+    {
+        int placed = 0;
+        for (const FixedSpotDef *s : spots)
+        {
+            if (!s || s->area != area || s->spawnOnGrantItem.empty())
+                continue;
+            if (env.itemNumber(s->spawnOnGrantItem) != grantedItem)
+                continue;
+            const int item = env.itemNumber(s->item);
+            if (item < 0)
+                continue;
+            if (s->trigger >= 0 && env.triggered(s->trigger))
+                continue;
+            if (t.hasFixedEvent(area, item, s->x, s->y))
+                continue;
+            if (t.spawn(area, 0xffff, item, s->x, s->y, static_cast<EventState>(s->state),
+                        false, false, s->trigger) >= 0)
+                ++placed;
+        }
+        return placed;
+    }
+
+    // ProcessQuestTurnIn (0x197b9): exact-equality quest counts place a persistent item. These four are the base game's rows
+    // (imported as "base:quest_spawn/<count>" QuestSpawnDef records, which mods add to and change). Only item 262 is buried;
+    // the others lie on the ground. The random-slot rewards at counts 26, 55, 57, 94 (SpawnItemAtRandomFreeSlot) are not covered.
+    struct QuestCountSpawn
+    {
+        int count, area, item, x, y, state;
+    };
+    inline constexpr std::array<QuestCountSpawn, 4> kQuestCountSpawns = {{
+        {15, 3, 262, 2226, 136, 1},
+        {32, 9, 168, 1376, 938, 2},
+        {90, 5, 183, 1636, 617, 2},
+        {100, 5, 236, 2380, 640, 2},
+    }};
+
+    // The ROM's random-slot rewards of ProcessQuestTurnIn (SpawnItemAtRandomFreeSlot), the same rows with random = true:
+    // quest 26: 2x item 250 on the ground and 2x item 246 buried (area 0); 55: 5x item 251 (area 6); 57: 3x each of items 252, 254, 255, 256,
+    // 257 and 1x item 253 (area 6); 94: 5x item 251 (area 7), 4x item 249 on the ground (area 5), 4x item 248 on the ground (area 2).
+    // state 0 there is the buried "flower marker" kind of random find (the ROM's own name for it), 2 lies on the ground.
+    struct QuestRandomSpawn
+    {
+        int count, area, item, state, times;
+    };
+    inline constexpr std::array<QuestRandomSpawn, 12> kQuestRandomSpawns = {{
+        {26, 0, 250, 2, 2},
+        {26, 0, 246, 0, 2},
+        {55, 6, 251, 0, 5},
+        {57, 6, 252, 0, 3},
+        {57, 6, 254, 0, 3},
+        {57, 6, 255, 0, 3},
+        {57, 6, 256, 0, 3},
+        {57, 6, 257, 0, 3},
+        {57, 6, 253, 0, 1},
+        {94, 7, 251, 0, 5},
+        {94, 5, 249, 2, 4},
+        {94, 2, 248, 2, 4},
+    }};
+
+    // Place what turning in quest number `count` places. `rows` = db.questSpawnsFor(count). Returns how many were placed.
+    // A random row needs the area (areaOf) and the dice (rnd); with no area, or an area without spawn_points, it places nothing.
+    // Confirmed in the ROM (ProcessQuestTurnIn, 0x197b9): it compares g_totalQuestsCompleted, which still holds the number of the quest
+    // being handed in (LoadScriptedQuestData moves it on afterwards), so walk.cpp passes quests.counter. The ROM only does this for
+    // quest type mode 5 (scripted quests); the records do not check the type, so any quest with that number places its rows.
+    inline int spawnQuestCountItems(WorldItems &t, const std::vector<const QuestSpawnDef *> &rows,
+                                    const std::function<int(const Id &)> &itemNumber,
+                                    const std::function<const AreaDef *(int)> &areaOf = nullptr, const RandFn &rnd = nullptr)
+    {
+        int placed = 0;
+        for (const QuestSpawnDef *q : rows)
+        {
+            const int item = q ? itemNumber(q->item) : -1;
+            if (item < 0)
+                continue; // the db doesn't know this item (a removed mod)
+            if (q->random)
+            {
+                const AreaDef *a = areaOf ? areaOf(q->area) : nullptr;
+                if (!a || !rnd)
+                    continue;
+                for (int k = 0; k < q->times; ++k)
+                    if (t.spawnAtFreeSlot(*a, item, static_cast<EventState>(q->state), true, rnd))
+                        ++placed;
+                continue;
+            }
+            if (t.spawn(q->area, 0xffff, item, q->x, q->y, static_cast<EventState>(q->state), true, false, 0xffff) >= 0)
+                ++placed;
+        }
+        return placed;
+    }
+
+    // ---- Player adapter ----
+    // The only place that decides how legacy item numbers map onto Player's string keys. itemKey() must match
+    // whatever walk.cpp uses for Player::inventory keys; change it here if it differs.
+    inline std::string spawnItemKey(int item) { return "base:item/" + std::to_string(item); }
+    inline std::string offeredKey(const Id &item)
+    {
+        static const std::string pre = "base:item/";
+        if (item.compare(0, pre.size(), pre) == 0)
+            return "base:offered/" + item.substr(pre.size()); // same string as the old int version
+        return "offered:" + item;                             // mod ids, used as written
+    }
+    inline std::string offeredKey(int item) { return offeredKey(legacyItemId(item)); }       // SetItemOfferedFlag
+    inline std::string legacyKey(const Id &item) // SetLegacyFlag
+    {
+        static const std::string pre = "base:item/";
+        if (item.compare(0, pre.size(), pre) == 0)
+            return "base:legacy/" + item.substr(pre.size()); // same string as the old int version
+        return "legacy:" + item;                             // mod ids, used as written
+    }
+    inline std::string legacyKey(int item) { return legacyKey(legacyItemId(item)); }
+
+    inline void markOffered(Player &p, const Id &item) { p.setFlag(offeredKey(item)); }
+    inline void markOffered(Player &p, int item) { p.setFlag(offeredKey(item)); }
+    inline void markLegacy(Player &p, const Id &item) { p.setFlag(legacyKey(item)); }
+    inline void markLegacy(Player &p, int item) { p.setFlag(legacyKey(item)); }
+
+    // The returned env holds a reference to `p`; keep the Player alive while it is used.
+    inline FixedSpawnEnv playerSpawnEnv(const Player &p)
+    {
+        FixedSpawnEnv e;
+        e.held = [&p](int it)
+        { return p.itemCount(spawnItemKey(it)); };
+        e.offered = [&p](int it)
+        { return p.hasFlag(offeredKey(it)); };
+        e.legacy = [&p](int it)
+        { return p.hasFlag(legacyKey(it)); };
+        e.triggered = [&p](int n)
+        { return p.hasTrigger(n); };
+        e.itemNumber = [](const Id &id)
+        { return legacyItemNumber(id); };
+        return e;
+    }
+
+} // namespace gp

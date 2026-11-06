@@ -1,7 +1,7 @@
 // mod_species_test.cpp - the `species` record: a mod's own pet species (from scratch or a clone of another one) and its animation numbers.
 #include "../src/mods/mod_loader.hpp"
 #include "../src/loaders/png.hpp"
-#include "../src/game/save_player.hpp"
+#include "../src/game/data/save_player.hpp"
 #include <iostream>
 
 using namespace gp;

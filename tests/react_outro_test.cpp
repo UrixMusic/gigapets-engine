@@ -1,7 +1,7 @@
 // tests/react_outro_test.cpp - an NPC's reaction outro plays last frame to first, and nothing else changes.
 #include <cstdio>
 #include <vector>
-#include "../src/game/npc_actor.hpp"
+#include "../src/game/npc/npc_actor.hpp"
 using namespace gp;
 
 // Drive one forced animation the way walk.cpp's updateNpcAnim does (setAnim, then advanceAnim, every tick) and

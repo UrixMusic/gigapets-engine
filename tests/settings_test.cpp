@@ -1,6 +1,6 @@
 // tests/settings_test.cpp - the options screen's rules, the settings file, and the tutorial flags (game/settings.hpp).
 #include <cstdio>
-#include "../src/game/settings.hpp"
+#include "../src/game/data/settings.hpp"
 using namespace gp;
 
 int main()

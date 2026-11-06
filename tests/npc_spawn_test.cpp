@@ -1,5 +1,5 @@
 // g++ -std=c++17 -Wall -Wextra npc_spawn_test.cpp -o npc_spawn_test && ./npc_spawn_test
-#include "npc_spawn.hpp"
+#include "../src/game/npc/npc_spawn.hpp"
 #include <cstdio>
 using namespace gp;
 

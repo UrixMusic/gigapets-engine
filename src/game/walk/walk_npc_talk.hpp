@@ -5,8 +5,8 @@
 // Include after the game headers in walk.cpp, like walk_state.hpp.
 #pragma once
 #include "walk_services.hpp"
-#include "../sale.hpp"
-#include "../side_quest.hpp"
+#include "../items/sale.hpp"
+#include "../quests/side_quest.hpp"
 #include <cstdio>
 #include <memory>
 

@@ -1,6 +1,6 @@
 // tests/player_test.cpp
 #include <cstdio>
-#include "../src/game/player.hpp"
+#include "../src/game/pet/player.hpp"
 using namespace gp;
 
 static int fails = 0;

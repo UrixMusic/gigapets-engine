@@ -2,8 +2,8 @@
 // sad, hold 0.5 s, then the same animation again in reverse.
 #include <cstdio>
 #include <vector>
-#include "../src/game/npc_anim_ids.hpp"
-#include "../src/game/reaction_seq.hpp"
+#include "../src/game/npc/npc_anim_ids.hpp"
+#include "../src/game/npc/reaction_seq.hpp"
 using namespace gp;
 
 struct Play

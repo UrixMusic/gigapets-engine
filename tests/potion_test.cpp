@@ -1,6 +1,6 @@
 // tests/potion_test.cpp - colour potions (game/potion.hpp).
 #include <cstdio>
-#include "../src/game/potion.hpp"
+#include "../src/game/pet/potion.hpp"
 using namespace gp;
 
 int main()

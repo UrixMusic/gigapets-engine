@@ -2,7 +2,7 @@
 #include <cstdio>
 #include <string>
 #include <vector>
-#include "../src/game/menu_draw.hpp"
+#include "../src/game/ui/menu_draw.hpp"
 using namespace gp;
 
 struct Rec : Gfx

@@ -2,7 +2,7 @@
 #include <cstdio>
 #include <vector>
 #include <functional>
-#include "../src/game/encounter_sequence.hpp"
+#include "../src/game/npc/encounter_sequence.hpp"
 using namespace gp;
 
 static std::vector<int> g_drops;

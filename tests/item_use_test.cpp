@@ -1,6 +1,6 @@
 #include <cassert>
 #include <cstdio>
-#include "../src/game/item_use.hpp"
+#include "../src/game/items/item_use.hpp"
 
 using namespace gp;
 

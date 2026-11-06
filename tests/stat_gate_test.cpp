@@ -1,6 +1,6 @@
 // tests/stat_gate_test.cpp - the five guards in area 5 (game/stat_gate.hpp).
 #include <cstdio>
-#include "../src/game/stat_gate.hpp"
+#include "../src/game/pet/stat_gate.hpp"
 using namespace gp;
 
 int main()

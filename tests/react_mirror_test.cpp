@@ -1,6 +1,6 @@
 // tests/react_mirror_test.cpp - which pet reaction art is mirrored when the pet faces sideways.
 #include <cstdio>
-#include "../src/game/npc_anim_ids.hpp"
+#include "../src/game/npc/npc_anim_ids.hpp"
 using namespace gp;
 
 int main()

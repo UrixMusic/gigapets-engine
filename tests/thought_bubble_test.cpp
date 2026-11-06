@@ -1,6 +1,6 @@
 // tests/thought_bubble_test.cpp - the hungry and tired bubbles over the pet (game/thought_bubble.hpp).
 #include <cstdio>
-#include "../src/game/thought_bubble.hpp"
+#include "../src/game/pet/thought_bubble.hpp"
 using namespace gp;
 
 int main()

@@ -1,15 +1,15 @@
 // tuning_test.cpp - every tuning default equals the constant (the ROM's or measured value) it replaced, so the base game plays as
 // before until a mod sets something. Also: the values are read where they are used.
 #include "../engine/tuning.hpp"
-#include "../game/encounter_sequence.hpp"
-#include "../game/npc_brain.hpp"
-#include "../game/npc_stink.hpp"
-#include "../game/pending_event.hpp"
-#include "../game/pet_wash.hpp"
-#include "../game/player.hpp"
-#include "../game/quest_nudge.hpp"
-#include "../game/sale.hpp"
-#include "../game/thought_bubble.hpp"
+#include "../src/game/npc/encounter_sequence.hpp"
+#include "../src/game/npc/npc_brain.hpp"
+#include "../src/game/npc/npc_stink.hpp"
+#include "../src/game/npc/pending_event.hpp"
+#include "../src/game/pet/pet_wash.hpp"
+#include "../src/game/pet/player.hpp"
+#include "../src/game/quests/quest_nudge.hpp"
+#include "../src/game/items/sale.hpp"
+#include "../src/game/pet/thought_bubble.hpp"
 #include <cstdio>
 
 static int fails = 0;

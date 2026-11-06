@@ -2,7 +2,7 @@
 // end of RenderRoomObjects 0x04c9a3).
 #include <cstdio>
 #include <initializer_list>
-#include "../src/game/selector_icon.hpp"
+#include "../src/game/ui/selector_icon.hpp"
 using namespace gp;
 
 int main()

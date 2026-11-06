@@ -1,7 +1,7 @@
 // tests/npc_face_pet_test.cpp - a roaming NPC stops and turns to face the pet while it is in talking range
 // (TickAllPets, 0x03cc8e), then turns back to the front when the pet leaves.
 #include <cstdio>
-#include "../src/game/npc_actor.hpp"
+#include "../src/game/npc/npc_actor.hpp"
 using namespace gp;
 
 static NpcDef roamer()

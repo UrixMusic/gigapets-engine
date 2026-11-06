@@ -1,6 +1,6 @@
 // tests/npc_mood_test.cpp - roaming NPCs' sick, sad and stinky states (game/npc_actor.hpp).
 #include <cstdio>
-#include "../src/game/npc_actor.hpp"
+#include "../src/game/npc/npc_actor.hpp"
 using namespace gp;
 
 static NpcDef def(int flags, bool stationary = false)

@@ -1,8 +1,8 @@
 // tests/trick_guess_test.cpp - the Trick Teacher's code game (RunTrickGuessingMinigame @ 0x02f1cd).
 #include <cstdio>
-#include "../src/game/player.hpp"
-#include "../src/game/save_player.hpp"
-#include "../src/game/trick_guess.hpp"
+#include "../src/game/pet/player.hpp"
+#include "../src/game/data/save_player.hpp"
+#include "../src/game/minigames/trick_guess.hpp"
 using namespace gp;
 using TG = TrickGuess;
 using Ev = TrickGuess::Event;

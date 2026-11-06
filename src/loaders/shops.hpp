@@ -4,7 +4,7 @@
 // shop offers at once, weight. A zero item ends the list. (PickWeightedRandomItem 0x2ddfe sums the weights; ClampInventorySlotQuantities 0x2e381 reads the cap.)
 #pragma once
 #include "../content/db.hpp"
-#include "../game/shop.hpp"
+#include "../game/items/shop.hpp"
 #include "rom.hpp"
 
 namespace gp

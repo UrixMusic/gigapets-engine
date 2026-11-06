@@ -1,8 +1,8 @@
 // tests/trick_panel_test.cpp - the tricks panel's layout and keys (game/trick_panel.hpp).
 #include <cstdio>
-#include "../src/game/trick_panel.hpp"
+#include "../src/game/pet/trick_panel.hpp"
 #include "../src/content/records.hpp"
-#include "../src/game/player.hpp"
+#include "../src/game/pet/player.hpp"
 using namespace gp;
 
 int main()

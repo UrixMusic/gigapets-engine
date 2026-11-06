@@ -1,6 +1,6 @@
 // starter_pool_test.cpp - who the starter room holds: the species whose records say so, their colours, and how the 12 pets are rolled.
 // (The colours of the ROM's own three are read from the ROM, so they are not rolled here.)
-#include "../src/game/starter_pool.hpp"
+#include "../src/game/items/starter_pool.hpp"
 #include <iostream>
 #include <random>
 #include <set>

@@ -1,8 +1,8 @@
 #pragma once
 #include <cstdint>
 #include <vector>
-#include "../game/quest.hpp"
-#include "../game/quest_gen.hpp"
+#include "../game/quests/quest.hpp"
+#include "../game/quests/quest_gen.hpp"
 
 namespace gp
 {

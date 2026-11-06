@@ -5,7 +5,7 @@
 // Include after walk_services.hpp.
 #pragma once
 #include "walk_services.hpp"
-#include "../side_quest.hpp"
+#include "../quests/side_quest.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>

@@ -1,8 +1,8 @@
 // prize_pool_test.cpp - the minigame prize pickers: the base pools behave as before, a mod's pools are used, and pools a mod made
 // too small or empty never hang the game.
-#include "../game/item_pools.hpp"
-#include "../game/minigame_defs.hpp"
-#include "../game/three_in_a_row.hpp"
+#include "../src/game/items/item_pools.hpp"
+#include "../src/game/minigames/minigame_defs.hpp"
+#include "../src/game/minigames/three_in_a_row.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <memory>

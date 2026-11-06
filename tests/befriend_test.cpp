@@ -1,6 +1,6 @@
 // tests/befriend_test.cpp  (needs Rng from npc_brain.hpp)
 #include <cstdio>
-#include "../src/game/befriend.hpp"
+#include "../src/game/pet/befriend.hpp"
 using namespace gp;
 
 int main() {

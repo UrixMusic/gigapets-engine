@@ -8,11 +8,11 @@
 // What is written comes from the ROM, so it is for the user's own use: it is not part of the game's download.
 #pragma once
 #include "../content/db.hpp"
-#include "../game/color_machine.hpp"
+#include "../game/pet/color_machine.hpp"
 #include "../engine/audio_names.hpp"
 #include "../engine/gm_map.hpp"
 #include "../engine/rom_audio.hpp"
-#include "../game/npc_anim_ids.hpp"
+#include "../game/npc/npc_anim_ids.hpp"
 #include "../loaders/png.hpp"
 #include "../loaders/sprite.hpp"
 #include "manifest.hpp"

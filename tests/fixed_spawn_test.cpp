@@ -1,6 +1,6 @@
 // fixed_spawn_test.cpp - fixed hidden items, legacy ground items, the 196->194 hook, quest-count spawns and
 // the Player adapter. No ROM needed.
-#include "../src/game/fixed_spawn.hpp"
+#include "../src/game/npc/fixed_spawn.hpp"
 #include "../src/loaders/fixed_spots.hpp"
 #include <cstdio>
 #include <map>

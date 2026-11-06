@@ -7,7 +7,7 @@
 // exactly one of them is matched to the nearest. (Palette entries that share a colour are told apart by a blue one or two steps higher: see referenceColors.)
 #pragma once
 #include "../content/db.hpp"
-#include "../game/npc_anim_ids.hpp"
+#include "../game/npc/npc_anim_ids.hpp"
 #include "../loaders/import.hpp"
 #include "../loaders/png.hpp"
 #include "manifest.hpp"

@@ -8,7 +8,7 @@
 #include <vector>
 #include "../../mods/mod_state.hpp"
 #include "../../mods/native_mod.hpp"
-#include "../settings.hpp"
+#include "../data/settings.hpp"
 #include "fe_strings.hpp"
 #include "../../engine/keybinds.hpp"
 #include "../../mods/mod_loader.hpp" // (and with it stb_image for the icons)

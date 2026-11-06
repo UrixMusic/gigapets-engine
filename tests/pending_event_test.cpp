@@ -1,6 +1,6 @@
 // pending_event_test.cpp - pending-event table (dig spots, ground items) and the spawn-point loader.
 // Usage: pending_event_test [path/to/rom.u7]   (the real-ROM check is skipped if the ROM can't be opened)
-#include "../src/game/pending_event.hpp"
+#include "../src/game/npc/pending_event.hpp"
 #if defined(__has_include)
 #  if __has_include("../src/loaders/import.hpp")
 #    define HAVE_IMPORT 1

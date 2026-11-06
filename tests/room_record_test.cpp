@@ -1,7 +1,7 @@
 // room_record_test.cpp - the `room` patch (a home or hotel's exit point, a hotel's furnishing, its table of pieces): fields and errors.
 #include "../src/mods/mod_loader.hpp"
-#include "../src/game/room_scene.hpp"
-#include "../src/game/item.hpp"
+#include "../src/game/world/room_scene.hpp"
+#include "../src/game/items/item.hpp"
 #include <iostream>
 
 using namespace gp;

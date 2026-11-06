@@ -1,5 +1,5 @@
 // g++ -std=c++17 -Wall -Wextra sprite_anim_test.cpp -o sprite_anim_test && ./sprite_anim_test
-#include "sprite_anim.hpp"
+#include "../src/game/pet/sprite_anim.hpp"
 #include <cstdio>
 using namespace gp;
 

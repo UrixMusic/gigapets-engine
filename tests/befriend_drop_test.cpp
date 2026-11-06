@@ -2,7 +2,7 @@
 // 10th / 20th / 30th / 35th / 40th friend adds a milestone item (UpdateNPCEncounter step 0xc, SpawnPendingEvent 0x03f792).
 #include <cstdio>
 #include <vector>
-#include "../src/game/encounter_sequence.hpp"
+#include "../src/game/npc/encounter_sequence.hpp"
 using namespace gp;
 
 struct Drop

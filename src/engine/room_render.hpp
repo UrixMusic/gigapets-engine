@@ -2,7 +2,7 @@
 // Each layer is a 36 x 8 tilemap rendered with the same tileset code the overworld uses (render_content.hpp).
 #pragma once
 #include "../content/db.hpp"
-#include "../game/room_scene.hpp"
+#include "../game/world/room_scene.hpp"
 #include "../loaders/import.hpp"
 #include "render_content.hpp"
 

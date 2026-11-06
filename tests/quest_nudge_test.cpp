@@ -1,6 +1,6 @@
 // tests/quest_nudge_test.cpp - the "Go see Mayor Peter!" reminder timer (game/quest_nudge.hpp).
 #include <cstdio>
-#include "../src/game/quest_nudge.hpp"
+#include "../src/game/quests/quest_nudge.hpp"
 using namespace gp;
 
 int main()

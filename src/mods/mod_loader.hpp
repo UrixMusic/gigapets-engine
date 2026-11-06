@@ -4,10 +4,10 @@
 #include "../engine/midi.hpp"           // a mod's MIDI music
 #include "../engine/audio_clip.hpp"     // reading a mod's sound files
 #include "../engine/audio_registry.hpp" // the sounds and songs of the mods
-#include "../game/npc_anim_ids.hpp" // a species' art and the numbers of a mod's animations
+#include "../game/npc/npc_anim_ids.hpp" // a species' art and the numbers of a mod's animations
 #include "../content/db.hpp"
-#include "../game/item_use.hpp"  // itemActions(): the registry an item's use.action is checked against
-#include "../game/menu_draw.hpp" // kMenuPalette
+#include "../game/items/item_use.hpp"  // itemActions(): the registry an item's use.action is checked against
+#include "../game/ui/menu_draw.hpp" // kMenuPalette
 #include "../loaders/font.hpp"   // registerUiArt
 #include "manifest.hpp"
 #include "mod_state.hpp"

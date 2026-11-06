@@ -1,6 +1,6 @@
 // tests/offer_reward_test.cpp - what the king and Gardenia give back for a hand-in (game/offerings.hpp).
 #include <cstdio>
-#include "../src/game/offerings.hpp"
+#include "../src/game/items/offerings.hpp"
 using namespace gp;
 
 int main()

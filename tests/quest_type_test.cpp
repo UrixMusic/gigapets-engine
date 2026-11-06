@@ -1,7 +1,7 @@
 // quest_type_test.cpp - the `quest_type` record (a kind of generated quest a mod adds): fields, errors, and its own text lines.
 #include "../src/mods/mod_loader.hpp"
-#include "../src/game/quest_types.hpp"
-#include "../src/game/quest_text.hpp"
+#include "../src/game/quests/quest_types.hpp"
+#include "../src/game/quests/quest_text.hpp"
 #include <iostream>
 
 using namespace gp;

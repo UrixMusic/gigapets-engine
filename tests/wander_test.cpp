@@ -1,5 +1,5 @@
 // g++ -std=c++17 -Wall -Wextra wander_test.cpp -o wander_test && ./wander_test
-#include "wander.hpp"
+#include "../src/game/npc/wander.hpp"
 #include <cstdio>
 using namespace gp;
 

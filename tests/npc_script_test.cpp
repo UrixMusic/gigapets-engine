@@ -1,6 +1,6 @@
 // npc_script_test.cpp - an NPC driven by a script (NpcActor::scriptWalkTo / scriptFace / scriptStop / scriptRelease): it walks to the goal with the
 // pixel-exact wanderer's walk, stands still otherwise, and gives the roll of activities back on release. No ROM.
-#include "../src/game/npc_actor.hpp"
+#include "../src/game/npc/npc_actor.hpp"
 #include <cstdio>
 
 static int fails = 0;

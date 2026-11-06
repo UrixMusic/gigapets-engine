@@ -1,4 +1,4 @@
-#include "../src/game/frontend.hpp"
+#include "../src/game/frontend/frontend.hpp"
 #include <cstdio>
 #include <cstdlib>
 

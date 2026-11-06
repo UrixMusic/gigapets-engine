@@ -1,7 +1,7 @@
 // tests/trick_showcase_test.cpp - the teacher's trick showcase (TickPetNPCBehavior's trick states).
 #include <cstdio>
 #include <vector>
-#include "../src/game/trick_showcase.hpp"
+#include "../src/game/pet/trick_showcase.hpp"
 using namespace gp;
 
 // A fake teacher: every animation takes `frames` ticks. Returns the ids played, in order.

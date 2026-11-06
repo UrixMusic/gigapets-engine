@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <memory>
 #include "../src/engine/room_render.hpp"
-#include "../src/game/save_player.hpp"
+#include "../src/game/data/save_player.hpp"
 #include "../src/loaders/text.hpp"
 using namespace gp;
 

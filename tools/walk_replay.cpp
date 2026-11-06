@@ -3,7 +3,7 @@
 // Row: WALK,frame,actor,x,y,facing,style,phase,tx,ty,actionId,argTx,argTy   (state at ENTRY of TickActor_WalkWanderPath)
 // Row k is simulated for one tick and compared with row k+1 of the same actor, but only when the two
 // rows are exactly 2 video frames apart (one game tick).
-#include "npc_walk.hpp"
+#include "../src/game/npc/npc_walk.hpp"
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>

@@ -1,5 +1,5 @@
 #define SDL_MAIN_HANDLED
-#include "../src/game/debug_mode.hpp"
+#include "../src/game/ui/debug_mode.hpp"
 #include <cstdio>
 
 static int fails = 0;

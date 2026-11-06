@@ -1,6 +1,6 @@
 // tests/color_machine_test.cpp - the spaceship colour machine's rules (game/color_machine.hpp).
 #include <cstdio>
-#include "../src/game/color_machine.hpp"
+#include "../src/game/pet/color_machine.hpp"
 using namespace gp;
 
 int main()

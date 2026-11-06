@@ -1,9 +1,9 @@
 // species_art_test.cpp - the per-species animation roles (SpeciesArt): the base species' records hold what the old kXxx[3] tables did,
 // and code that asks artOf(species) sees a species a mod added.
-#include "../src/game/npc_anim_ids.hpp"
-#include "../src/game/pet_sit.hpp"
-#include "../src/game/pet_voice.hpp"
-#include "../src/game/trick_showcase.hpp"
+#include "../src/game/npc/npc_anim_ids.hpp"
+#include "../src/game/pet/pet_sit.hpp"
+#include "../src/game/pet/pet_voice.hpp"
+#include "../src/game/pet/trick_showcase.hpp"
 #include <algorithm>
 #include <cstdio>
 using namespace gp;

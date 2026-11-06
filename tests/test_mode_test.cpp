@@ -1,4 +1,4 @@
-#include "../src/game/test_mode.hpp"
+#include "../src/game/ui/test_mode.hpp"
 #include <cstdio>
 
 using namespace gp::testmode;

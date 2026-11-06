@@ -1,6 +1,6 @@
 // Runs the encounter state machine against a fake host and checks the visited steps against the original's
 // g_petSequenceStep numbers (measured in MAME: 2 3 6 7 8 9 10 11 12 20 21 22 23 for an angry encounter).
-#include "../src/game/encounter_sequence.hpp"
+#include "../src/game/npc/encounter_sequence.hpp"
 #include <cstdio>
 
 using gp::EncounterSequence;

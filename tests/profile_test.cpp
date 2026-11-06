@@ -1,5 +1,5 @@
 // profile_test.cpp - the profile file and the rule for who a new game offers (SpeciesDef::starterRoom / starterRequires).
-#include "../src/game/profile.hpp"
+#include "../src/game/data/profile.hpp"
 #include <iostream>
 
 using namespace gp;

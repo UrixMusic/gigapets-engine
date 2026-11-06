@@ -1,7 +1,7 @@
 // side_quest_test.cpp - the `side_quest` record (fields, errors) and the state of a side quest on the player: offer rules, accept, hand-in, reward, repeat.
 #include "../src/mods/mod_loader.hpp"
-#include "../src/game/side_quest.hpp"
-#include "../src/game/save_player.hpp"
+#include "../src/game/quests/side_quest.hpp"
+#include "../src/game/data/save_player.hpp"
 #include <iostream>
 
 using namespace gp;

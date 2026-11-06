@@ -2,8 +2,8 @@
 #include <cstdio>
 #include <random>
 #include <set>
-#include "../game/quest_flow.hpp"
-#include "../game/quest_types.hpp"
+#include "../src/game/quests/quest_flow.hpp"
+#include "../src/game/quests/quest_types.hpp"
 #include "quest_import.hpp"
 using namespace gp;
 #define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); return 1; } } while (0)

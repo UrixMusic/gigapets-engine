@@ -1,9 +1,9 @@
 // tests/pet_wash_test.cpp - washing the pet (HandlePetWashInteraction, activity 0x27).
 #include <cstdio>
 #include <vector>
-#include "../src/game/pet_sit.hpp"
-#include "../src/game/pet_wash.hpp"
-#include "../src/game/reaction_seq.hpp"
+#include "../src/game/pet/pet_sit.hpp"
+#include "../src/game/pet/pet_wash.hpp"
+#include "../src/game/npc/reaction_seq.hpp"
 using namespace gp;
 
 int main()

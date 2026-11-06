@@ -28,24 +28,24 @@
 
 #include "../game/frontend/fe_mods.hpp" // the Mods screen
 #include "../game/frontend/fe_strings.hpp" // the front end's words (reworded by text records)
-#include "../game/script_draw.hpp"
+#include "../game/ui/script_draw.hpp"
 #include "../engine/gl_shader.hpp"
-#include "../game/menu_draw.hpp"
-#include "../game/name_entry.hpp"
+#include "../game/ui/menu_draw.hpp"
+#include "../game/ui/name_entry.hpp"
 #include "rom.hpp"
 #include "sprite.hpp"
-#include "../game/player.hpp"
-#include "../game/save.hpp"
-#include "../game/save_player.hpp" // whatever the savePlayer header is called
-#include "../game/debug_mode.hpp"
-#include "../game/test_mode.hpp"
-#include "../game/settings.hpp"
+#include "../game/pet/player.hpp"
+#include "../game/data/save.hpp"
+#include "../game/data/save_player.hpp" // whatever the savePlayer header is called
+#include "../game/ui/debug_mode.hpp"
+#include "../game/ui/test_mode.hpp"
+#include "../game/data/settings.hpp"
 #include "../engine/audio.hpp"
 #include "../engine/display.hpp"
 #include "../engine/keybinds.hpp"
-#include "../game/pet_voice.hpp"
-#include "../game/potion.hpp"
-#include "../game/thought_bubble.hpp"
+#include "../game/pet/pet_voice.hpp"
+#include "../game/pet/potion.hpp"
+#include "../game/pet/thought_bubble.hpp"
 
 static void feSound(int id, int volume) { gp::audio().playSfx(id, volume); } // PlaySoundEffect(id, volume, 0)
 // PlaySoundFromCategory(species, category, volume)
@@ -54,16 +54,16 @@ static void feVoice(int species, int category, int volume = 0xbe)
     if (const int id = gp::petVoiceId(species, category); id >= 0)
         gp::audio().playSfx(id, volume);
 }
-#include "../game/dialogue.hpp"
+#include "../game/npc/dialogue.hpp"
 #include "app_context.hpp"
 #include "../loaders/import.hpp" // ContentDB + importRom: that is where the fonts live
 #include "../mods/mod_loader.hpp" // the mods' palettes: the slot pets wear their saved colours
-#include "../game/text_draw.hpp"
-#include "../game/starter_pool.hpp" // who the starter room holds, and the colour rolls
-#include "../game/pet_colour_save.hpp" // a mod colour is saved by its id
-#include "../game/profile.hpp" // what a new game offers (a species can need a profile key)
+#include "../game/ui/text_draw.hpp"
+#include "../game/items/starter_pool.hpp" // who the starter room holds, and the colour rolls
+#include "../game/data/pet_colour_save.hpp" // a mod colour is saved by its id
+#include "../game/data/profile.hpp" // what a new game offers (a species can need a profile key)
 #include "../mods/script_check.hpp"
-#include "../game/quest_text.hpp"
+#include "../game/quests/quest_text.hpp"
 #include <memory>
 
 using namespace gp;

@@ -1,6 +1,6 @@
 // tests/npc_stink_test.cpp - stink spreading between the pet and the NPC beside it (game/npc_stink.hpp).
 #include <cstdio>
-#include "../src/game/npc_stink.hpp"
+#include "../src/game/npc/npc_stink.hpp"
 using namespace gp;
 
 // Runs `checks` whole checks (each kStinkCheckTicks steps) and returns the first non-None event, or None.

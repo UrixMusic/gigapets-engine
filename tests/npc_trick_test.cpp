@@ -1,6 +1,6 @@
 // tests/npc_trick_test.cpp - what an idle NPC does for a trick (TickAllPets: the roll table and the repeat counts).
 #include <cstdio>
-#include "../src/game/npc_brain.hpp"
+#include "../src/game/npc/npc_brain.hpp"
 using namespace gp;
 
 int main()

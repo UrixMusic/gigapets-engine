@@ -1,5 +1,5 @@
 // tests/objective_test.cpp - the HUD objectives scripts put up (objective.set): the Player's list and its place in the save.
-#include "../src/game/save_player.hpp"
+#include "../src/game/data/save_player.hpp"
 #include <cstdio>
 
 using namespace gp;

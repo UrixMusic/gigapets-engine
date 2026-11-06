@@ -1,6 +1,6 @@
 // pet_colour_save_test.cpp - the pet's colour when it is a mod palette: the save keeps the palette's id, the numbers hold the species
 // default, and a load turns the id back into this session's number.
-#include "../game/pet_colour_save.hpp"
+#include "../src/game/data/pet_colour_save.hpp"
 #include <cstdio>
 
 static int fails = 0;

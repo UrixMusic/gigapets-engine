@@ -1,6 +1,6 @@
 // tests/sale_test.cpp - what Jeremy pays (game/sale.hpp).
 #include <cstdio>
-#include "../src/game/sale.hpp"
+#include "../src/game/items/sale.hpp"
 using namespace gp;
 
 int main()

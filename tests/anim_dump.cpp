@@ -11,7 +11,7 @@
 // turn-around art is drawn the other way round, so they use it when facing right). That it is a flip is an
 // inference from this pairing, not something the code states.
 #pragma once
-#include "npc_walk.hpp"
+#include "../src/game/npc/npc_walk.hpp"
 
 namespace gp {
 
