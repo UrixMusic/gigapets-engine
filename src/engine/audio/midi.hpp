@@ -33,7 +33,7 @@
 #include <map>
 #include <string>
 #include <vector>
-#include "gm_map.hpp"
+#include "../gm_map.hpp"
 #include "rom_audio.hpp"
 
 #if defined(__GNUC__) && !defined(__clang__)

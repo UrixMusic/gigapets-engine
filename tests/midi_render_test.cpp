@@ -1,5 +1,5 @@
 // midi_render_test.cpp <rom> - a MIDI file played with the ROM's instruments: through the Audio class, like a mod's `music` record with a .mid file.
-#include "../src/engine/audio.hpp"
+#include "../src/engine/audio/audio.hpp"
 #include <filesystem>
 #include <fstream>
 #include <iostream>

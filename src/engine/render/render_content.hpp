@@ -3,8 +3,8 @@
 // (x - originX - anchorX, y - originY - anchorY + 1), which the importer folded into ObjectType::art.dx/dy.
 #pragma once
 #include "image.hpp"
-#include "ground.hpp"
-#include "../content/db.hpp"
+#include "../ground.hpp"
+#include "../../content/db.hpp"
 #include <algorithm>
 #include <unordered_map>
 

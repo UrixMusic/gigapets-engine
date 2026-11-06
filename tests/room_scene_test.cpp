@@ -2,7 +2,7 @@
 // Usage: room_scene_test [path/to/rom.u7]   (the ROM checks are skipped if it can't be opened)
 #include <cstdio>
 #include <memory>
-#include "../src/engine/room_render.hpp"
+#include "../src/engine/render/room_render.hpp"
 #include "../src/game/data/save_player.hpp"
 #include "../src/loaders/text.hpp"
 using namespace gp;

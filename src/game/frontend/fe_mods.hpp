@@ -10,7 +10,7 @@
 #include "../../mods/native_mod.hpp"
 #include "../data/settings.hpp"
 #include "fe_strings.hpp"
-#include "../../engine/keybinds.hpp"
+#include "../../engine/input/keybinds.hpp"
 #include "../../mods/mod_loader.hpp" // (and with it stb_image for the icons)
 
 namespace gp::fe

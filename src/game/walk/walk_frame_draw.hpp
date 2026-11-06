@@ -1,7 +1,7 @@
 // walk_frame_draw.hpp - sliced out of runWalk() by tools/slice_walk.py: the lambdas of walk.cpp listed in the tool's spec are the methods of FrameDraw.
 // What they need from the rest of the walk session comes in through FrameDrawEnv, under the names they had, so the bodies read as before.
 #pragma once
-#include "../../engine/gl_shader.hpp" // shaders on things of the world (world.shade)
+#include "../../engine/render/gl_shader.hpp" // shaders on things of the world (world.shade)
 #include <functional>
 #include <map>
 #include <memory>

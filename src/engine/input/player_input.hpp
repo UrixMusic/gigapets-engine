@@ -18,7 +18,7 @@
 // The CALLER must also check (see HandlePetStageEvents): game state == 6, and that
 // g_petInteractionMode != 1 when a direction is held (otherwise the game starts pet activity 8 instead).
 #pragma once
-#include "collision.hpp"
+#include "../collision.hpp"
 #include <vector>
 
 namespace gp {

@@ -5,7 +5,7 @@
 #include <map>
 #include <vector>
 
-#include "../content/db.hpp"
+#include "../../content/db.hpp"
 
 // A db animation plus its SDL textures (one per frame, same order).
 struct AnimRef

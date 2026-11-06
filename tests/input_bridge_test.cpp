@@ -1,6 +1,6 @@
 // input_bridge_test.cpp - a controller and the mouse as the game's actions: the key events they turn into, what they hold, the rules of the stick, the mouse's right button.
 #define SDL_MAIN_HANDLED
-#include "../src/engine/input_bridge.hpp"
+#include "../src/engine/input/input_bridge.hpp"
 #include <iostream>
 
 using namespace gp;

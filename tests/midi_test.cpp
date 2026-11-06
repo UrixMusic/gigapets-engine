@@ -1,6 +1,6 @@
 // midi_test.cpp - a MIDI file as a song for the ROM's player (engine/midi.hpp): timing, tempo changes, notes, programs, drums, controllers,
 // pitch bend, sustain, and the files it refuses.
-#include "../src/engine/midi.hpp"
+#include "../src/engine/audio/midi.hpp"
 #include <iostream>
 
 using namespace gp;

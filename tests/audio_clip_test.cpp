@@ -1,6 +1,6 @@
 // audio_clip_test.cpp [file.ogg] - the clips a mod's sound files become (engine/audio_clip.hpp): WAV reading, pitch, gain and loop points.
 // With an .ogg path as the argument it also decodes that file (no Ogg file is kept in the repository).
-#include "../src/engine/audio_clip.hpp"
+#include "../src/engine/audio/audio_clip.hpp"
 #include <filesystem>
 #include <iostream>
 

@@ -1,9 +1,9 @@
 // room_render.hpp - the background of a home or hotel room as one image: the wall layer, then the floor layer on top.
 // Each layer is a 36 x 8 tilemap rendered with the same tileset code the overworld uses (render_content.hpp).
 #pragma once
-#include "../content/db.hpp"
-#include "../game/world/room_scene.hpp"
-#include "../loaders/import.hpp"
+#include "../../content/db.hpp"
+#include "../../game/world/room_scene.hpp"
+#include "../../loaders/import.hpp"
 #include "render_content.hpp"
 
 namespace gp

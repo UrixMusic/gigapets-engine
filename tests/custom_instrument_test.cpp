@@ -1,6 +1,6 @@
 // custom_instrument_test.cpp <rom> - a mod's instruments and drums: the sound engine plays their samples (with a loop, an envelope, zones),
 // and the instrument / drum records load, number and report mistakes.
-#include "../src/engine/audio.hpp"
+#include "../src/engine/audio/audio.hpp"
 #include "../src/mods/mod_loader.hpp"
 #include <cmath>
 #include <filesystem>

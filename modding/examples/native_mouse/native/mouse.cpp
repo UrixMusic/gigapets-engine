@@ -5,7 +5,7 @@
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
 #include "mods/native_mod.hpp"
-#include "engine/keybinds.hpp"
+#include "engine/input/keybinds.hpp"
 
 static bool (*origHeld)(const gp::KeyBinds *, const Uint8 *, gp::Action);
 

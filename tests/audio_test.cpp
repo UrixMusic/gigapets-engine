@@ -2,7 +2,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
-#include "../src/engine/audio.hpp"
+#include "../src/engine/audio/audio.hpp"
 using namespace gp;
 
 int main(int, char **)

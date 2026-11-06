@@ -4,7 +4,7 @@
 #include <SDL.h>
 #include <cmath>
 #include "mods/native_mod.hpp"       // GpNativeApi
-#include "game/thought_bubble.hpp"   // gp::ThoughtTimer
+#include "game/pet/thought_bubble.hpp"   // gp::ThoughtTimer
 
 // the pointers the old versions are reached by
 static bool (*origSick)(gp::ThoughtTimer &, bool, bool, bool);

@@ -26,7 +26,7 @@
 #if defined(GP_SPLIT) && !defined(GP_STB_IMPL) // the program in several .cpp files: gigapets.cpp holds the one copy of the decoder, the others only its declarations
 #define STB_VORBIS_HEADER_ONLY
 #endif
-#include "../../third_party/stb/stb_vorbis.c"
+#include "../../../third_party/stb/stb_vorbis.c"
 #undef L
 #undef C
 #undef R

@@ -1,6 +1,6 @@
 // midi_export_test.cpp <rom> - the ROM's songs written as MIDI and read back (engine/midi_export.hpp + midi.hpp): the same notes come back.
-#include "../src/engine/midi.hpp"
-#include "../src/engine/midi_export.hpp"
+#include "../src/engine/audio/midi.hpp"
+#include "../src/engine/audio/midi_export.hpp"
 #include <iostream>
 #include <set>
 #include <tuple>

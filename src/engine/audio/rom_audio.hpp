@@ -6,7 +6,7 @@
 //            held in ROM words 0xfa5f (lo) / 0xfa60 (hi); the result is a word address
 // Everything is rendered offline into stereo float buffers at the mixer's rate; the Audio class turns them into clips.
 #pragma once
-#include "../loaders/rom.hpp"
+#include "../../loaders/rom.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>

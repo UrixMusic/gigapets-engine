@@ -5,7 +5,7 @@
 #include <map>
 #include <memory>
 #include <vector>
-#include "../../engine/input_bridge.hpp" // gp::pollEvent: controller and mouse input as key events
+#include "../../engine/input/input_bridge.hpp" // gp::pollEvent: controller and mouse input as key events
 
 struct FrontEventsEnv
 {

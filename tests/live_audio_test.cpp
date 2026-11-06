@@ -1,5 +1,5 @@
 // live_audio_test.cpp <rom> - the Audio class's live music switch (setLive), on SDL's dummy audio device.
-#include "../src/engine/audio.hpp"
+#include "../src/engine/audio/audio.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>

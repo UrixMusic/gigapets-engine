@@ -22,8 +22,8 @@ extern "C"
 #include <set>
 #include <string>
 #include <vector>
-#include "../engine/audio_registry.hpp" // a mod's sound and music ids
-#include "../engine/mouse_state.hpp"    // input.mouse() / ctx.mouse
+#include "../engine/audio/audio_registry.hpp" // a mod's sound and music ids
+#include "../engine/input/mouse_state.hpp"    // input.mouse() / ctx.mouse
 #include "../engine/registry.hpp"
 #include "../engine/systems.hpp" // the engine's named systems a mod can wrap or replace
 

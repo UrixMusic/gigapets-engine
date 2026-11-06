@@ -1,6 +1,6 @@
 // tests/layout_test.cpp   (needs -Isrc/engine)
 #include <cstdio>
-#include "text_layout.hpp"
+#include "render/text_layout.hpp"
 
 static int fails = 0;
 static void check(const char* what, bool ok) { std::printf("%s  %s\n", ok ? "PASS" : "FAIL", what); if (!ok) fails++; }

@@ -29,7 +29,7 @@
 #include "../game/frontend/fe_mods.hpp" // the Mods screen
 #include "../game/frontend/fe_strings.hpp" // the front end's words (reworded by text records)
 #include "../game/ui/script_draw.hpp"
-#include "../engine/gl_shader.hpp"
+#include "../engine/render/gl_shader.hpp"
 #include "../game/ui/menu_draw.hpp"
 #include "../game/ui/name_entry.hpp"
 #include "rom.hpp"
@@ -40,9 +40,9 @@
 #include "../game/ui/debug_mode.hpp"
 #include "../game/ui/test_mode.hpp"
 #include "../game/data/settings.hpp"
-#include "../engine/audio.hpp"
-#include "../engine/display.hpp"
-#include "../engine/keybinds.hpp"
+#include "../engine/audio/audio.hpp"
+#include "../engine/render/display.hpp"
+#include "../engine/input/keybinds.hpp"
 #include "../game/pet/pet_voice.hpp"
 #include "../game/pet/potion.hpp"
 #include "../game/pet/thought_bubble.hpp"

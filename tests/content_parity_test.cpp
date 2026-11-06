@@ -2,8 +2,8 @@
 // Needs render.hpp to include engine/image.hpp instead of defining its own Image/blit (see image.hpp).
 // Usage: content_parity_test <rom>
 #include "../src/loaders/import.hpp"
-#include "../src/engine/render.hpp"
-#include "../src/engine/render_content.hpp"
+#include "../src/engine/render/render.hpp"
+#include "../src/engine/render/render_content.hpp"
 #include "../src/engine/area_runtime.hpp"
 #include <cstdio>
 

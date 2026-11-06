@@ -2,7 +2,7 @@
 // What they need from the rest of the walk session comes in through WorldDrawEnv, under the names they had, so the bodies read as before.
 #pragma once
 #include "../ui/script_draw.hpp" // ScriptDrawer: draws a script's draw list
-#include "../../engine/gl_shader.hpp" // fragment shaders of mods
+#include "../../engine/render/gl_shader.hpp" // fragment shaders of mods
 #include <functional>
 #include <map>
 #include <memory>

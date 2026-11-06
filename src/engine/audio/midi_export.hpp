@@ -15,7 +15,7 @@
 #include <fstream>
 #include <map>
 #include <sstream>
-#include "gm_map.hpp"
+#include "../gm_map.hpp"
 #include "rom_audio.hpp"
 
 namespace gp

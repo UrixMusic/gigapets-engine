@@ -18,9 +18,9 @@ extern bool smoothCam; // walk.cpp
 #endif
 #include "../mods/export_base.hpp"
 #include "../mods/export_frames.hpp"
-#include "../engine/instrument_export.hpp"
-#include "../engine/midi_export.hpp"
-#include "../engine/midi.hpp"
+#include "../engine/audio/instrument_export.hpp"
+#include "../engine/audio/midi_export.hpp"
+#include "../engine/audio/midi.hpp"
 
 int main(int argc, char **argv)
 {

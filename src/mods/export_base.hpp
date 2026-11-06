@@ -9,9 +9,9 @@
 #pragma once
 #include "../content/db.hpp"
 #include "../game/pet/color_machine.hpp"
-#include "../engine/audio_names.hpp"
+#include "../engine/audio/audio_names.hpp"
 #include "../engine/gm_map.hpp"
-#include "../engine/rom_audio.hpp"
+#include "../engine/audio/rom_audio.hpp"
 #include "../game/npc/npc_anim_ids.hpp"
 #include "../loaders/png.hpp"
 #include "../loaders/sprite.hpp"

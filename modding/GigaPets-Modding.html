@@ -405,7 +405,7 @@ end</code></pre>
 <pre class="code"><code>{ "id": "native_demo", "name": "Native Demo", "version": "1.0", "game_api": "1", "native": "native/demo.dll" }</code></pre>
 <p>and <code>native/demo.cpp</code> is the whole mod:</p>
 <pre class="code"><code>#include "mods/native_mod.hpp"      // GpNativeApi, GP_NATIVE_MOD_ABI
-#include "game/thought_bubble.hpp"  // gp::ThoughtTimer
+#include "game/pet/thought_bubble.hpp"  // gp::ThoughtTimer
 
 static bool (*origSick)(gp::ThoughtTimer &amp;, bool, bool, bool);
 static bool mySick(gp::ThoughtTimer &amp;t, bool sick, bool walking, bool bubbleUp)

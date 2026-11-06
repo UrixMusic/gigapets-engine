@@ -1,5 +1,5 @@
 // live_music_test.cpp <rom> - a song played as it goes (rau::SongPlayer) sounds the same as the baked one (RomAudio::renderSong).
-#include "../src/engine/rom_audio.hpp"
+#include "../src/engine/audio/rom_audio.hpp"
 #include <cmath>
 #include <cstdio>
 

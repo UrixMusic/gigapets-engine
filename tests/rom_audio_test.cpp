@@ -1,5 +1,5 @@
 // rom_audio_test.cpp - the ROM sound decoder: usage rom_audio_test [rom.u7]
-#include "../src/engine/rom_audio.hpp"
+#include "../src/engine/audio/rom_audio.hpp"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>

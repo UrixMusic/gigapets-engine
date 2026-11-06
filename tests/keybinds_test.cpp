@@ -1,7 +1,7 @@
 // tests/keybinds_test.cpp - the key bindings (engine/keybinds.hpp).
 #define SDL_MAIN_HANDLED
 #include <cstdio>
-#include "../src/engine/keybinds.hpp"
+#include "../src/engine/input/keybinds.hpp"
 using namespace gp;
 
 int main()

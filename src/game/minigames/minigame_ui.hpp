@@ -4,7 +4,7 @@
 // Everything the minigames need from the rest of the game comes in through MinigameEnv (references to shared
 // objects plus a few callbacks), so this file never touches walk.cpp's locals.
 #pragma once
-#include "../../engine/display.hpp"
+#include "../../engine/render/display.hpp"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <array>
@@ -15,14 +15,14 @@
 #include <vector>
 
 #include "../../loaders/import.hpp"
-#include "../../engine/render_content.hpp"
+#include "../../engine/render/render_content.hpp"
 #include "../pet/player.hpp"
 #include "../npc/dialogue.hpp"
 #include "../items/item.hpp"
 #include "../items/offerings.hpp"
 #include "../ui/menu_draw.hpp"
 #include "swift_pick.hpp"
-#include "../../engine/sprite_cache.hpp"
+#include "../../engine/render/sprite_cache.hpp"
 #include "three_in_a_row.hpp"
 #include "memory_match.hpp"
 #include "trick_guess.hpp"

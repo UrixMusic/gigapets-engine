@@ -1,9 +1,9 @@
 // mod_loader.hpp - importMods: scan mods/, sort, apply records on top of the db (after importRom).
 // Phase 1: only the "text" record type exists. Every other type is a loud error, so typos can't pass silently.
 #pragma once
-#include "../engine/midi.hpp"           // a mod's MIDI music
-#include "../engine/audio_clip.hpp"     // reading a mod's sound files
-#include "../engine/audio_registry.hpp" // the sounds and songs of the mods
+#include "../engine/audio/midi.hpp"           // a mod's MIDI music
+#include "../engine/audio/audio_clip.hpp"     // reading a mod's sound files
+#include "../engine/audio/audio_registry.hpp" // the sounds and songs of the mods
 #include "../game/npc/npc_anim_ids.hpp" // a species' art and the numbers of a mod's animations
 #include "../content/db.hpp"
 #include "../game/items/item_use.hpp"  // itemActions(): the registry an item's use.action is checked against

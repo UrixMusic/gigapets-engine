@@ -1,5 +1,5 @@
 // instrument_export_test.cpp <rom> - `--export-instruments`: a WAV for each of the ROM's instruments and drums, and the list of their numbers.
-#include "../src/engine/instrument_export.hpp"
+#include "../src/engine/audio/instrument_export.hpp"
 #include <iostream>
 
 using namespace gp;

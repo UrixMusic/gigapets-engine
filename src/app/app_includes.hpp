@@ -5,17 +5,17 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include "../engine/tuning.hpp"
-#include "../engine/input_bridge.hpp"
+#include "../engine/input/input_bridge.hpp"
 #include "../game/frontend/fe_strings.hpp" // the front end's words are texts a mod may replace: they exist in every db the mods load into
 #include <SDL2/SDL.h>
 #include "../loaders/import.hpp"
 #include "../engine/collision.hpp"
 #include "../engine/registry.hpp"
 #include "../game/data/pet_colour_save.hpp"
-#include "../engine/player_input.hpp"
+#include "../engine/input/player_input.hpp"
 #include "../engine/ground.hpp"
 #include "../engine/area_runtime.hpp"
-#include "../engine/render_content.hpp"
+#include "../engine/render/render_content.hpp"
 #include "../game/npc/npc_actor.hpp"
 #include "../game/pet/player.hpp"
 #include "../game/npc/dialogue.hpp"
@@ -24,8 +24,8 @@
 #include "../game/npc/encounter_sequence.hpp"
 #include "../game/ui/text_draw.hpp"
 #include "../game/items/shop.hpp" // with the other includes
-#include "../engine/render.hpp"
-#include "../engine/sprite_cache.hpp" // AnimRef, SpriteCache
+#include "../engine/render/render.hpp"
+#include "../engine/render/sprite_cache.hpp" // AnimRef, SpriteCache
 #include "../game/ui/menu_draw.hpp"
 #include "../game/items/item_tabs.hpp"
 #include "../game/quests/story_blast.hpp"
@@ -54,9 +54,9 @@
 #include "../game/world/world_map.hpp"
 #include "../game/npc/npc_stink.hpp"
 #include "../game/items/sale.hpp"
-#include "../engine/audio.hpp"
-#include "../engine/display.hpp"
-#include "../engine/keybinds.hpp"
+#include "../engine/audio/audio.hpp"
+#include "../engine/render/display.hpp"
+#include "../engine/input/keybinds.hpp"
 #include "../game/pet/stat_notify.hpp"
 #include "../game/minigames/swift_pick.hpp"
 #include "../mods/mod_loader.hpp"
@@ -68,7 +68,7 @@
 #include "../game/pet/pet_wash.hpp"
 #include "../game/ui/selector_icon.hpp"
 #include "../game/world/room_scene.hpp"
-#include "../engine/room_render.hpp"
+#include "../engine/render/room_render.hpp"
 #include "../game/items/item_pools.hpp"
 #include "../game/world/interactions.hpp"
 #include "../mods/script_host.hpp"

@@ -2,7 +2,7 @@
 // Usage: anim_all <rom> <outdir> [paletteId] [maxId]
 // The output folder must already exist.
 #include "png.hpp"
-#include "render.hpp"
+#include "render/render.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>

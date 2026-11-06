@@ -11,7 +11,7 @@
 #include <map>
 #include <string>
 #include <vector>
-#include "../../engine/sprite_cache.hpp" // AnimRef
+#include "../../engine/render/sprite_cache.hpp" // AnimRef
 #include "../../mods/script_host.hpp"    // DrawCmd
 
 class ScriptDrawer
