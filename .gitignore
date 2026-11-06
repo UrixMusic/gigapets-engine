@@ -14,8 +14,8 @@ GigaEditrV1.4.html
 *.rom
 *.u7
 *.txt
-*.md
 rom/
 
 dist/
+docs/
 exportfolder/
