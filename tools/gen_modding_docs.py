@@ -224,6 +224,13 @@ def records():
         if idx is None:
             continue
         c = comment_above(lines, idx)
+        # a type whose other modes are written by a second function (its comment is the rest of the description)
+        for more in {"object": ["applyObjectEdit"], "area": ["applyAreaPatch"], "objtype": ["applyObjTypeShadowPatch"], "gate": ["findObjectById"]}.get(typ, []):
+            j = next((i for i, ln in enumerate(lines) if re.search(r"inline \S+ %s\(" % more, ln)), None)
+            if j is not None:
+                extra = comment_above(lines, j)
+                if extra and extra != c:
+                    c = c + ([""] if c else []) + extra
         allowed = []
         window = "\n".join(lines[idx: idx + 60])
         am = re.search(r"allowed\s*\{(.*?)\};", window, re.S)
