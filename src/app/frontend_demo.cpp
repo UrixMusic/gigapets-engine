@@ -129,6 +129,8 @@ struct MenuView
 };
 
 inline gp::fe::ModsUi gModsUi; // the Mods screen's state (fe_mods.hpp)
+inline bool gFrontReload = false; // the player changed the mods: the front end ends and is started again (kFrontReload)
+constexpr int kFrontReload = -2;
 
 inline void drawMainMenu(FrontGfx &g, const MenuView &v)
 {
@@ -1583,6 +1585,8 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
                 std::fprintf(stderr, "front end: mod error: %s\n", w.c_str());
             for (const std::string &p : gp::checkModScripts(*uiDb, feRep, feScripts, "mods")) // (a script that does not load is reported by the game itself, once it starts)
                 std::printf("front end: script: %s\n", p.c_str());
+            gModsUi.problems = feRep.errors;
+            gModsUi.problems.insert(gModsUi.problems.end(), feRep.warnings.begin(), feRep.warnings.end());
             gp::resolveModPalettes(rom, *uiDb);
             // Every (font style, palette) pair the front end draws with, imported up front so the db never
             // changes once a TextDrawer holds a pointer into it. drawTextBox's first two arguments are
@@ -1941,8 +1945,10 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
             shotFrame = sf ? std::atoi(sf) : 120;
         }
         std::vector<std::pair<int, SDL_Keycode>> testKeys;
-        if (const char *ks = std::getenv("GP_FE_KEYS"))
+        static bool keysUsed = false; // (the test keys play once: the front end can start again after the Mods screen)
+        if (const char *ks = keysUsed ? nullptr : std::getenv("GP_FE_KEYS"))
         {
+            keysUsed = true;
             const std::string all = ks;
             for (size_t at = 0; at < all.size();)
             {
@@ -2008,6 +2014,11 @@ int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFram
     {
         std::fprintf(stderr, "error: %s\n", ex.what());
         return -1;
+    }
+    if (gFrontReload)
+    {
+        gFrontReload = false;
+        return kFrontReload;
     }
     return chosenSlot;
 }

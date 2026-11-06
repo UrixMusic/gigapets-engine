@@ -22,6 +22,8 @@ namespace gp::fe
         int cur = 0, scroll = 0;
         bool order = false; // order mode (C)
         bool held = false;  // order mode: the selected mod is picked up (Up / Down move it)
+        bool changed = false; // something was switched or moved: the front end loads again when the player leaves
+        std::vector<std::string> problems; // what went wrong when the mods loaded (errors and warnings, as the loader worded them)
         std::map<std::string, SDL_Texture *> icons;
         static constexpr int kRows = 11;
 
@@ -33,6 +35,7 @@ namespace gp::fe
             list = scanMods(dir, state);
             cur = scroll = 0;
             order = held = false;
+            changed = false;
         }
         const ModEntry *selected() const { return cur >= 0 && cur < int(list.size()) ? &list[size_t(cur)] : nullptr; }
 
@@ -88,6 +91,7 @@ namespace gp::fe
             for (const ModEntry &e : list)
                 state.order.push_back(e.m.id);
             saveModState(state, statePath);
+            changed = true;
             list = scanMods(dir, state);
             for (int i = 0; i < int(list.size()); ++i)
                 if (list[size_t(i)].m.id == keepId)
@@ -139,6 +143,14 @@ namespace gp::fe
         };
         for (char c : text)
         {
+            if (word.size() >= cols) // a word longer than a line is cut
+            {
+                if (!line.empty())
+                    out.push_back(line);
+                line.clear();
+                out.push_back(word);
+                word.clear();
+            }
             if (c == ' ' || c == '\n')
             {
                 flushWord();
@@ -236,6 +248,28 @@ namespace gp::fe
                     g.drawTextBox(2, 0x105, 170, y, ln, 140, 0, L);
                     y += 12;
                 }
+            {   // what went wrong when this mod loaded
+                int n = 0;
+                std::string first;
+                for (const std::string &p : ui.problems)
+                    if (p.find("[" + e->m.id + "]") != std::string::npos || p.find("'" + e->m.id + "'") != std::string::npos)
+                        if (n++ == 0)
+                            first = p;
+                if (n)
+                {
+                    g.drawTextBox(2, 0x105, 170, y, std::to_string(n) + feText(n == 1 ? "mods_problem" : "mods_problems"), 140, 0, L);
+                    y += 12;
+                    const size_t brk = first.find("] ");
+                    int lines = 0;
+                    for (const std::string &ln : wrapLines(brk != std::string::npos ? first.substr(brk + 2) : first, 20))
+                    {
+                        if (lines++ == 3)
+                            break;
+                        g.drawTextBox(2, 0x105, 170, y, ln, 140, 0, L);
+                        y += 12;
+                    }
+                }
+            }
             y += 4;
             for (const std::string &ln : wrapLines(e->m.description, 20))
             {

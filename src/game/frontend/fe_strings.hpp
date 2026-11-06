@@ -20,8 +20,8 @@ namespace gp::fe
         {"opt_retro", "Retro Audio"}, {"opt_live", "Music Playback"}, {"opt_test", "Test Mode"}, {"key_prefix", "Key: "}, {"key_press", "Press a key"},
         {"on", "On"}, {"off", "Off"}, {"perfect", "Perfect"}, {"stretch", "Stretch"}, {"live", "Live"}, {"baked", "Baked"},
         {"mods", "Mods"}, {"mods_title", "Mods"}, {"mods_none", "No mods installed."}, {"mods_version", "Version "}, {"mods_on", "On"}, {"mods_off", "Off"}, {"mods_trusted", "Trusted: runs freely"},
-        {"mods_help", "{select}: on / off   {menu}: change order   {cancel}: back"}, {"mods_help_order", "{select}: pick up   {menu}: done   {cancel}: back"}, {"mods_help_held", "Up / Down: move   {select}: put down"},
-        {"mods_note", "Changes take effect when a game starts."},
+        {"mods_help", "{select}: on/off  {menu}: order  {cancel}: back"}, {"mods_help_order", "{select}: pick up  {menu}: done  {cancel}: back"}, {"mods_help_held", "Up/Down: move  {select}: put down"},
+        {"mods_note", "Leaving this screen applies the changes."}, {"mods_problem", " problem:"}, {"mods_problems", " problems (the first):"},
         {"windowed", "Windowed"}, {"fullscreen", "Fullscreen"}, {"borderless", "Borderless"},
     };
 

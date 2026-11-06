@@ -3825,6 +3825,15 @@ namespace gp
                     for (const fs::path &f : files)
                         modimpl::applyFile(db, m, f, rep, pass);
             }
+            // what the Mods screen shows: a name, a description and a 32x32 icon (warnings: a mod without them still works)
+            if (!m.hasName)
+                rep.warnings.push_back("[" + m.id + "] manifest.json has no \"name\" (what the Mods screen lists)");
+            if (!m.hasDescription)
+                rep.warnings.push_back("[" + m.id + "] manifest.json has no \"description\"");
+            if (!m.hasIcon)
+                rep.warnings.push_back("[" + m.id + "] no icon.png (a 32x32 picture for the Mods screen)");
+            else if (m.iconW != 32 || m.iconH != 32)
+                rep.warnings.push_back("[" + m.id + "] icon.png is " + std::to_string(m.iconW) + "x" + std::to_string(m.iconH) + ", it should be 32x32");
             rep.loaded.push_back(m.id);
             rep.versions[m.id] = m.version;
             if (m.trusted)

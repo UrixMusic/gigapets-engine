@@ -119,6 +119,15 @@ int main()
         CHECK(ids(ui.list) == "alpha!,beta!,gamma");
     }
     CHECK((fe::wrapLines("one two three four", 9) == std::vector<std::string>{"one two", "three", "four"}));
+    CHECK((fe::wrapLines("abcdefghijkl x", 5) == std::vector<std::string>{"abcde", "fghij", "kl x"}));
+    { // a mod without a name, description or a 32x32 icon gets warnings (it still loads)
+        ContentDB db;
+        ModReport rep = importMods(db, root);
+        int n = 0;
+        for (const std::string &w : rep.warnings)
+            n += w.find("[gamma]") == 0 ? 1 : 0;
+        CHECK(rep.errors.empty() && n == 3);
+    }
     fs::remove_all(root, ec);
     if (g_fail)
         return 1;

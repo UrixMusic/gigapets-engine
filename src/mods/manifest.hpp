@@ -23,6 +23,8 @@ namespace gp
     {
         std::string id, version, gameApi;
         std::string name, description;      // "name" (what the Mods screen shows; the id if there is none) and "description"
+        bool hasName = false, hasDescription = false;
+        int iconW = 0, iconH = 0;           // the size of icon.png (read from its header), 0 if there is none
         bool hasIcon = false;               // dir/icon.png exists (a 32x32 picture for the Mods screen)
         std::vector<std::string> needs;     // "requires" is a C++20 keyword
         std::vector<std::string> loadAfter; // soft ordering, ignored if that mod isn't installed
@@ -77,9 +79,22 @@ namespace gp
             m.needs = j.value("requires", std::vector<std::string>{});
             m.loadAfter = j.value("load_after", std::vector<std::string>{});
             m.trusted = j.value("trusted", false);
+            m.hasName = j.contains("name");
+            m.hasDescription = j.contains("description");
             m.name = j.value("name", m.id);
             m.description = j.value("description", std::string());
             m.hasIcon = fs::exists(dir / "icon.png");
+            if (m.hasIcon) // a PNG starts with 8 bytes of signature, then the IHDR chunk: width and height are the 4 bytes each at offsets 16 and 20
+            {
+                std::ifstream png(dir / "icon.png", std::ios::binary);
+                unsigned char b[24] = {};
+                png.read(reinterpret_cast<char *>(b), 24);
+                if (png.gcount() == 24)
+                {
+                    m.iconW = int(b[16] << 24 | b[17] << 16 | b[18] << 8 | b[19]);
+                    m.iconH = int(b[20] << 24 | b[21] << 16 | b[22] << 8 | b[23]);
+                }
+            }
         }
         catch (const json::exception &e)
         {

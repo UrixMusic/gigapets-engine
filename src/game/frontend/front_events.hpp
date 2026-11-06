@@ -349,7 +349,13 @@ public:
                 else if (k == SDLK_x)
                 {
                     gModsUi.held = false;
-                    setScreenNoFade(Screen::Menu);
+                    if (gModsUi.changed) // the mods load again (runFrontEnd returns kFrontReload and is entered once more)
+                    {
+                        gFrontReload = true;
+                        run = false;
+                    }
+                    else
+                        setScreenNoFade(Screen::Menu);
                 }
             }
             else if (screen == Screen::Options && down && !optPressed)

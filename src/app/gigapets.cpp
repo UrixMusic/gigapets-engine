@@ -220,6 +220,12 @@ int main(int argc, char **argv)
             {
                 gp::audio().playMusic(gp::rau::kMenuSong);
                 slot = runFrontEnd(host.ctx, /*launchGame*/ true, skipBoot, -1);
+                if (slot == kFrontReload) // the Mods screen changed the mods: the front end starts again with them
+                {
+                    slot = -1;
+                    skipBoot = true;
+                    continue;
+                }
                 if (slot < 0)
                     break; // window closed in the front end
             }
