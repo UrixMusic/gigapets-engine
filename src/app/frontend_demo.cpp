@@ -62,6 +62,8 @@ static void feVoice(int species, int category, int volume = 0xbe)
 #include "../game/starter_pool.hpp" // who the starter room holds, and the colour rolls
 #include "../game/pet_colour_save.hpp" // a mod colour is saved by its id
 #include "../game/profile.hpp" // what a new game offers (a species can need a profile key)
+#include "../mods/script_check.hpp"
+#include "../game/quest_text.hpp"
 #include <memory>
 
 using namespace gp;
@@ -70,6 +72,8 @@ using namespace gp;
 // included first and defines it; standalone, this file defines its own.
 #ifndef GP_NO_MAIN
 bool smoothCam = false;
+#else
+extern bool smoothCam; // walk.cpp defines it (a unity build or a build of separate files)
 #endif
 
 // A value that moves in whole-pixel steps once per 30 Hz tick, shown part-way (alpha, 0..1) between its previous and its
@@ -130,7 +134,7 @@ struct MenuView
 
 inline gp::fe::ModsUi gModsUi; // the Mods screen's state (fe_mods.hpp)
 inline bool gFrontReload = false; // the player changed the mods: the front end ends and is started again (kFrontReload)
-constexpr int kFrontReload = -2;
+// (kFrontReload, the value runFrontEnd returns for that, is in app_context.hpp)
 
 inline void drawMainMenu(FrontGfx &g, const MenuView &v)
 {

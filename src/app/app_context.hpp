@@ -98,5 +98,6 @@ namespace gp
 } // namespace gp
 
 // defined in tools/walk.cpp and tools/frontend_demo.cpp
+constexpr int kFrontReload = -2; // what runFrontEnd returns when the player changed the mods: start the front end again with them
 int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision);
 int runFrontEnd(gp::AppContext &ctx, bool launchGame, bool skipBoot, int maxFrames);

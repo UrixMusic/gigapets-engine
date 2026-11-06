@@ -8,8 +8,14 @@
 // Stage 0 "unity build": the two old programs are #included so build.bat keeps working unchanged
 // (one .cpp in, one .exe out). GP_NO_MAIN turns off their standalone main()s.
 #define GP_NO_MAIN
+#ifndef GP_SPLIT // GP_SPLIT: walk.cpp and frontend_demo.cpp are compiled apart (see the makefile); otherwise one big translation unit
 #include "walk.cpp"
 #include "frontend_demo.cpp"
+#else
+#define GP_STB_IMPL // the one copy of the ogg decoder is compiled here
+#include "app_includes.hpp"
+extern bool smoothCam; // walk.cpp
+#endif
 #include "../mods/export_base.hpp"
 #include "../mods/export_frames.hpp"
 #include "../engine/instrument_export.hpp"
