@@ -26,6 +26,7 @@ static void myClear(SDL_Renderer *ren)
     SDL_RenderFillRect(ren, nullptr);
 }
 
+GP_NATIVE_MOD_ABI // says which version of the game this was built against (the game refuses a dll built for another)
 extern "C" __declspec(dllexport) void gp_mod_init(const GpNativeApi *api)
 {
     api->detour("_ZN2gp14sickBubbleStepERNS_12ThoughtTimerEbbb", (void *)mySick, (void **)&origSick);

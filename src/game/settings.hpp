@@ -56,6 +56,8 @@ namespace gp
 
     constexpr int kDefaultVolume = 80, kMaxVolume = 100;
     inline std::string settingsPath() { return dataDir() + "settings.txt"; }
+    inline std::string nativeAllowPath() { return dataDir() + "native_allowed.txt"; }  // the native mods the player allowed (mods/native_mod.hpp)
+    inline std::string nativeRunningPath() { return dataDir() + "native_running.txt"; } // there while native mods run; still there at the next start = it did not end normally
     inline std::string modStatePath() { return dataDir() + "mods.txt"; } // the Mods screen: which mods are off, their order (mods/mod_state.hpp)
 
     inline int sanitizeVolume(int v) { return v < 0 || v > kMaxVolume ? kDefaultVolume : v; }

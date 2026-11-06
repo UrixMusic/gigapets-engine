@@ -21,7 +21,11 @@ namespace gp::fe
         {"on", "On"}, {"off", "Off"}, {"perfect", "Perfect"}, {"stretch", "Stretch"}, {"live", "Live"}, {"baked", "Baked"},
         {"mods", "Mods"}, {"mods_title", "Mods"}, {"mods_none", "No mods installed."}, {"mods_version", "Version "}, {"mods_on", "On"}, {"mods_off", "Off"}, {"mods_trusted", "Trusted: runs freely"},
         {"mods_help", "{select}: on/off  {menu}: order  {cancel}: back"}, {"mods_help_order", "{select}: pick up  {menu}: done  {cancel}: back"}, {"mods_help_held", "Up/Down: move  {select}: put down"},
-        {"mods_note", "Leaving this screen applies the changes."}, {"mods_problem", " problem:"}, {"mods_problems", " problems (the first):"},
+        {"mods_note", "Leaving this screen applies the changes."},
+        {"mods_native", "Native code: allowed"}, {"mods_native_ask", "Native code: needs your OK"}, {"mods_native_changed", "Native code changed: needs your OK again"},
+        {"native_title", "Native code"}, {"native_warn", "This mod runs code that nothing checks. It can do anything you can do on this computer: read and change your files, your saves, anything. Only allow it if you trust where it came from."},
+        {"native_no", "No, leave it"}, {"native_yes", "Allow it"}, {"native_help", "Left/Right: choose  {select}: confirm  {cancel}: back"},
+        {"mods_safe", "The last game ended badly: native mods stay off for the next one."}, {"mods_problem", " problem:"}, {"mods_problems", " problems (the first):"},
         {"windowed", "Windowed"}, {"fullscreen", "Fullscreen"}, {"borderless", "Borderless"},
     };
 

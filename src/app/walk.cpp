@@ -234,20 +234,34 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         gp::fe::importFeStrings(db);
         const gp::ModState modState = gp::loadModState(gp::modStatePath()); // the Mods screen's choices
         gp::ModReport rep = gp::importMods(db, "mods", &modState); // <- new, after all base content
-        if (!rep.natives.empty()) // native code: not sandboxed, so only with the player's say-so (the allow screen is still to come: GP_NATIVE_ALLOW=1 for now)
+        gp::NativeRunMarker nativeRun; // there while native mods run; gone when the game ends normally (a crash leaves it: see below)
+        if (!rep.natives.empty()) // native code: not sandboxed, so only the dlls the player allowed (Mods screen), and not after a game that ended badly
         {
-            std::vector<std::pair<std::string, std::string>> nat;
-            const char *allow = std::getenv("GP_NATIVE_ALLOW");
-            for (const std::string &id : rep.loaded)
-                if (auto it = rep.natives.find(id); it != rep.natives.end())
+            const bool safe = gp::fileExists(gp::nativeRunningPath()) || std::getenv("GP_SAFE");
+            if (safe)
+            {
+                std::fprintf(stderr, "safe mode: native mods are off for this game (the last one did not end normally, or GP_SAFE is set)\n");
+                std::remove(gp::nativeRunningPath().c_str()); // only for this start
+            }
+            else
+            {
+                const gp::NativeAllow allowed = gp::loadNativeAllow(gp::nativeAllowPath());
+                std::vector<std::pair<std::string, std::string>> nat;
+                for (const std::string &id : rep.loaded)
+                    if (auto it = rep.natives.find(id); it != rep.natives.end())
+                    {
+                        if (allowed.allowed(id, it->second))
+                            nat.emplace_back(id, it->second);
+                        else
+                            std::fprintf(stderr, "mod [%s] has native code that the player has not allowed (Mods screen): not loaded\n", id.c_str());
+                    }
+                if (!nat.empty())
                 {
-                    if (allow && std::string(allow) == "1")
-                        nat.emplace_back(id, it->second);
-                    else
-                        std::fprintf(stderr, "mod [%s] has native code and is not allowed to run it\n", id.c_str());
+                    nativeRun.arm(gp::nativeRunningPath());
+                    for (const std::string &e : gp::loadNativeMods(nat))
+                        std::fprintf(stderr, "native mod error: %s\n", e.c_str());
                 }
-            for (const std::string &e : gp::loadNativeMods(nat))
-                std::fprintf(stderr, "native mod error: %s\n", e.c_str());
+            }
         }
         gp::ScriptHost scripts;
         gp::EngineRegistry engineValues; // what engine.get / engine.set reach; filled in below, once the variables exist

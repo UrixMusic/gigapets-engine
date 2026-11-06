@@ -342,10 +342,14 @@ public:
                     gModsUi.moveCursor(-1), feSound(gp::fe::kSfxMove, 0x7f);
                 else if (k == SDLK_DOWN)
                     gModsUi.moveCursor(1), feSound(gp::fe::kSfxMove, 0x7f);
+                else if ((k == SDLK_LEFT || k == SDLK_RIGHT) && gModsUi.confirm >= 0)
+                    gModsUi.moveCursor(1), feSound(gp::fe::kSfxMove, 0x7f);
                 else if (k == SDLK_z)
                     gModsUi.press(), feSound(gp::fe::kSfxConfirm, 0x7f);
                 else if (k == SDLK_RETURN) // the Menu key (a rebound one reads as Enter)
                     gModsUi.toggleOrder(), feSound(gp::fe::kSfxMove, 0x7f);
+                else if (k == SDLK_x && gModsUi.cancelConfirm())
+                    feSound(gp::fe::kSfxMove, 0x7f);
                 else if (k == SDLK_x)
                 {
                     gModsUi.held = false;

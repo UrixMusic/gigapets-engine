@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 #include "../../mods/mod_state.hpp"
+#include "../../mods/native_mod.hpp"
+#include "../settings.hpp"
 #include "fe_strings.hpp"
 #include "../../engine/keybinds.hpp"
 #include "../../mods/mod_loader.hpp" // (and with it stb_image for the icons)
@@ -23,6 +25,10 @@ namespace gp::fe
         bool order = false; // order mode (C)
         bool held = false;  // order mode: the selected mod is picked up (Up / Down move it)
         bool changed = false; // something was switched or moved: the front end loads again when the player leaves
+        NativeAllow allow;       // the native mods the player has allowed (native_allowed.txt)
+        int confirm = -1;        // >= 0: the "allow native code?" question for list[confirm] is open
+        int confirmYes = 0;      // its cursor: 0 = No (the start), 1 = Allow
+        bool safeNext = false;   // the last game did not end normally: native mods stay off for the next one
         std::vector<std::string> problems; // what went wrong when the mods loaded (errors and warnings, as the loader worded them)
         std::map<std::string, SDL_Texture *> icons;
         static constexpr int kRows = 11;
@@ -36,6 +42,20 @@ namespace gp::fe
             cur = scroll = 0;
             order = held = false;
             changed = false;
+            allow = loadNativeAllow(nativeAllowPath());
+            confirm = -1;
+            safeNext = fileExists(nativeRunningPath());
+        }
+        static std::string dllOf(const ModEntry &e) { return (e.m.dir / e.m.native).string(); }
+        // native code the player has not allowed (this exact dll)
+        bool needsOk(const ModEntry &e) const { return !e.m.native.empty() && !allow.allowed(e.m.id, dllOf(e)); }
+        // X while the question is open closes it
+        bool cancelConfirm()
+        {
+            if (confirm < 0)
+                return false;
+            confirm = -1;
+            return true;
         }
         const ModEntry *selected() const { return cur >= 0 && cur < int(list.size()) ? &list[size_t(cur)] : nullptr; }
 
@@ -50,6 +70,11 @@ namespace gp::fe
         {
             if (list.empty())
                 return;
+            if (confirm >= 0) // the question: Up / Down / Left / Right swap the answer
+            {
+                confirmYes ^= 1;
+                return;
+            }
             if (held) // the picked up mod moves with the cursor
             {
                 const int to = cur + d;
@@ -68,9 +93,29 @@ namespace gp::fe
         {
             if (list.empty())
                 return;
+            if (confirm >= 0)
+            {
+                const ModEntry &e = list[size_t(confirm)];
+                const std::string eid = e.m.id;
+                const bool yes = confirmYes == 1 && allow.allow(eid, dllOf(e));
+                confirm = -1;
+                if (yes)
+                {
+                    saveNativeAllow(allow, nativeAllowPath());
+                    state.off.erase(eid); // allowing it also switches it on
+                    commit(eid);
+                }
+                return;
+            }
             if (order)
             {
                 held = !held;
+                return;
+            }
+            if (needsOk(list[size_t(cur)])) // native code: ask first (whether it is on or off)
+            {
+                confirm = cur;
+                confirmYes = 0;
                 return;
             }
             const std::string id = list[size_t(cur)].m.id;
@@ -81,6 +126,8 @@ namespace gp::fe
         // C
         void toggleOrder()
         {
+            if (confirm >= 0)
+                return;
             order = !order;
             held = false;
         }
@@ -175,6 +222,35 @@ namespace gp::fe
     {
         constexpr int L = 0x3000;
         g.drawTextBox(4, 0x4c7, 0, 6, feText("mods_title"), 0x140, 1, L);
+        if (ui.confirm >= 0) // the question about native code: over everything, red
+        {
+            SDL_Rect all{0, 0, 320, 240};
+            SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(ren, 0, 0, 0, 200);
+            SDL_RenderFillRect(ren, &all);
+            SDL_Rect r{16, 28, 288, 176};
+            SDL_SetRenderDrawColor(ren, 50, 8, 8, 255);
+            SDL_RenderFillRect(ren, &r);
+            SDL_SetRenderDrawColor(ren, 255, 90, 70, 255);
+            SDL_RenderDrawRect(ren, &r);
+            g.drawTextBox(4, 0x4c7, 16, 34, feText("native_title"), 288, 1, L + 1);
+            int y = 66;
+            g.drawTextBox(2, 0x28c, 28, y, ui.list[size_t(ui.confirm)].m.name, 264, 0, L + 1);
+            y += 16;
+            for (const std::string &ln : wrapLines(feText("native_warn"), 32))
+            {
+                g.drawTextBox(2, 0x28c, 28, y, ln, 264, 0, L + 1);
+                y += 12;
+            }
+            for (int i = 0; i < 2; ++i)
+            {
+                SDL_Rect b{28 + i * 130, 172, 120, 18};
+                SDL_SetRenderDrawColor(ren, i == ui.confirmYes ? (i == 1 ? 200 : 60) : 30, i == ui.confirmYes ? (i == 1 ? 60 : 110) : 30, i == ui.confirmYes ? (i == 1 ? 40 : 200) : 40, 255);
+                SDL_RenderFillRect(ren, &b);
+                g.drawTextBox(2, 0x28c, b.x + 8, b.y + 3, feText(i == 0 ? "native_no" : "native_yes"), 110, 0, L + 1);
+            }
+            return; // nothing else is drawn under the question
+        }
         if (ui.list.empty())
         {
             g.drawTextBox(2, 0x28c, 16, 40, feText("mods_none"), 280, 0, L);
@@ -209,6 +285,8 @@ namespace gp::fe
             }
             std::string name = e.m.name.size() > 18 ? e.m.name.substr(0, 17) + "." : e.m.name;
             g.drawTextBox(2, e.on ? 0x28c : 0x105, 24, y, name, 128, 0, L);
+            if (!e.m.native.empty())
+                g.drawTextBox(2, 0x28c, 146, y, "*", 10, 0, L);
             if (sel)
                 g.drawTextBox(2, 0x28c, 12, y, ui.order ? (ui.held ? "=" : "+") : ">", 10, 0, L);
         }
@@ -237,13 +315,22 @@ namespace gp::fe
             y += 12;
             g.drawTextBox(2, 0x28c, 170, y, feText(e->on ? "mods_on" : "mods_off"), 140, 0, L);
             y += 12;
+            if (!e->m.native.empty())
+            {
+                const bool ok = !ui.needsOk(*e);
+                for (const std::string &ln : wrapLines(feText(ok ? "mods_native" : ui.allow.changed(e->m.id, ModsUi::dllOf(*e)) ? "mods_native_changed" : "mods_native_ask"), 16))
+                {
+                    g.drawTextBox(2, ok ? 0x28c : 0x105, 170, y, ln, 140, 0, L);
+                    y += 12;
+                }
+            }
             if (e->m.trusted)
             {
                 g.drawTextBox(2, 0x28c, 170, y, feText("mods_trusted"), 140, 0, L);
                 y += 12;
             }
             if (!e->note.empty())
-                for (const std::string &ln : wrapLines(e->note, 20))
+                for (const std::string &ln : wrapLines(e->note, 17))
                 {
                     g.drawTextBox(2, 0x105, 170, y, ln, 140, 0, L);
                     y += 12;
@@ -261,7 +348,7 @@ namespace gp::fe
                     y += 12;
                     const size_t brk = first.find("] ");
                     int lines = 0;
-                    for (const std::string &ln : wrapLines(brk != std::string::npos ? first.substr(brk + 2) : first, 20))
+                    for (const std::string &ln : wrapLines(brk != std::string::npos ? first.substr(brk + 2) : first, 17))
                     {
                         if (lines++ == 3)
                             break;
@@ -271,7 +358,7 @@ namespace gp::fe
                 }
             }
             y += 4;
-            for (const std::string &ln : wrapLines(e->m.description, 20))
+            for (const std::string &ln : wrapLines(e->m.description, 17))
             {
                 if (y > 190)
                     break;
@@ -284,6 +371,6 @@ namespace gp::fe
             for (size_t at; (at = help.find(tag)) != std::string::npos;)
                 help.replace(at, std::strlen(tag), keys().name(int(action)));
         g.drawTextBox(2, 0x28c, 8, 208, help, 304, 0, L);
-        g.drawTextBox(2, 0x28c, 8, 222, feText("mods_note"), 304, 0, L);
+        g.drawTextBox(2, 0x28c, 8, 222, feText(ui.safeNext ? "mods_safe" : "mods_note"), 304, 0, L);
     }
 } // namespace gp::fe
