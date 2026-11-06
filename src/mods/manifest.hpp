@@ -23,6 +23,7 @@ namespace gp
     {
         std::string id, version, gameApi;
         std::string name, description;      // "name" (what the Mods screen shows; the id if there is none) and "description"
+        int dataVersion = 1;                // "data_version": the version of what the mod keeps in saves (save.set); when it goes up, Game.hooks():onMigrate(ctx) runs on an older save (ctx.from, ctx.to)
         bool hasName = false, hasDescription = false;
         int iconW = 0, iconH = 0;           // the size of icon.png (read from its header), 0 if there is none
         bool hasIcon = false;               // dir/icon.png exists (a 32x32 picture for the Mods screen)
@@ -79,6 +80,7 @@ namespace gp
             m.needs = j.value("requires", std::vector<std::string>{});
             m.loadAfter = j.value("load_after", std::vector<std::string>{});
             m.trusted = j.value("trusted", false);
+            m.dataVersion = std::max(1, j.value("data_version", 1));
             m.hasName = j.contains("name");
             m.hasDescription = j.contains("description");
             m.name = j.value("name", m.id);

@@ -52,6 +52,18 @@ int main()
         CHECK(h.runString("m", "assert(n == 2, n)"));
         CHECK(h.errors().size() == 1 && h.errors()[0].find("[alpha]") == 0);
     }
+    { // data_version: an older save runs only that mod's onMigrate (from, to) and is stamped; a newer one is reported
+        gp::ScriptHost h;
+        h.loadModSave({{"mod.alpha.coins", "i5"}, {"mod.beta.x", "i1"}, {"mod.beta.__data_version", "i2"}, {"mod.gamma.y", "i1"}});
+        CHECK(h.runString("alpha", "m = ''; local G = Game.hooks(); function G:onMigrate(ctx) m = m .. 'a' .. ctx.from .. ctx.to; save.set('migrated', ctx.from) end"));
+        CHECK(h.runString("beta", "local G = Game.hooks(); function G:onMigrate(ctx) m = m .. 'b' end"));
+        h.migrateModData({{"alpha", 3}, {"beta", 2}, {"gamma", 1}, {"delta", 4}});
+        CHECK(h.runString("m", "assert(m == 'a13', m)"));
+        const auto kv = h.modSaveKv();
+        CHECK(kv.at("mod.alpha.__data_version") == "i3" && kv.at("mod.alpha.migrated") == "i1" && kv.at("mod.delta.__data_version") == "i4" && !kv.count("mod.gamma.__data_version"));
+        h.migrateModData({{"alpha", 2}}); // a newer save than the mod: left alone, reported
+        CHECK(h.modSaveKv().at("mod.alpha.__data_version") == "i3" && h.errors().size() == 1);
+    }
     { // the global Game hooks and the area ones work the same way
         gp::ScriptHost h;
         CHECK(h.runString("alpha", "g = ''; local G = Game.hooks(); function G:onLoad(ctx) g = g .. 'a' end; local A = Area.hooks('x:area/1'); function A:onTick(ctx) g = g .. '1' end"));

@@ -2140,6 +2140,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         auto drawScriptObjectives = [&](auto &&...a) -> decltype(auto) { return (*worldDrawCtl).drawScriptObjectives(std::forward<decltype(a)>(a)...); };
         enterAreaEvents(*cur->def, true);
         refreshBits(); // add
+        scripts.migrateModData(rep.dataVersions); // saved values of a mod whose data_version went up: its onMigrate
         scripts.fireGameLoad(); // a mod's chance to set its engine values again from what it saved
         scripts.fireAreaEnter(cur->def->id, ""); // the game starts here: ctx.from.id is nil
         long gameTickN = 0;         // steps since the game started, for the game-wide tick hooks

@@ -641,7 +641,7 @@ namespace gp
                 return {"before", "replace", "after"};
             case 'G':
                 return {"onQuestComplete", "onEnterArea", "onLoad", "onSave", "onBeforeDig", "onAfterDig", "onBeforePickup", "onAfterPickup",
-                        "onBeforeBuy", "onAfterBuy", "onBeforeExit", "onStatChange", "onBefriend", "onQuestAccept", "onQuestDecline", "onQuestFail", "onBeforeItemUse", "onSceneClose", "onHud", "onTickStart", "onTickEnd", "onPostWorld", "onPostDraw"};
+                        "onBeforeBuy", "onAfterBuy", "onBeforeExit", "onStatChange", "onBefriend", "onQuestAccept", "onQuestDecline", "onQuestFail", "onBeforeItemUse", "onSceneClose", "onMigrate", "onHud", "onTickStart", "onTickEnd", "onPostWorld", "onPostDraw"};
             default:
                 return {"onInteract", "onEnter", "onLeave", "onTick", "onHud"};
             }
@@ -1105,6 +1105,39 @@ namespace gp
         bool fireGameLoad()
         {
             return runHook(gameHooks_, 'G', "", "onLoad", [] {}, nullptr);
+        }
+
+        // Brings what each mod keeps in the save up to date: `versions` is the data_version of each loaded mod. A save made with an older one (or one with values and no version: 1) runs that mod's
+        // Game.hooks():onMigrate(ctx) once (ctx.from, ctx.to; save.get / save.set work), then the save is stamped with the new version. A save from a newer one is left alone and reported.
+        void migrateModData(const std::map<std::string, int> &versions)
+        {
+            for (const auto &[id, to] : versions)
+            {
+                const std::string prefix = id + ".", key = id + ".__data_version";
+                const auto first = modSave_.lower_bound(prefix);
+                const bool has = first != modSave_.end() && first->first.compare(0, prefix.size(), prefix) == 0;
+                if (to == 1 && !modSave_.count(key))
+                    continue; // a mod that never raised its data_version keeps no stamp
+                int from = has ? 1 : to;
+                if (auto it = modSave_.find(key); it != modSave_.end() && it->second.size() > 1 && it->second[0] == 'i')
+                    from = std::atoi(it->second.c_str() + 1);
+                if (from > to)
+                {
+                    errors_.push_back("[" + id + "] its saved data is version " + std::to_string(from) + ", newer than this mod's data_version " + std::to_string(to));
+                    continue;
+                }
+                if (from < to)
+                    for (const auto &[mapKey, hk] : std::map<std::string, Hook>(gameHooks_))
+                        if (hk.mod == id)
+                            runHookOne(gameHooks_, mapKey, 'G', "", "onMigrate", [&]
+                                       {
+                                           lua_pushinteger(L_, from);
+                                           lua_setfield(L_, -2, "from");
+                                           lua_pushinteger(L_, to);
+                                           lua_setfield(L_, -2, "to"); },
+                                       nullptr, false);
+                modSave_[key] = "i" + std::to_string(to);
+            }
         }
 
         // Fires Game.hooks().onSave: the slot is about to be written. save.set calls made here are written with it. Result ignored.

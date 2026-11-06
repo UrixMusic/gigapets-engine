@@ -23,6 +23,7 @@ namespace gp
         std::vector<std::string> errors, warnings;
         std::vector<std::string> loaded;               // mod ids in load order
         std::map<std::string, std::string> versions;   // mod id -> its manifest version
+        std::map<std::string, int> dataVersions;       // mod id -> its manifest data_version (what its saved values are versioned by)
         std::set<std::string> trusted;                 // mods whose Lua runs without the sandbox (manifest "trusted": true)
         std::map<std::string, std::string> lastWriter; // record id -> mod id (provenance, for later conflict logs)
         int nextAreaNumber = 1000;                     // the number the next mod area gets (AreaDef::legacyId); the base game uses 0..40
@@ -3836,6 +3837,7 @@ namespace gp
                 rep.warnings.push_back("[" + m.id + "] icon.png is " + std::to_string(m.iconW) + "x" + std::to_string(m.iconH) + ", it should be 32x32");
             rep.loaded.push_back(m.id);
             rep.versions[m.id] = m.version;
+            rep.dataVersions[m.id] = m.dataVersion;
             if (m.trusted)
                 rep.trusted.insert(m.id);
         }
