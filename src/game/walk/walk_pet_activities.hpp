@@ -38,7 +38,7 @@ struct PetActivitiesEnv
     unsigned int&gameTicks;
     std::function<AnimRef(int)> getAnim;
     gp::EncounterHost &host;
-    long int &hungerDecayAccum;
+    double &hungerDecayAccum;
     gp::ThoughtTimer &hungerTimer;
     std::function<void()> importPetAnims;
     std::function<std::vector<int>()> machineColours;
@@ -71,7 +71,7 @@ struct PetActivitiesEnv
     int &stinkTicks;
     int &thoughtIcon;
     int &thoughtTicks;
-    long int &tiredDecayAccum;
+    double &tiredDecayAccum;
     gp::ThoughtTimer &tiredTimer;
     const gp::TrickLayout &trickLay;
     int &trickLevel;

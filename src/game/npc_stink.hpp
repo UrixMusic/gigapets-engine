@@ -22,7 +22,7 @@ namespace gp
 
     struct StinkTransfer
     {
-        int accum = 0;
+        double accum = 0; // reference steps (refStep)
         int count = 0;
         int lastNpc = -1;
     };
@@ -37,7 +37,7 @@ namespace gp
     // One sim step. npcIndex = the selected NPC's pool index, -1 for none; npcStinky = whether it already stinks.
     inline StinkEvent stinkTransferStep(StinkTransfer &s, int quests, int hygiene, int npcIndex, bool npcStinky)
     {
-        if (++s.accum < tuning().stinkCheckTicks)
+        if ((s.accum += refStep()) < tuning().stinkCheckTicks)
             return StinkEvent::None;
         s.accum = 0;
         if (quests <= 3)

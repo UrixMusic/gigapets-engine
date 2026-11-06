@@ -248,8 +248,8 @@ int main()
           {"type":"item","mode":"add","id":"other:item/x","name":"bad:text/n","category":"food","icon":"bad:anim/a","use":{"action":"none"}},
           {"type":"item","mode":"add","id":"bad:item/field","name":"bad:text/n","category":"food","icon":"bad:anim/a","use":{"action":"none"},"colour":"red"},
           {"type":"item","mode":"replace","id":"base:item/404","price":1},
-          {"type":"item","mode":"remove","id":"base:item/1"},
-          {"type":"item","mode":"patch","id":"base:item/1","price":1}])");
+          {"type":"item","mode":"remove","id":"base:item/99"},
+          {"type":"item","mode":"patch","id":"base:item/98","price":1}])");
         writePng(t, "bad");
         ContentDB db = itemDb();
         ModReport r = importMods(db, t.root);
@@ -268,8 +268,8 @@ int main()
         CHECK(mentions(r.errors, "prefix"));
         CHECK(mentions(r.errors, "unknown field 'colour'"));
         CHECK(mentions(r.errors, "no such item"));
-        CHECK(mentions(r.errors, "remove on item"));
-        CHECK(mentions(r.errors, "patch on item"));
+        CHECK(mentions(r.errors, "remove 'base:item/99': no such item"));
+        CHECK(mentions(r.errors, "replace 'base:item/98': no such item")); // patch is replace
         CHECK(db.items().size() == 1); // only base:item/1; no bad record was added
         CHECK(db.item("base:item/1")->price == 1);
     }

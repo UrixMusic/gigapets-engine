@@ -362,7 +362,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         }
         // The shops' stock: rolled from the shop records (the ROM's weight tables, and whatever the mods add) as the ROM does at start, and topped up on a timer.
         gp::ShopStock shopStock;
-        int shopRestockAccum = 0; // ROM ticks since the shops were last topped up
+        double shopRestockAccum = 0; // ROM ticks since the shops were last topped up
         auto shopRnd = [](int n)
         { return std::rand() % n; };
         shopStock.init(db.shops(), shopRnd);
@@ -1043,7 +1043,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
                                       { const gp::PaletteDef *p = db.paletteByNumber(n); return p ? p->species : -1; });
         };
         std::unique_ptr<gp::ReactionSeq> potionSeq;
-        long tiredDecayAccum = 0, hungerDecayAccum = 0; // the stat decay counts (thought_bubble.hpp)
+        double tiredDecayAccum = 0, hungerDecayAccum = 0; // the stat decay counts (thought_bubble.hpp)
         int thoughtIcon = -1, thoughtTicks = 0; // the bubble up over the pet (icon tile), -1 = none
         std::function<bool(const std::string &)> scriptThink; // player.think(kind), set where the bubble code is
 

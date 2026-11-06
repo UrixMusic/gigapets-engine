@@ -116,7 +116,7 @@ struct WorldStepEnv
     int&settleTicks;
     std::function<void(int, int)> sfxFn;
     int &shakeDy;
-    int &shopRestockAccum;
+    double &shopRestockAccum;
     std::function<int(int)> shopRnd;
     gp::ShopStock &shopStock;
     std::function<void()> &showDone;
@@ -169,7 +169,13 @@ public:
     // One step of the walking world (30 a second): input, the pet, the NPCs, the world, the scripts' tick hooks. A step that stops early returns.
     auto stepWorld()
     {
-        gameTicks += 2;
+        {   // the game clock counts 2 ROM ticks a step at 30 Hz, so it keeps 60 a second at any tickHz (a whole number of ticks a step; the rest carries over)
+            static double gameTickFrac = 0;
+            gameTickFrac += 2 * gp::refStep();
+            const unsigned int whole = static_cast<unsigned int>(gameTickFrac);
+            gameTicks += whole;
+            gameTickFrac -= whole;
+        }
         // The game-wide tick (Game.hooks onTickStart / onTickEnd): first and last in every step, even one that stops early (a menu, a screen change)
         const auto tickInfo = [&]
         {
@@ -197,7 +203,7 @@ public:
             ~TickEnd() { f(); }
         } tickEnd{[&]
                   { scripts.fireGameTick(true, tickInfo()); }};
-        if (const int every = gp::tuning().shopRestockRomTicks; every > 0 && (shopRestockAccum += 2) >= every) // +2 ROM ticks per 30 Hz step, like gameTicks
+        if (const int every = gp::tuning().shopRestockRomTicks; every > 0 && (shopRestockAccum += 2 * gp::refStep()) >= every) // +2 ROM ticks per 30 Hz step, like gameTicks
         {
             shopRestockAccum = 0; // RollShopItemStock (TickCareStatWatchdog condition 12): one more weighted pick for every shop
             shopStock.restock(db.shops(), shopRnd);

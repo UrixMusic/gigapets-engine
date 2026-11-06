@@ -7,12 +7,14 @@
 // pixel layouts. Tables of content (find weights, prize pools, stat gates) belong in records, not in numbers.
 #pragma once
 
+#include <algorithm>
+
 namespace gp
 {
     struct Tuning
     {
         // game speed and the camera
-        double tickHz = 30.0; // simulation steps a second (the game's own rate); scripts' 30 Hz hooks follow it
+        double tickHz = 30.0; // simulation steps a second (the game's own rate); scripts' 30 Hz hooks follow it. What is counted in steps (walking, an NPC's idle time, animations) runs faster or slower with it; what is counted in seconds or ROM ticks (stat decay, thought bubbles, shop restocks, the quest reminder, the game clock) keeps its real-time length (see refStep)
         int camY = 145;       // the camera sits this far above the pet (cam.y = pos.y - camY)
         int probeDY = -4;     // collision is tested this many pixels above the pet's feet
 
@@ -66,4 +68,8 @@ namespace gp
         static Tuning t;
         return t;
     }
+
+    // How many "reference steps" one simulation step counts as: 30 / tickHz. The game's timers in seconds or ROM ticks were measured at 30 steps a second, so they
+    // count refStep() a step: at 60 steps a second each step is half, and a timer of 50 s still takes 50 s. Exactly 1.0 at the default 30.
+    inline double refStep() { return 30.0 / std::max(1.0, tuning().tickHz); }
 } // namespace gp

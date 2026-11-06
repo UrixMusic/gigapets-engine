@@ -41,8 +41,27 @@ int main()
     CHECK(romToSim(t.tiredDecayRomTicks) == kTiredDecayLimit && romToSim(t.hungerDecayRomTicks) == kHungerDecayLimit);
     CHECK(t.tickHz == 30.0 && t.camY == 145 && t.probeDY == -4); // (these three live in walk.cpp)
 
+    { // refStep: a timer in seconds or ROM ticks keeps its real length when tickHz changes
+        CHECK(refStep() == 1.0);
+        const long limit = romToSim(4000); // the hunger drop: about 67 s, 2002 steps at 30 a second
+        auto stepsUntilDrop = [&]
+        {
+            double a = 0;
+            long n = 0;
+            while (!decayStep(a, limit, 9))
+                ++n;
+            return n + 1;
+        };
+        CHECK(stepsUntilDrop() == limit);
+        tuning().tickHz = 60.0; // twice the steps a second: twice the steps for the same seconds
+        CHECK(refStep() == 0.5 && stepsUntilDrop() == limit * 2);
+        tuning().tickHz = 15.0;
+        CHECK(refStep() == 2.0 && stepsUntilDrop() == (limit + 1) / 2);
+        tuning().tickHz = 30.0;
+        CHECK(stepsUntilDrop() == limit);
+    }
     { // the decay start and the reminder's quest count are read where they are used
-        long a = 0;
+        double a = 0;
         CHECK(!decayStep(a, 1, 3) && decayStep(a, 1, 4));
         tuning().decayAfterQuests = 6;
         a = 0;

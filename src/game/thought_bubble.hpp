@@ -39,7 +39,8 @@ namespace gp
 
     struct ThoughtTimer
     {
-        long accum = -kThoughtRetryTicks, limit = 0; // the hunger timer starts 25 s from firing
+        double accum = -double(kThoughtRetryTicks); // counts reference steps (refStep: 1 a step at the default 30 Hz)
+        long limit = 0; // the hunger timer starts 25 s from firing
     };
     // The tired timer's limit, read from RAM 0x1ec2 in MAME: 0xd2f0 ROM ticks (about 14.7 min; the high word was not read).
     constexpr long kTiredLimit = romToSim(0xd2f0);
@@ -47,7 +48,7 @@ namespace gp
     // One sim step of the hunger timer. True = put the bubble up now.
     inline bool hungerBubbleStep(ThoughtTimer &t, int hunger, bool walking, bool bubbleUp)
     {
-        if (++t.accum < t.limit)
+        if ((t.accum += refStep()) < t.limit)
             return false;
         if (hunger <= kThoughtHungerAtMost && walking) // busy: look again in 25 s
         {
@@ -62,7 +63,7 @@ namespace gp
 
     inline bool tiredBubbleStep(ThoughtTimer &t, int sleepiness, bool walking, bool bubbleUp)
     {
-        if (++t.accum < t.limit)
+        if ((t.accum += refStep()) < t.limit)
             return false;
         if (walking)
         {
@@ -81,7 +82,7 @@ namespace gp
     constexpr long kSickLimit = romToSim(0xe10), kMoodLimit = romToSim(0xe10);
     inline bool sickBubbleStep(ThoughtTimer &t, bool sick, bool walking, bool bubbleUp)
     {
-        if (++t.accum < t.limit)
+        if ((t.accum += refStep()) < t.limit)
             return false;
         if (walking)
         {
@@ -94,7 +95,7 @@ namespace gp
     // Condition 7, the unhappy bubble (icon 0x140): Mood (Happiness) at 0x19 or below. A walking pet just restarts the count.
     inline bool moodBubbleStep(ThoughtTimer &t, int mood, bool walking, bool bubbleUp)
     {
-        if (++t.accum < t.limit)
+        if ((t.accum += refStep()) < t.limit)
             return false;
         t.accum = 0;
         return !walking && mood <= kThoughtMoodAtMost && !bubbleUp;
@@ -154,9 +155,9 @@ namespace gp
     constexpr int kDecayAfterQuests = 3; // the default of tuning().decayAfterQuests
     inline int tiredDecayAmount(int species) { return artOf(species).tiredDecay; }
     inline int hungerDecayAmount(int species) { return artOf(species).hungerDecay; }
-    inline bool decayStep(long &accum, long limit, int questsCompleted)
+    inline bool decayStep(double &accum, long limit, int questsCompleted)
     {
-        if (++accum < limit)
+        if ((accum += refStep()) < limit)
             return false;
         accum = 0;
         return questsCompleted > tuning().decayAfterQuests;

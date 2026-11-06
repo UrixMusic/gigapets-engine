@@ -399,7 +399,9 @@ namespace gp
         // price (0..9999), icon / world (anim ids), use {action, num{}, str{}}.
         // icon is drawn at (x - anchorX + dx, y - anchorY + dy) from the inventory cell's corner, so give it anchor
         // 0,0. world is drawn from the item's spot on the ground; the default (bottom centre) usually fits.
-        // On add, world defaults to icon. On replace only the fields given change.
+        // On add, world defaults to icon. On replace (or patch, the same thing) only the fields given change.
+        // mode "remove" withdraws an item: it leaves every random find table, every shop's stock and the stock rules that put it in a shop. The item itself stays, so saves
+        // and other records that name it keep working; a script can still give it.
         inline void applyItem(ContentDB &db, const ModManifest &m, const fs::path &file, const json &rec, ModReport &rep)
         {
             static const std::set<std::string> allowed{"type", "mode", "id", "name", "plural", "category",
@@ -413,13 +415,40 @@ namespace gp
                 return err(rep, file, m.id, "record '" + rec["id"].get<std::string>() + "' has no 'mode'");
 
             const std::string id = rec["id"].get<std::string>();
-            const std::string mode = rec["mode"].get<std::string>();
+            std::string mode = rec["mode"].get<std::string>();
             const bool exists = db.item(id) != nullptr;
 
-            if (mode == "remove")
-                return err(rep, file, m.id, "remove on item '" + id + "' is not supported yet (items are numbered by position)");
-            if (mode == "patch")
-                return err(rep, file, m.id, "patch on item '" + id + "' is not supported yet (use replace)");
+            if (mode == "remove") // withdraw: the item stays (saves and other records may name it) but nothing supplies it any more
+            {
+                if (!exists)
+                    return err(rep, file, m.id, "remove '" + id + "': no such item");
+                for (auto it = rec.begin(); it != rec.end(); ++it)
+                    if (it.key() != "type" && it.key() != "mode" && it.key() != "id")
+                        return err(rep, file, m.id, "unknown field '" + it.key() + "' in an item remove record");
+                std::vector<Id> rows, shops, rules;
+                for (const FindWeightDef *f : db.findWeights())
+                    if (f->item == id)
+                        rows.push_back(f->id);
+                for (const Id &r : rows)
+                    db.eraseFindWeight(r);
+                for (const ShopDef &s : db.shops())
+                    shops.push_back(s.id);
+                for (const Id &sid : shops)
+                    if (ShopDef *s = db.shopMutable(sid))
+                        s->items.erase(std::remove_if(s->items.begin(), s->items.end(), [&](const ShopItem &si)
+                                                      { return si.item == id; }),
+                                       s->items.end());
+                for (const StockRuleDef &r : db.stockRules())
+                    if (r.from == "item" && r.item == id)
+                        rules.push_back(r.id);
+                for (const Id &r : rules)
+                    db.eraseStockRule(r);
+                rep.lastWriter[id] = m.id;
+                return;
+            }
+            const bool patchMode = mode == "patch"; // the same as replace: the fields given change, the rest stay
+            if (patchMode)
+                mode = "replace";
             if (mode != "add" && mode != "replace")
                 return err(rep, file, m.id, "unknown mode '" + mode + "' on '" + id + "'");
 

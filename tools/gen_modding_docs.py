@@ -290,6 +290,10 @@ def build():
             fe = read("src/game/frontend/fe_strings.hpp")
             rows = re.findall(r'\{"(\w+)",\s*"((?:[^"\\]|\\.)*)"\}', fe)
             text = text.replace("{{FE_STRINGS}}", "| Key (`base:str/fe/...`) | Default |\n|---|---|\n" + "\n".join("| `%s` | %s |" % (k, v) for k, v in rows))
+        if "{{ENGINE_VALUES}}" in text:
+            wk = read("src/app/walk.cpp")
+            rows = re.findall(r'E\.expose\("([\w.]+)",\s*&[^;]*?(?:,\s*"((?:[^"\\]|\\.)*)")?\);', wk)
+            text = text.replace("{{ENGINE_VALUES}}", "| Name | What it is |\n|---|---|\n" + "\n".join("| `%s` | %s |" % (k, v.replace("|", "/")) for k, v in rows))
         body.append('<article class="page" id="%s"><h2>%s</h2>%s</article>' % (pid, esc(title), md(text, pid + "-")))
     nav.append("</div>")
 

@@ -97,7 +97,7 @@ int main()
           tiredDecayAmount(0) == 2 && tiredDecayAmount(1) == 1 && tiredDecayAmount(2) == 1 &&
               hungerDecayAmount(2) == 2 && hungerDecayAmount(0) == 1 && hungerDecayAmount(1) == 1);
     {
-        long a = 0;
+        double a = 0;
         int drops = 0;
         for (long i = 0; i < kHungerDecayLimit * 3; ++i)
             drops += decayStep(a, kHungerDecayLimit, 4);
