@@ -394,7 +394,7 @@ namespace gp
 
         inline bool loadRoomArt(ContentDB &db, const ModManifest &m, const std::string &item, const std::string &rel, std::string &why);
         constexpr bool isDecorType(int t) { return t == int(ItemType::Window) || t == int(ItemType::HangingDecor) || t == int(ItemType::PlacedDecor); }
-        // Fields: category ("food" | "dish" | "medicine" | "quest" | "wall" | "floor"; a wall or floor needs room_art: a 1152 x 256 picture of one layer of the room), name / plural (text ids), maxQty (1..99),
+        // Fields: category ("food" | "dish" | "medicine" | "quest" | "window" | "hanging" | "decor" | "wall" | "floor"; window / hanging / decor are furnishings, with decor_art; a wall or floor needs room_art: a 1152 x 256 picture of one layer of the room), name / plural (text ids), maxQty (1..99),
         // price (0..9999), icon / world (anim ids), use {action, num{}, str{}}.
         // icon is drawn at (x - anchorX + dx, y - anchorY + dy) from the inventory cell's corner, so give it anchor
         // 0,0. world is drawn from the item's spot on the ground; the default (bottom centre) usually fits.
