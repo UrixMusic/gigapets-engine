@@ -8,6 +8,8 @@ g++ -std=c++17 -O2 -DNDEBUG -mwindows -Isrc/engine -Isrc/loaders -Ithird_party -
 copy /y D:\libs\sdl2\x86_64-w64-mingw32\bin\SDL2.dll %OUT%\ >nul
 echo Drop your ROM (rom.u7) in the rom folder.> %OUT%\rom\README.txt
 echo Put mods here, one folder per mod.> %OUT%\mods\README.txt
+rem the modding catalog (one page: guide, Lua API, hooks, systems, data records)
+python tools\gen_modding_docs.py && copy /y modding\GigaPets-Modding.html %OUT%\ >nul
 if exist mods\testmod rem (the test mod is not shipped)
 powershell -NoProfile -Command "Compress-Archive -Path '%OUT%' -DestinationPath dist\GigaPets.zip -Force"
 echo Done: dist\GigaPets.zip
