@@ -169,6 +169,22 @@ int main()
         h.system("frontend.name", c, [&] { got = c.str("name"); });
         CHECK(got == "PIP!" && h.errors().empty());
     }
+    { // frontend.boot changes the logo time; frontend.load and frontend.house can be cancelled
+        gp::ScriptHost h;
+        CHECK(h.runString("a", "local B = System.hooks('frontend.boot'); function B:before(ctx) ctx.logo_ms = 100 end local L = System.hooks('frontend.load'); function L:before(ctx) return false end local H = System.hooks('frontend.house'); function H:before(ctx) return false end"));
+        gp::SystemCtx b;
+        b.set("logo_ms", 3500.0).set("skip", 0);
+        h.system("frontend.boot", b, [] {});
+        CHECK(int(b.num("logo_ms")) == 100);
+        gp::SystemCtx l;
+        l.set("slot", 0).set("name", "x");
+        bool ran = false;
+        h.system("frontend.load", l, [&] { ran = true; });
+        gp::SystemCtx hc;
+        hc.set("slot", 1).set("occupied", 0);
+        const bool hran = h.system("frontend.house", hc, [] {});
+        CHECK(!ran && !hran && h.errors().empty());
+    }
     { // the front end systems exist; frontend.start can change the slot
         gp::ScriptHost h;
         CHECK(h.runString("a", "System.hooks('frontend.menu'); local S = System.hooks('frontend.start'); function S:before(ctx) ctx.slot = 2 end"));

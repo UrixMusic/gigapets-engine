@@ -12,6 +12,7 @@
 //           P = dump the current animation's frames, 1-5 / J L I K = anchor experiments.
 // Z = use an exit / talk to the nearest NPC (and close a dialogue box).
 #include "../engine/tuning.hpp"
+#include "../game/frontend/fe_strings.hpp" // the front end's words are texts a mod may replace: they exist in every db the mods load into
 #include <SDL2/SDL.h>
 #include "../loaders/import.hpp"
 #include "../engine/collision.hpp"
@@ -318,6 +319,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         gp::ContentDB db;
         gp::importRom(rom, db, playerSpecies); // line 290
 
+        gp::fe::importFeStrings(db);
         gp::ModReport rep = gp::importMods(db, "mods"); // <- new, after all base content
         gp::ScriptHost scripts;
         gp::EngineRegistry engineValues; // what engine.get / engine.set reach; filled in below, once the variables exist

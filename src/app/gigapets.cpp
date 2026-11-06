@@ -148,6 +148,7 @@ int main(int argc, char **argv)
                 gp::Rom rom(romPath);
                 gp::ContentDB db;
                 gp::importRom(rom, db, 0);
+                gp::fe::importFeStrings(db);
                 gp::ModReport rep = gp::importMods(db, "mods");
                 gp::ScriptHost scripts;
                 if (rep.ok()) // scripts are checked against the content that did load
