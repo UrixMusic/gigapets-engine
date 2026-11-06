@@ -1,0 +1,3 @@
+[
+  { "type": "anim", "mode": "add", "id": "berry_pie:anim/pie", "frames": [ { "png": "art/pie.png", "anchorX": 0, "anchorY": 0 } ] }
+]

@@ -199,6 +199,38 @@ int main()
             CHECK(near(x, 0) && near(y, 0));
             InputBridge::pictureFromWindow(r1, 639, 479, x, y);
             CHECK(near(x, 320) && near(y, 240));
+            // pointing: motion tells the screen where the cursor is (in picture pixels), a click on nothing is swallowed
+            InputBridge p;
+            p.renderer = r1;
+            p.mouseOn = true;
+            float mx = -1, my = -1;
+            bool onThing = false;
+            int clicks = 0;
+            p.onMove = [&](float x, float y) { mx = x; my = y; };
+            p.onClick = [&](float, float) { ++clicks; return onThing; };
+            SDL_Event m;
+            SDL_zero(m);
+            m.type = SDL_MOUSEMOTION;
+            m.motion.x = 320;
+            m.motion.y = 240;
+            CHECK(p.translate(m) && near(mx, 160) && near(my, 120));
+            SDL_Event d = mouse(SDL_MOUSEBUTTONDOWN, SDL_BUTTON_LEFT);
+            d.button.x = 10;
+            d.button.y = 10;
+            CHECK(!p.translate(d) && clicks == 1 && !p.held(Action::Select)); // on nothing: no Select
+            d = mouse(SDL_MOUSEBUTTONUP, SDL_BUTTON_LEFT);
+            CHECK(!p.translate(d) && !p.takePending(d)); // and no release for it either
+            onThing = true;
+            d = mouse(SDL_MOUSEBUTTONDOWN, SDL_BUTTON_LEFT);
+            CHECK(p.translate(d) && isKey(d, true, Action::Select) && p.held(Action::Select) && clicks == 2);
+            d = mouse(SDL_MOUSEBUTTONUP, SDL_BUTTON_LEFT);
+            CHECK(p.translate(d) && isKey(d, false, Action::Select) && !p.held(Action::Select));
+            p.pointingOn = false; // switched off: nothing is asked, every click is Select
+            onThing = false;
+            d = mouse(SDL_MOUSEBUTTONDOWN, SDL_BUTTON_LEFT);
+            CHECK(p.translate(d) && clicks == 2);
+            d = mouse(SDL_MOUSEBUTTONUP, SDL_BUTTON_LEFT);
+            p.translate(d);
             SDL_DestroyRenderer(r1);
         }
         if (w1)

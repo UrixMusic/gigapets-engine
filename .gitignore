@@ -8,6 +8,7 @@ build/
 # other
 /mods/
 *.json
+!/modding/**/*.json
 GigaEditrV1.4.html
 
 # game data: never commit the ROM

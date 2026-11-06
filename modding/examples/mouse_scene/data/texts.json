@@ -1,0 +1,8 @@
+[
+  { "type": "text", "mode": "add", "id": "mouse_scene:str/title", "text": "Click a button" },
+  { "type": "text", "mode": "add", "id": "mouse_scene:str/count", "text": "Clicks: {n}" },
+  { "type": "text", "mode": "add", "id": "mouse_scene:str/pos", "text": "Cursor: {x}, {y}" },
+  { "type": "text", "mode": "add", "id": "mouse_scene:str/a", "text": "A" },
+  { "type": "text", "mode": "add", "id": "mouse_scene:str/b", "text": "B" },
+  { "type": "text", "mode": "add", "id": "mouse_scene:str/c", "text": "C" }
+]

@@ -59,7 +59,7 @@ Other limits:
 
 - **Scripts see the six actions, and the mouse.** `ctx.input` / `ctx.held` are the same for a keyboard, a controller and the mouse, and `input.mouse()` gives the cursor and its buttons. A script cannot read a second controller, the triggers or the right stick, or the keyboard keys other than the six. Controller and mouse are switched in the Options (and `settings.txt`), not by a mod.
 - **One controller.** The first one plugged in plays.
-- **Pointing works on part of the game.** `ui.targets()` covers the menu bar, the item grid and its tabs, and the boxes in the walking world. The title screens, the Options and Mods screens, the minigames, the pet's stats screen and shop and sell quantity numbers are not covered (the wheel changes a quantity).
+- **Pointing works on part of the game.** Menu pointing and `ui.targets()` cover the menu bar, the item grid and its tabs and the boxes in the walking world, and the title screens' main menu, Load, house choice, Options and Mods. The starter and name screens, the minigames, the pet's stats screen and the shop and sell quantity numbers are not covered (the wheel changes a quantity). The Options sliders are changed with Left / Right, not by clicking on the value.
 
 ## The front end
 

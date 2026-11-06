@@ -1,0 +1,7 @@
+{
+  "id": "mouse_ui",
+  "name": "Mouse Menus",
+  "version": "1.0",
+  "game_api": "1",
+  "description": "An example of pointing at the game's menus from a script (the game does this itself with the Mouse and Menu Pointing options on: use this as a starting point for your own rules). While it is installed it takes over from the game's own pointing."
+}

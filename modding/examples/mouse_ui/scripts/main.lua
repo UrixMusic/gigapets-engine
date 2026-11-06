@@ -1,4 +1,5 @@
--- Point and click the game's own menus. ui.targets() says what can be pointed at (with rectangles in the picture's pixels, like input.mouse()),
+-- Point and click the game's own menus. (The game does this itself when the Mouse and Menu Pointing options are on; this is how a mod would do it with its own rules,
+-- and once a mod calls ui.focus / ui.activate / input.block the game leaves its own pointing alone.) ui.targets() says what can be pointed at (with rectangles in the picture's pixels, like input.mouse()),
 -- ui.focus(i) moves the highlight and ui.activate() presses Select on it. While one of those screens is up this mod handles the left button itself,
 -- so input.block("select") stops the game's own "left click = Select" from pressing as well (it would press whatever is highlighted, even on a click in empty space).
 local G = Game.hooks()

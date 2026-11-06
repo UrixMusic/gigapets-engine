@@ -17,5 +17,6 @@ namespace gp
         b.role[1] = mouseRoleOf(s.mouseMiddle);
         b.role[2] = mouseRoleOf(s.mouseRight);
         b.wheelOn = s.mouseWheel;
+        b.pointingOn = s.mousePointing;
     }
 } // namespace gp

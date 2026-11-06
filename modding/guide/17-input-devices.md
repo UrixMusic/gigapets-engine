@@ -13,7 +13,7 @@ The **Controller** and **Mouse** rows on the Options screen switch each one.
 
 ### What the mouse buttons do
 
-With the mouse on, three more rows set the **Left**, **Right** and **Middle** button, and one switches the **Mouse Wheel**. Each button can be:
+With the mouse on, three more rows set the **Left**, **Right** and **Middle** button, and two switch the **Mouse Wheel** and **Menu Pointing**. Each button can be:
 
 | Choice | Does |
 |---|---|
@@ -44,11 +44,21 @@ local m = input.mouse()
 - **Reading the settings.** The two switches are `controller` and `mouse` in the settings file (`settings.txt` in the data folder, `1` or `0`). A script cannot change them.
 - **A native mod can add more.** A device the game does not handle (a touch screen, a different button layout) can be added by replacing `gp::KeyBinds::held`, which the game asks about every held key. See the Native mods page for a mouse example built that way before it was part of the game.
 
-## Pointing at the game's menus: `ui`
+## Pointing at menus
 
-A mod can let the mouse (or anything else that points) use the game's own menus: the menu bar, the item grid and its category tabs, and the Yes / No / OK buttons.
+With **Menu Pointing** on (it is on by default whenever the mouse is), the mouse can use the game's menus directly:
 
-- **`ui.targets()`** says what can be pointed at right now, or `nil`. It returns `{ kind, selected, items }`: `kind` is `"bar"`, `"items"` (the cells that hold an item), `"tabs"` (while the category list is open) or `"dialogue"` (a box's buttons: Yes and No, or OK; a box with no button gets one target covering the screen). `items` is a list of `{ x, y, w, h }` in the picture's pixels, the same space as `input.mouse()`, and `selected` is the 1-based number of the highlighted one.
+- **Hover** highlights the entry under the cursor. Moving the mouse is what moves the highlight, so the keyboard still steers when the mouse is still.
+- **Click** (the button that is Select) presses it. A click on nothing does nothing, instead of pressing whatever was highlighted.
+- It works on the menu bar, the item grid, the category tabs, Yes / No / OK boxes, and on the title screens: the main menu, Load Game, the house choice, Options and the Mods screen (including the native code question).
+
+Turn Menu Pointing off and the mouse only sends its buttons as actions: a click anywhere is Select, as before.
+
+## For mods: `ui`
+
+A mod can do its own pointing, with its own rules, or build something else on the same information: the menu bar, the item grid and its category tabs, the Yes / No / OK buttons, and the title screens' menus.
+
+- **`ui.targets()`** says what can be pointed at right now, or `nil`. It returns `{ kind, selected, items }`: `kind` is `"bar"`, `"items"` (the cells that hold an item), `"tabs"` (while the category list is open) or `"dialogue"` (a box's buttons: Yes and No, or OK; a box with no button gets one target covering the screen). On the title screens it is `"menu"`, `"load"`, `"house"`, `"options"`, `"mods"` or `"mods_confirm"`. `items` is a list of `{ x, y, w, h }` in the picture's pixels, the same space as `input.mouse()`, and `selected` is the 1-based number of the highlighted one.
 - **`ui.focus(i)`** moves the highlight to item `i` (1-based). It makes no sound and presses nothing. It returns false if there is no such item.
 - **`ui.activate()`** presses Select on the highlighted item: the next step sees the press, the one after the release.
 - **`input.block("select")`** (also `"cancel"`, `"menu"`): for that one step the mouse does not give the action. Call it in a tick hook while you handle a click yourself, so the game's own "left click is Select" does not press as well. The keyboard and the controller are not affected.
@@ -67,7 +77,7 @@ function G:onTickStart(ctx)
 end
 ```
 
-`modding/examples/mouse_ui/` is that, complete: hover to highlight, click to press, with the keyboard still able to steer. Scripts see only the game's own screens this way: a scene of a mod reads `input.mouse()` itself. (To test a menu without a mouse, set `GP_WALK_KEYS="60:menu,200:right,260:select"` in the environment: it presses those actions at those steps.)
+`modding/examples/mouse_ui/` is that, complete: hover to highlight, click to press. Once a script calls `ui.focus`, `ui.activate` or `input.block`, the game leaves its own pointing alone, so a mod like this replaces it rather than doubling it. Scripts see only the game's own screens this way: a scene of a mod reads `input.mouse()` itself. (To test a menu without a mouse, set `GP_WALK_KEYS="60:menu,200:right,260:select"` in the environment: it presses those actions at those steps.)
 
 ## How it works
 

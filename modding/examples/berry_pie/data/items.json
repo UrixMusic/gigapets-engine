@@ -1,0 +1,4 @@
+[
+  { "type": "item", "mode": "add", "id": "berry_pie:item/pie", "category": "food", "name": "berry_pie:str/pie", "plural": "berry_pie:str/pies", "maxQty": 9, "price": 25,
+    "icon": "berry_pie:anim/pie", "use": { "action": "food", "num": { "hunger": 20, "happiness": 5 } } }
+]

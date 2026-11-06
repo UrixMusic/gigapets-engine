@@ -10,19 +10,19 @@ int main()
     { std::printf("%s  %s\n", ok ? "PASS" : "FAIL", w); if (!ok) fails++; };
 
     // ---- the rows ----
-    check("twenty-five rows: the settings, the aspect ratio, retro audio, live music, controller, mouse and its buttons, seven key bindings, Done last", kOptMusic == 0 && kOptSfx == 1 && kOptVolume == 2 && kOptTutorials == 3 && kOptInterpolate == 4 &&
-                                                                    kOptScale == 5 && kOptScaleMode == 6 && kOptWindowMode == 7 && kOptAspect == 8 && kOptRetro == 9 && kOptLive == 10 && kOptController == 11 && kOptMouse == 12 && kOptMouseLeft == 13 && kOptMouseRight == 14 && kOptMouseMiddle == 15 && kOptMouseWheel == 16 && kOptKeyFirst == 17 &&
-                                                                    kOptKeyLast == 23 && kOptDone == 24 && kOptRows == 25);
-    check("the key rows map to the seven actions", isKeyRow(17) && isKeyRow(23) && !isKeyRow(16) && !isKeyRow(24) && keyRowAction(17) == 0 && keyRowAction(23) == 6);
-    check("down wraps from done to music", optionsMove(0, true) == 1 && optionsMove(24, true) == 0);
-    check("up wraps from music to done", optionsMove(0, false) == 24 && optionsMove(24, false) == 23);
+    check("twenty-six rows: the settings, the aspect ratio, retro audio, live music, controller, mouse and its buttons, menu pointing, seven key bindings, Done last", kOptMusic == 0 && kOptSfx == 1 && kOptVolume == 2 && kOptTutorials == 3 && kOptInterpolate == 4 &&
+                                                                    kOptScale == 5 && kOptScaleMode == 6 && kOptWindowMode == 7 && kOptAspect == 8 && kOptRetro == 9 && kOptLive == 10 && kOptController == 11 && kOptMouse == 12 && kOptMouseLeft == 13 && kOptMouseRight == 14 && kOptMouseMiddle == 15 && kOptMouseWheel == 16 && kOptMousePointing == 17 && kOptKeyFirst == 18 &&
+                                                                    kOptKeyLast == 24 && kOptDone == 25 && kOptRows == 26);
+    check("the key rows map to the seven actions", isKeyRow(18) && isKeyRow(24) && !isKeyRow(17) && !isKeyRow(25) && keyRowAction(18) == 0 && keyRowAction(24) == 6);
+    check("down wraps from done to music", optionsMove(0, true) == 1 && optionsMove(25, true) == 0);
+    check("up wraps from music to done", optionsMove(0, false) == 25 && optionsMove(25, false) == 24);
     check("rows by kind: three sliders, three toggles, two choices, then Done", isSliderRow(0) && isSliderRow(1) && isSliderRow(2) && !isSliderRow(3) &&
-                                                                           isToggleRow(3) && isToggleRow(4) && isToggleRow(6) && isToggleRow(9) && isToggleRow(10) && isToggleRow(11) && isToggleRow(12) && isToggleRow(16) && isChoiceRow(13) && isChoiceRow(14) && isChoiceRow(15) && isChoiceRow(5) && isChoiceRow(7) && isChoiceRow(8) && !isChoiceRow(24) && !isToggleRow(24));
+                                                                           isToggleRow(3) && isToggleRow(4) && isToggleRow(6) && isToggleRow(9) && isToggleRow(10) && isToggleRow(11) && isToggleRow(12) && isToggleRow(16) && isToggleRow(17) && isChoiceRow(13) && isChoiceRow(14) && isChoiceRow(15) && isChoiceRow(5) && isChoiceRow(7) && isChoiceRow(8) && !isChoiceRow(25) && !isToggleRow(25));
     check("the list stays put while the selection is on screen", optionsScroll(0, 0) == 0 && optionsScroll(4, 0) == 0 && optionsScroll(2, 3) == 2);
     check("it scrolls down just enough", optionsScroll(5, 0) == 1 && optionsScroll(8, 1) == 4 && optionsScroll(18, 0) == 14);
     check("and back up", optionsScroll(0, 4) == 0 && optionsScroll(3, 4) == 3);
-    check("with the debug row the list is one longer", optionsMove(24, true, kOptRowsDebug) == 25 && optionsMove(25, true, kOptRowsDebug) == 0 &&
-                                                          optionsMove(0, false, kOptRowsDebug) == 25 && optionsScroll(25, 0, kOptRowsDebug) == 21);
+    check("with the debug row the list is one longer", optionsMove(25, true, kOptRowsDebug) == 26 && optionsMove(26, true, kOptRowsDebug) == 0 &&
+                                                          optionsMove(0, false, kOptRowsDebug) == 26 && optionsScroll(26, 0, kOptRowsDebug) == 22);
     check("the scale steps 1, 2, 4, 8 and stops at the ends", stepScale(2, true) == 4 && stepScale(4, true) == 8 && stepScale(8, true) == 8 &&
                                                            stepScale(2, false) == 1 && stepScale(1, false) == 1 && stepScale(3, true) == 4 && sanitizeScale(3) == 2);
     check("the window mode cycles round both ways", stepWindowMode(0, true) == 1 && stepWindowMode(2, true) == 0 && stepWindowMode(0, false) == 2);
@@ -61,12 +61,14 @@ int main()
         s.mouseRight = 2;
         s.mouseMiddle = 4;
         s.mouseWheel = false;
+        s.mousePointing = false;
         s.keys[4] = 6;
         check("saves", saveSettings(s, path));
         const Settings r = loadSettings(path);
         check("the controller and mouse switches round trip, and start on / off", !loadSettings(path).controller && loadSettings(path).mouse && Settings{}.controller && !Settings{}.mouse);
         check("the mouse buttons and wheel round trip; they start as Select, Menu, Cancel / Walk and the wheel on", loadSettings(path).mouseLeft == 0 && loadSettings(path).mouseRight == 2 && loadSettings(path).mouseMiddle == 4 && !loadSettings(path).mouseWheel &&
-                                                                                      Settings{}.mouseLeft == 1 && Settings{}.mouseMiddle == 3 && Settings{}.mouseRight == 5 && Settings{}.mouseWheel);
+                                                                                      Settings{}.mouseLeft == 1 && Settings{}.mouseMiddle == 3 && Settings{}.mouseRight == 5 && Settings{}.mouseWheel &&
+                                                                                      !loadSettings(path).mousePointing && Settings{}.mousePointing);
         check("and reads back the same", !r.tutorials && r.musicVolume == 40 && r.sfxVolume == 70 && r.volume == 30 && r.interpolate && r.scale == 4 && !r.perfectScale && r.windowMode == 2 && r.aspect == 1 && r.retroAudio && !r.liveMusic && Settings{}.liveMusic && r.keys[4] == 6 && r.keys[0] == 0);
     }
     {
@@ -122,11 +124,11 @@ int main()
     check("each once", idleTutorial(true, markShown(0, 11), false, true, true) == -1 && idleTutorial(true, markShown(0, 10), false, false, true) == -1);
     check("happiness below 0x1a is low, cleanliness 0x19 or less is dirty", kUnhappyBelow == 0x1a && kDirtyAtMost == 0x19);
 
-    check("mod rows sit above Done: with 3 the Done row is 27 and the list has 28 rows (29 with the debug row)",
-          optDone(3) == 27 && optRowCount(3, false) == 28 && optRowCount(3, true) == 29 && optTestMode(3) == 28 && optDone(0) == kOptDone && optRowCount(0, false) == kOptRows);
+    check("mod rows sit above Done: with 3 the Done row is 28 and the list has 29 rows (30 with the debug row)",
+          optDone(3) == 28 && optRowCount(3, false) == 29 && optRowCount(3, true) == 30 && optTestMode(3) == 29 && optDone(0) == kOptDone && optRowCount(0, false) == kOptRows);
     check("which rows are a mod's, and which of the game's table the others stand for",
-          !isModRow(23, 3) && isModRow(24, 3) && isModRow(26, 3) && !isModRow(27, 3) && modRowIndex(25) == 1 &&
-              baseRow(5, 3) == 5 && baseRow(24, 3) == -1 && baseRow(27, 3) == kOptDone && baseRow(28, 3) == kOptTestMode && baseRow(24, 0) == kOptDone);
+          !isModRow(24, 3) && isModRow(25, 3) && isModRow(27, 3) && !isModRow(28, 3) && modRowIndex(26) == 1 &&
+              baseRow(5, 3) == 5 && baseRow(25, 3) == -1 && baseRow(28, 3) == kOptDone && baseRow(29, 3) == kOptTestMode && baseRow(25, 0) == kOptDone);
     std::printf(fails ? "settings_test: %d failure(s)\n" : "settings_test: all passed\n", fails);
     return fails ? 1 : 0;
 }

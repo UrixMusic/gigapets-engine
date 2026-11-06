@@ -18,6 +18,17 @@ namespace gp
         std::vector<UiRect> items;
         bool any() const { return !kind.empty() && !items.empty(); }
     };
+    // The 0-based number of the item of `s` that the point (x, y) is over, or -1
+    inline int uiUnder(const UiScreen &s, float x, float y)
+    {
+        for (size_t i = 0; i < s.items.size(); ++i)
+        {
+            const UiRect &r = s.items[i];
+            if (x >= float(r.x) && x < float(r.x + r.w) && y >= float(r.y) && y < float(r.y + r.h))
+                return int(i);
+        }
+        return -1;
+    }
     // What the script host calls (set by the walk session)
     struct UiHooks
     {

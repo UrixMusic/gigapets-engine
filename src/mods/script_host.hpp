@@ -403,6 +403,8 @@ namespace gp
         // The game calls this once a step with what the mouse is doing (input.mouse(), and ctx.mouse of the tick hooks).
         void setMouse(const MouseState &m) { mouse_ = m; }
         void setUi(UiHooks h) { ui_ = std::move(h); }
+        // A script has called ui.focus / ui.activate / input.block: it points at the menus itself, so the game leaves its own pointing (Menu Pointing) alone.
+        bool uiUsed() const { return uiUsed_; }
 
         // What a mod keeps in the save (save.get / save.set). The game hands over the loaded slot's key/values (keys starting with
         // "mod.") when it starts, fires fireGameSave, then writes modSaveKv() into the slot.
@@ -1281,6 +1283,7 @@ namespace gp
         }
         MouseState mouse_;
         UiHooks ui_;
+        bool uiUsed_ = false;
         // the table input.mouse() returns and the tick hooks get as ctx.mouse
         void pushMouseTable(lua_State *L) const
         {
@@ -1344,6 +1347,7 @@ namespace gp
         static int l_uiFocus(lua_State *L)
         {
             ScriptHost &h = self(L);
+            h.uiUsed_ = true;
             const int i = int(luaL_checkinteger(L, 1)) - 1;
             lua_pushboolean(L, h.ui_.focus && i >= 0 && h.ui_.focus(i));
             return 1;
@@ -1353,6 +1357,7 @@ namespace gp
         static int l_uiActivate(lua_State *L)
         {
             ScriptHost &h = self(L);
+            h.uiUsed_ = true;
             if (h.ui_.activate)
                 h.ui_.activate();
             return 0;
@@ -1362,6 +1367,7 @@ namespace gp
         static int l_inputBlock(lua_State *L)
         {
             ScriptHost &h = self(L);
+            h.uiUsed_ = true;
             lua_pushboolean(L, h.ui_.block && h.ui_.block(luaL_checkstring(L, 1)));
             return 1;
         }

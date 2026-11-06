@@ -1,0 +1,8 @@
+{
+  "id": "native_mouse",
+  "name": "Mouse Control",
+  "version": "1.0",
+  "game_api": "1",
+  "description": "Play with the mouse. Left button: Z. Middle button: X. Hold the right button to walk toward the cursor. A native mod: it replaces the function that reads the keys.",
+  "native": "native/mouse.dll"
+}

@@ -17,7 +17,7 @@ namespace gp::fe
         {"intro_next", "Next you will:"}, {"intro_pet", "* Choose a pet"}, {"intro_name", "* Name it"}, {"intro_house", "* Pick a house"}, {"intro_continue", "Press Select to continue"},
         {"house_title", "Select your house."}, {"back", "Back"}, {"empty", "Empty"},
         {"opt_sfx", "SFX"}, {"opt_interpolate", "Interpolate"}, {"opt_scale", "Scale"}, {"opt_scale_mode", "Scale Mode"}, {"opt_window_mode", "Window Mode"}, {"opt_aspect", "Aspect Ratio"},
-        {"opt_retro", "Retro Audio"}, {"opt_live", "Music Playback"}, {"opt_controller", "Controller"}, {"opt_mouse", "Mouse"}, {"opt_mouse_left", "Left Button"}, {"opt_mouse_right", "Right Button"}, {"opt_mouse_middle", "Middle Button"}, {"opt_mouse_wheel", "Mouse Wheel"},
+        {"opt_retro", "Retro Audio"}, {"opt_live", "Music Playback"}, {"opt_controller", "Controller"}, {"opt_mouse", "Mouse"}, {"opt_mouse_left", "Left Button"}, {"opt_mouse_right", "Right Button"}, {"opt_mouse_middle", "Middle Button"}, {"opt_mouse_wheel", "Mouse Wheel"}, {"opt_mouse_pointing", "Menu Pointing"},
         {"role_none", "Nothing"}, {"role_select", "Select"}, {"role_cancel", "Cancel"}, {"role_menu", "Menu"}, {"role_walk", "Walk"}, {"role_cancel_walk", "Cancel / Walk"}, {"opt_test", "Test Mode"}, {"key_prefix", "Key: "}, {"key_press", "Press a key"},
         {"on", "On"}, {"off", "Off"}, {"perfect", "Perfect"}, {"stretch", "Stretch"}, {"live", "Live"}, {"baked", "Baked"},
         {"mods", "Mods"}, {"mods_title", "Mods"}, {"mods_none", "No mods installed."}, {"mods_version", "Version "}, {"mods_on", "On"}, {"mods_off", "Off"}, {"mods_trusted", "Trusted: runs freely"},

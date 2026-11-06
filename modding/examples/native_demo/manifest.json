@@ -1,0 +1,8 @@
+{
+  "id": "native_demo",
+  "name": "Native Demo",
+  "version": "1.0",
+  "game_api": "1",
+  "description": "A native code example: the window border colour cycles, and the sick thought bubble comes 30 times as often. Replaces two engine functions by name.",
+  "native": "native/demo.dll"
+}

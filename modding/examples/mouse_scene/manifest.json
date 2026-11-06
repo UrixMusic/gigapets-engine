@@ -1,0 +1,7 @@
+{
+  "id": "mouse_scene",
+  "name": "Mouse Scene",
+  "version": "1.0",
+  "game_api": "1",
+  "description": "An example of input.mouse(): in a game, click the middle mouse button to open a screen with buttons that light up under the cursor and count clicks. X or a right click closes it."
+}

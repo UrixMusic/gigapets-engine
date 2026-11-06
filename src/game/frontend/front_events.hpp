@@ -73,10 +73,145 @@ class FrontEvents : public FrontEventsEnv
 {
 public:
     explicit FrontEvents(FrontEventsEnv env) : FrontEventsEnv(std::move(env)) {}
+    ~FrontEvents()
+    {
+        gp::inputBridge().onMove = nullptr; // (they point at this object)
+        gp::inputBridge().onClick = nullptr;
+    }
+
+    // ---- pointing the mouse at the title screens' menus (engine/input/input_bridge.hpp: onMove / onClick) ----
+    // What can be pointed at on the screen that is up: rectangles in the picture's pixels, the highlighted one, and a way to move the highlight. The rows are where the drawing code puts them.
+    gp::UiScreen pointScreen()
+    {
+        gp::UiScreen s;
+        auto row = [&](int x, int y, int w, int h) { s.items.push_back({x, y, w, h}); };
+        pointMap_.clear();
+        if (screen == Screen::Menu && menu.ready)
+        {
+            s.kind = "menu";
+            static const int ys[4] = {0x85, 0xa0, 0xbb, 0xd8};
+            for (int i = 0; i < 4; ++i)
+                row(0x50, ys[i], 0xa0, 0x19);
+            s.selected = menu.cursor;
+        }
+        else if (screen == Screen::Load && !loadPicked)
+        {
+            s.kind = "load";
+            static const int ys[4] = {0x80, 0x99, 0xb2, 0xcb};
+            for (int i = 0; i < 4; ++i)
+                if (i == 3 || slotFull[i]) // an empty slot cannot be picked
+                {
+                    pointMap_.push_back(i);
+                    row(0x40, ys[i], 0x80, 0x17);
+                    if (i == loadCur)
+                        s.selected = int(pointMap_.size()) - 1;
+                }
+        }
+        else if (screen == Screen::House && fadeTick >= 16)
+        {
+            s.kind = "house";
+            static const int ys[4] = {0x7d, 0x96, 0xaf, 200};
+            for (int i = 0; i < 4; ++i)
+                row(0x20, ys[i], 0x100, 0x16);
+            s.selected = houseCur;
+        }
+        else if (screen == Screen::Options && optCapture < 0 && !optPressed)
+        {
+            s.kind = "options";
+            const int total = gp::optRowCount(int(feScripts.optionRowCount()), gp::debugMode());
+            const int last = std::min(total, optScroll + gp::kOptVisible);
+            for (int i = optScroll; i < last; ++i)
+                row(0x14, 0x6f + (i - optScroll) * 24, 0x118, 22);
+            s.selected = optSel - optScroll;
+        }
+        else if (screen == Screen::Mods && !gModsUi.held)
+        {
+            if (gModsUi.confirm >= 0) // the question about native code: No and Allow
+            {
+                s.kind = "mods_confirm";
+                row(28, 172, 120, 18);
+                row(158, 172, 120, 18);
+                s.selected = gModsUi.confirmYes;
+            }
+            else if (!gModsUi.list.empty())
+            {
+                s.kind = "mods";
+                const int last = std::min(int(gModsUi.list.size()), gModsUi.scroll + gp::fe::ModsUi::kRows);
+                for (int i = gModsUi.scroll; i < last; ++i)
+                    row(10, 32 + (i - gModsUi.scroll) * 15 - 3, 146, 14);
+                s.selected = gModsUi.cur - gModsUi.scroll;
+            }
+        }
+        return s;
+    }
+    void pointFocus(int i)
+    {
+        if (screen == Screen::Menu)
+            menu.cursor = i;
+        else if (screen == Screen::Load && i >= 0 && i < int(pointMap_.size()))
+            loadCur = pointMap_[size_t(i)];
+        else if (screen == Screen::House)
+            houseCur = i;
+        else if (screen == Screen::Options)
+            optSel = optScroll + i;
+        else if (screen == Screen::Mods)
+        {
+            if (gModsUi.confirm >= 0)
+                gModsUi.confirmYes = i;
+            else
+                gModsUi.cur = gModsUi.scroll + i;
+        }
+    }
+    void installPointer()
+    {
+        if (!uiHooksSet_) // ui.targets() / focus() / activate() for the title screens' scripts too
+        {
+            uiHooksSet_ = true;
+            gp::UiHooks uh;
+            uh.screen = [this] { return pointScreen(); };
+            uh.focus = [this](int i)
+            {
+                const gp::UiScreen s = pointScreen();
+                if (i < 0 || i >= int(s.items.size()))
+                    return false;
+                pointFocus(i);
+                return true;
+            };
+            uh.activate = [] { gp::inputBridge().pushTap(gp::Action::Select); };
+            uh.block = [](const std::string &n) { return n == "select" || n == "cancel" || n == "menu"; };
+            feScripts.setUi(std::move(uh));
+        }
+        gp::inputBridge().onMove = [this](float x, float y)
+        {
+            if (feScripts.uiUsed())
+                return; // a mod points at the menus itself
+            const gp::UiScreen s = pointScreen();
+            const int i = gp::uiUnder(s, x, y);
+            if (i >= 0 && s.selected != i)
+                pointFocus(i);
+        };
+        gp::inputBridge().onClick = [this](float x, float y)
+        {
+            if (feScripts.uiUsed())
+                return true;
+            const gp::UiScreen s = pointScreen();
+            if (!s.any())
+                return true; // nothing here to point at: the click is Select as usual
+            const int i = gp::uiUnder(s, x, y);
+            if (i < 0)
+                return false; // a click on nothing
+            if (s.selected != i)
+                pointFocus(i);
+            return true;
+        };
+    }
+    bool uiHooksSet_ = false;
+    std::vector<int> pointMap_; // the rows of the load screen that can be picked (slot numbers, 3 = Back)
 
     // The events of one frame: keys and the window
     auto handleEvents()
     {
+        installPointer();
         SDL_Event e;
         while (gp::pollEvent(&e))
         {
@@ -458,6 +593,10 @@ public:
                         opts.mouseWheel = !opts.mouseWheel;
                         gp::applyInputSettings(opts);
                         break;
+                    case gp::kOptMousePointing:
+                        opts.mousePointing = !opts.mousePointing;
+                        gp::applyInputSettings(opts);
+                        break;
                     default:
                         break;
                     }
@@ -466,9 +605,9 @@ public:
                 // "window_mode", "aspect", "retro", "live", a mod row's id, or "" (a key row); cancel or replace and the game's own change is not made
                 auto change = [&](bool forward, bool byZ)
                 {
-                    static const char *const names[] = {"music", "sfx", "volume", "tutorials", "interpolate", "scale", "scale_mode", "window_mode", "aspect", "retro", "live", "controller", "mouse", "mouse_left", "mouse_right", "mouse_middle", "mouse_wheel"};
+                    static const char *const names[] = {"music", "sfx", "volume", "tutorials", "interpolate", "scale", "scale_mode", "window_mode", "aspect", "retro", "live", "controller", "mouse", "mouse_left", "mouse_right", "mouse_middle", "mouse_wheel", "mouse_pointing"};
                     std::string rowName;
-                    if (optSel >= 0 && optSel <= gp::kOptMouseWheel)
+                    if (optSel >= 0 && optSel <= gp::kOptMousePointing)
                         rowName = names[optSel];
                     else if (gp::isModRow(optSel, nMod))
                         if (const auto *mr = feScripts.optionRow(size_t(gp::modRowIndex(optSel))))

@@ -1,0 +1,5 @@
+[
+  { "type": "text", "mode": "add", "id": "berry_pie:str/pie", "text": "Berry Pie" },
+  { "type": "text", "mode": "add", "id": "berry_pie:str/pies", "text": "Berry Pies" },
+  { "type": "text", "mode": "add", "id": "berry_pie:str/welcome", "text": "Welcome back! Here is a pie." }
+]

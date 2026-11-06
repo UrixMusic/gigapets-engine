@@ -1,0 +1,7 @@
+{
+  "id": "berry_pie",
+  "name": "Berry Pie",
+  "version": "1.0",
+  "game_api": "1",
+  "description": "A tiny example mod: a new food item with its own picture, a welcome gift when a game loads, and slower hunger. Read its files to learn the basics."
+}

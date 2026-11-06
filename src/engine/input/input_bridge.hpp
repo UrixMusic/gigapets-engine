@@ -12,6 +12,7 @@
 #pragma once
 #include <SDL2/SDL.h>
 #include <deque>
+#include <functional>
 #include "keybinds.hpp"
 #include "mouse_state.hpp"
 
@@ -39,6 +40,11 @@ namespace gp
         bool controllerOn = true, mouseOn = false;
         MouseRole role[3] = {MouseRole::Select, MouseRole::Menu, MouseRole::CancelWalk}; // left, middle, right button
         bool wheelOn = true;                                                           // the wheel is Up / Down
+        // Pointing at menus (Settings::mousePointing). The screen that is showing sets these (the walking world, the title screens): onMove(x, y) as the cursor moves over the
+        // picture (move the highlight to what is under it), and onClick(x, y) when the button that is Select goes down: false = it is not on anything, do not press Select.
+        bool pointingOn = true;
+        std::function<void(float, float)> onMove;
+        std::function<bool(float, float)> onClick;
         static constexpr Uint32 kHoldMs = 200;                   // a right button held this long is a walk, shorter is a tap (Cancel)
         static constexpr int kStickOn = 16000, kStickOff = 8000; // the stick presses past the first and releases below the second
 
@@ -150,6 +156,21 @@ namespace gp
                 const MouseRole r = role[b];
                 const bool wasDown = playDown_[b];
                 const Uint32 since = playSince_[b];
+                if (!down && swallowed_[b]) // its press was not on anything: the release is not either
+                {
+                    swallowed_[b] = false;
+                    return false;
+                }
+                if (down && r == MouseRole::Select && pointingOn && onClick && renderer)
+                {
+                    float px = 0, py = 0;
+                    pictureFromWindow(renderer, e.button.x, e.button.y, px, py);
+                    if (!onClick(px, py))
+                    {
+                        swallowed_[b] = true;
+                        return false;
+                    }
+                }
                 playDown_[b] = down && r != MouseRole::None;
                 if (down)
                     playSince_[b] = e.common.timestamp; // when it happened, not when we got round to it
@@ -164,6 +185,16 @@ namespace gp
                     return true;
                 }
                 return false; // Walk and the start of a CancelWalk: the held state is all that matters
+            }
+            case SDL_MOUSEMOTION:
+            {
+                if (mouseOn && pointingOn && onMove && renderer)
+                {
+                    float px = 0, py = 0;
+                    pictureFromWindow(renderer, e.motion.x, e.motion.y, px, py);
+                    onMove(px, py);
+                }
+                return true;
             }
             case SDL_MOUSEWHEEL:
             {
@@ -227,6 +258,17 @@ namespace gp
                 injectStage_ = 0;
             }
             return r;
+        }
+        // A tap of this action's key for the screens that read key events (the title screens): ui.activate() there
+        void pushTap(Action a)
+        {
+            SDL_Event dn;
+            SDL_zero(dn);
+            makeKey(dn, a, true);
+            SDL_Event up = dn;
+            makeKey(up, a, false);
+            pending_.push_back(dn);
+            pending_.push_back(up);
         }
         // For this step the mouse does not give this action (a script is handling the click itself). The controller and keyboard are not affected.
         void blockMouse(Action a) { blocked_ |= 1u << int(a); }
@@ -306,6 +348,7 @@ namespace gp
         int injectSteps_[kActionCount]{};
         unsigned blocked_ = 0;    // actions the mouse does not give this step
         int injectStage_ = 0;     // 2: a Select press is due, 1: its release
+        bool swallowed_[3]{};     // the press of this button was not on anything (pointing): no key events for it
         bool playDown_[3]{};      // the buttons held, while the mouse plays (left, middle, right)
         Uint32 playSince_[3]{};   // when each went down
         std::deque<SDL_Event> pending_;

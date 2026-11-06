@@ -242,6 +242,7 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
         {{-1, -1, -1}, 0x1e, "opt_mouse_right"},
         {{-1, -1, -1}, 0x1e, "opt_mouse_middle"},
         {{-1, -1, -1}, 0x1e, "opt_mouse_wheel"},
+        {{-1, -1, -1}, 0x1e, "opt_mouse_pointing"},
         {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, // the key rows: named below
         {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""},
         {{0x9d7, 0x9dd, 0x9ed}, 0x82, nullptr},
@@ -340,6 +341,9 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
         }
         case gp::kOptMouseWheel:
             value(i, y, gp::fe::feText(o.mouseWheel ? "on" : "off"), true);
+            break;
+        case gp::kOptMousePointing:
+            value(i, y, gp::fe::feText(o.mousePointing ? "on" : "off"), true);
             break;
         case gp::kOptWindowMode:
             value(i, y, kWindowNames[std::clamp(o.windowMode, 0, gp::kWindowModeCount - 1)], true);

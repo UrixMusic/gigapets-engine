@@ -1211,6 +1211,38 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
             };
             scripts.setUi(std::move(uh));
         }
+        // The mouse pointing at the walking world's menus (the Menu Pointing option): hover moves the highlight, a click on nothing does not press Select (engine/input/input_bridge.hpp)
+        gp::inputBridge().onMove = [&](float x, float y)
+        {
+            if (scripts.uiUsed())
+                return; // a mod points at the menus itself
+            const gp::UiScreen s = uiTargets.screen();
+            const int i = gp::uiUnder(s, x, y);
+            if (i >= 0 && s.selected != i)
+                uiTargets.focus(i);
+        };
+        gp::inputBridge().onClick = [&](float x, float y)
+        {
+            if (scripts.uiUsed())
+                return true;
+            const gp::UiScreen s = uiTargets.screen();
+            if (!s.any())
+                return true; // nothing to point at: the click is Select as usual
+            const int i = gp::uiUnder(s, x, y);
+            if (i < 0)
+                return false;
+            if (s.selected != i)
+                uiTargets.focus(i);
+            return true;
+        };
+        struct PointerGuard // (the callbacks point at this run's variables)
+        {
+            ~PointerGuard()
+            {
+                gp::inputBridge().onMove = nullptr;
+                gp::inputBridge().onClick = nullptr;
+            }
+        } pointerGuard;
 
         // Swift Pick, wishing wells (Three in a Row) and Memory Match / game tents live in minigame_ui.hpp.
         TextDrawer swiftTitle(ren, db.font(gp::fontId(3, 0x104))); // minigame titles: font 3, palette 0x104
