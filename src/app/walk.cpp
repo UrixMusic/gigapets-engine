@@ -2124,7 +2124,7 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         while (running)
         {
             SDL_Event e;
-            while (SDL_PollEvent(&e))
+            while (gp::pollEvent(&e))
                 if (e.type == SDL_QUIT)
                 {
                     running = false;

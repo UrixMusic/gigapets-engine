@@ -5,6 +5,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include "../engine/tuning.hpp"
+#include "../engine/input_bridge.hpp"
 #include "../game/frontend/fe_strings.hpp" // the front end's words are texts a mod may replace: they exist in every db the mods load into
 #include <SDL2/SDL.h>
 #include "../loaders/import.hpp"

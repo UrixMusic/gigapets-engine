@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <vector>
+#include "../../engine/input_bridge.hpp" // gp::pollEvent: controller and mouse input as key events
 
 struct FrontEventsEnv
 {
@@ -76,7 +77,7 @@ public:
     auto handleEvents()
     {
         SDL_Event e;
-        while (SDL_PollEvent(&e))
+        while (gp::pollEvent(&e))
         {
             if (e.type == SDL_QUIT)
             {
@@ -435,6 +436,14 @@ public:
                         opts.liveMusic = !opts.liveMusic;
                         gp::audio().setLive(opts.liveMusic);
                         break;
+                    case gp::kOptController:
+                        opts.controller = !opts.controller;
+                        gp::inputBridge().controllerOn = opts.controller;
+                        break;
+                    case gp::kOptMouse:
+                        opts.mouse = !opts.mouse;
+                        gp::inputBridge().mouseOn = opts.mouse;
+                        break;
                     default:
                         break;
                     }
@@ -443,9 +452,9 @@ public:
                 // "window_mode", "aspect", "retro", "live", a mod row's id, or "" (a key row); cancel or replace and the game's own change is not made
                 auto change = [&](bool forward, bool byZ)
                 {
-                    static const char *const names[] = {"music", "sfx", "volume", "tutorials", "interpolate", "scale", "scale_mode", "window_mode", "aspect", "retro", "live"};
+                    static const char *const names[] = {"music", "sfx", "volume", "tutorials", "interpolate", "scale", "scale_mode", "window_mode", "aspect", "retro", "live", "controller", "mouse"};
                     std::string rowName;
-                    if (optSel >= 0 && optSel <= gp::kOptLive)
+                    if (optSel >= 0 && optSel <= gp::kOptMouse)
                         rowName = names[optSel];
                     else if (gp::isModRow(optSel, nMod))
                         if (const auto *mr = feScripts.optionRow(size_t(gp::modRowIndex(optSel))))

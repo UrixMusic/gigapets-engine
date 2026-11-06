@@ -236,6 +236,8 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
         {{-1, -1, -1}, 0x1e, "opt_aspect"},
         {{-1, -1, -1}, 0x1e, "opt_retro"},
         {{-1, -1, -1}, 0x1e, "opt_live"},
+        {{-1, -1, -1}, 0x1e, "opt_controller"},
+        {{-1, -1, -1}, 0x1e, "opt_mouse"},
         {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, // the key rows: named below
         {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""}, {{-1, -1, -1}, 0x1e, ""},
         {{0x9d7, 0x9dd, 0x9ed}, 0x82, nullptr},
@@ -316,6 +318,12 @@ inline void drawOptions(Gfx &g, int sel, bool pressed, const gp::Settings &o, in
             break;
         case gp::kOptLive:
             value(i, y, gp::fe::feText(o.liveMusic ? "live" : "baked"), true);
+            break;
+        case gp::kOptController:
+            value(i, y, gp::fe::feText(o.controller ? "on" : "off"), true);
+            break;
+        case gp::kOptMouse:
+            value(i, y, gp::fe::feText(o.mouse ? "on" : "off"), true);
             break;
         case gp::kOptWindowMode:
             value(i, y, kWindowNames[std::clamp(o.windowMode, 0, gp::kWindowModeCount - 1)], true);

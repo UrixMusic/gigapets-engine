@@ -210,6 +210,9 @@ int main(int argc, char **argv)
             gp::audio().open("audio");
             gp::audio().setRetro(s.retroAudio);
             gp::audio().setLive(s.liveMusic);
+            gp::inputBridge().controllerOn = s.controller; // (input_bridge.hpp)
+            gp::inputBridge().mouseOn = s.mouse;
+            gp::inputBridge().openAll();
             gp::audio().setRom(*host.ctx.rom);
             gp::audio().setVolume(s.volume);
             gp::audio().setMusicVolume(s.musicVolume);

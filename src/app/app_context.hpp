@@ -51,6 +51,7 @@ namespace gp
             rom_ = std::make_unique<Rom>(romPath);
             if (SDL_Init(SDL_INIT_VIDEO) != 0)
                 throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
+            SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER); // optional: without it there is just no controller
             ctx.win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 640, 480, SDL_WINDOW_RESIZABLE);
             if (ctx.win)
             {

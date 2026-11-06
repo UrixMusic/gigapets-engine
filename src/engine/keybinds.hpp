@@ -11,6 +11,14 @@
 
 namespace gp
 {
+    enum class Action : int;
+    // Another source of held actions (the controller / mouse bridge, input_bridge.hpp installs it): KeyBinds::held is true when the keyboard or this says so.
+    using ExtraHeldFn = bool (*)(Action);
+    inline ExtraHeldFn &extraHeld()
+    {
+        static ExtraHeldFn f = nullptr;
+        return f;
+    }
 
     enum class Action : int
     {
@@ -59,7 +67,7 @@ namespace gp
                     }
         }
 
-        bool held(const Uint8 *state, Action a) const { return state[key[size_t(a)]] != 0; }
+        bool held(const Uint8 *state, Action a) const { return state[key[size_t(a)]] != 0 || (extraHeld() && extraHeld()(a)); }
 
         // The key that acts as this one: the default key of the action it is bound to, nothing if it is the default key of an
         // action it no longer belongs to, itself otherwise.
