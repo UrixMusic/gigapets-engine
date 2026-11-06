@@ -30,6 +30,7 @@ namespace gp
         std::vector<std::string> needs;     // "requires" is a C++20 keyword
         std::vector<std::string> loadAfter; // soft ordering, ignored if that mod isn't installed
         bool trusted = false;               // "trusted": true: its Lua runs without the sandbox (io, os, require, load ...); the player is told at start
+        std::string native;                 // "native": a .dll in the mod folder, native code with full access to the game and the computer; it loads only if the player has allowed it
         fs::path dir;
     };
 
@@ -80,6 +81,7 @@ namespace gp
             m.needs = j.value("requires", std::vector<std::string>{});
             m.loadAfter = j.value("load_after", std::vector<std::string>{});
             m.trusted = j.value("trusted", false);
+            m.native = j.value("native", std::string());
             m.dataVersion = std::max(1, j.value("data_version", 1));
             m.hasName = j.contains("name");
             m.hasDescription = j.contains("description");

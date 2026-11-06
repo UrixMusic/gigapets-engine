@@ -78,6 +78,7 @@
 #include "../game/item_pools.hpp"
 #include "../game/interactions.hpp"
 #include "../mods/script_host.hpp"
+#include "../mods/native_mod.hpp"
 #include "../mods/script_check.hpp" // hook target / hook name validation
 #include "app_context.hpp"
 #include "../game/minigame_ui.hpp" // AnimRef, readRomString, Minigames (swift pick, wells, tents)
@@ -322,6 +323,21 @@ int runWalk(gp::AppContext &ctx, int slot, int startArea, bool showCollision)
         gp::fe::importFeStrings(db);
         const gp::ModState modState = gp::loadModState(gp::modStatePath()); // the Mods screen's choices
         gp::ModReport rep = gp::importMods(db, "mods", &modState); // <- new, after all base content
+        if (!rep.natives.empty()) // native code: not sandboxed, so only with the player's say-so (the allow screen is still to come: GP_NATIVE_ALLOW=1 for now)
+        {
+            std::vector<std::pair<std::string, std::string>> nat;
+            const char *allow = std::getenv("GP_NATIVE_ALLOW");
+            for (const std::string &id : rep.loaded)
+                if (auto it = rep.natives.find(id); it != rep.natives.end())
+                {
+                    if (allow && std::string(allow) == "1")
+                        nat.emplace_back(id, it->second);
+                    else
+                        std::fprintf(stderr, "mod [%s] has native code and is not allowed to run it\n", id.c_str());
+                }
+            for (const std::string &e : gp::loadNativeMods(nat))
+                std::fprintf(stderr, "native mod error: %s\n", e.c_str());
+        }
         gp::ScriptHost scripts;
         gp::EngineRegistry engineValues; // what engine.get / engine.set reach; filled in below, once the variables exist
         scripts.setRegistry(&engineValues);

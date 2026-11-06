@@ -25,6 +25,7 @@ namespace gp
         std::map<std::string, std::string> versions;   // mod id -> its manifest version
         std::map<std::string, int> dataVersions;       // mod id -> its manifest data_version (what its saved values are versioned by)
         std::set<std::string> trusted;                 // mods whose Lua runs without the sandbox (manifest "trusted": true)
+        std::map<std::string, std::string> natives;    // mod id -> the path of its native .dll (manifest "native"); not loaded here, the caller decides
         std::map<std::string, std::string> lastWriter; // record id -> mod id (provenance, for later conflict logs)
         int nextAreaNumber = 1000;                     // the number the next mod area gets (AreaDef::legacyId); the base game uses 0..40
         bool ok() const { return errors.empty(); }
@@ -3840,6 +3841,16 @@ namespace gp
             rep.dataVersions[m.id] = m.dataVersion;
             if (m.trusted)
                 rep.trusted.insert(m.id);
+            if (!m.native.empty())
+            {
+                const fs::path rel(m.native);
+                if (rel.is_absolute() || m.native.find("..") != std::string::npos || rel.extension() != ".dll")
+                    rep.errors.push_back("[" + m.id + "] \"native\" must be a .dll inside the mod's folder");
+                else if (!fs::exists(m.dir / rel))
+                    rep.errors.push_back("[" + m.id + "] \"native\": " + m.native + " does not exist");
+                else
+                    rep.natives[m.id] = (m.dir / rel).string();
+            }
         }
         // a song's instruments named by id must exist now that every mod's are there (a warning: the channel plays instrument 0 / the drum is left out)
         for (const auto *list : {&audioRegistry().songs})
